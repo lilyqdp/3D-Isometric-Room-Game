@@ -1,5 +1,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import * as CANNON from "./vendor/cannon-es.js";
 
 const sortedStatEl = document.getElementById("sortedStat");
 const catStateStatEl = document.getElementById("catStateStat");
@@ -18,18 +20,10 @@ document.body.appendChild(renderer.domElement);
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0xd9dce2);
 
-const frustumSize = 18;
 let aspect = window.innerWidth / window.innerHeight;
-const camera = new THREE.OrthographicCamera(
-  (frustumSize * aspect) / -2,
-  (frustumSize * aspect) / 2,
-  frustumSize / 2,
-  frustumSize / -2,
-  0.01,
-  100
-);
-camera.position.set(13, 12, 13);
-camera.lookAt(0, 1.5, 0);
+const camera = new THREE.PerspectiveCamera(44, aspect, 0.01, 100);
+camera.position.set(13.5, 11.5, 13.5);
+camera.lookAt(-1.2, 1.4, -1.2);
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
@@ -37,15 +31,14 @@ controls.dampingFactor = 0.08;
 controls.enableRotate = false;
 controls.enablePan = true;
 controls.enableZoom = true;
-controls.minZoom = 0.8;
-controls.maxZoom = 3.5;
+controls.minDistance = 7.5;
+controls.maxDistance = 30;
 controls.mouseButtons = {
   LEFT: THREE.MOUSE.PAN,
   MIDDLE: THREE.MOUSE.DOLLY,
   RIGHT: THREE.MOUSE.PAN,
 };
 controls.target.set(-1.2, 1.4, -1.2);
-camera.zoom = 1.2;
 camera.updateProjectionMatrix();
 
 const hemi = new THREE.HemisphereLight(0xf5f7fb, 0x8792a1, 0.95);
@@ -64,24 +57,40 @@ const ROOM = {
 };
 
 const desk = {
-  pos: new THREE.Vector3(-4.15, 0, -3.9),
+  pos: new THREE.Vector3(-2.4, 0, -2.6),
   sizeX: 3.1,
   sizeZ: 1.8,
   topY: 1.08,
-  approach: new THREE.Vector3(-2.55, 0, -3.1),
-  perch: new THREE.Vector3(-3.65, 0, -3.6),
-  cup: new THREE.Vector3(-3.6, 0, -3.7),
+  approach: new THREE.Vector3(-0.8, 0, -1.8),
+  perch: new THREE.Vector3(-1.9, 0, -2.3),
+  cup: new THREE.Vector3(-1.85, 0, -2.4),
 };
+const DESK_JUMP_ANCHORS = [
+  new THREE.Vector3(desk.pos.x + desk.sizeX * 0.5 + 0.72, 0, desk.pos.z - 0.1),
+  new THREE.Vector3(desk.pos.x + desk.sizeX * 0.5 + 0.72, 0, desk.pos.z + 0.55),
+  new THREE.Vector3(desk.pos.x - 0.25, 0, desk.pos.z + desk.sizeZ * 0.5 + 0.68),
+  new THREE.Vector3(desk.pos.x + 0.55, 0, desk.pos.z + desk.sizeZ * 0.5 + 0.68),
+];
 
 const hamper = {
   pos: new THREE.Vector3(-5.8, 0, 2.4),
+  outerHalfX: 0.48,
+  outerHalfZ: 0.48,
   halfX: 0.45,
   halfZ: 0.45,
+  openingHalfX: 0.34,
+  openingHalfZ: 0.34,
+  rimY: 0.92,
+  sinkY: 0.2,
 };
 
 const trashCan = {
   pos: new THREE.Vector3(2.6, 0, 2.4),
-  radius: 0.35,
+  outerRadius: 0.42,
+  radius: 0.4,
+  openingRadius: 0.33,
+  rimY: 0.7,
+  sinkY: 0.16,
 };
 
 const game = {
@@ -94,20 +103,80 @@ const game = {
   catnip: null, // {mesh,pos,expiresAt}
   catnipCooldownUntil: 0,
   placeCatnipMode: false,
+  invalidCatnipUntil: 0,
 };
 
 const pickups = [];
 const shatterBits = [];
 let dragState = null;
+let dragHover = { binType: null, topEntry: false };
 let clockTime = 0;
+
+const binVisuals = {
+  hamper: { shells: [], ring: null },
+  trash: { shells: [], ring: null },
+};
+
+const physics = {
+  fixedStep: 1 / 180,
+  world: new CANNON.World({ gravity: new CANNON.Vec3(0, -9.8, 0) }),
+  materials: {},
+};
 
 const raycaster = new THREE.Raycaster();
 const mouse = new THREE.Vector2();
 const tempV3 = new THREE.Vector3();
 const floorPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+const gltfLoader = new GLTFLoader();
+const CAT_MODEL_URL = `${import.meta.env.BASE_URL}mvp/cat.glb`;
+const CAT_MODEL_YAW_OFFSET = -Math.PI * 0.5;
+const CAT_MODEL_CANDIDATES = Array.from(
+  new Set([CAT_MODEL_URL, "/mvp/cat.glb", `${import.meta.env.BASE_URL}public/mvp/cat.glb`, "/public/mvp/cat.glb"])
+);
+const tempBox = new THREE.Box3();
+const tempSize = new THREE.Vector3();
+const tempCenter = new THREE.Vector3();
+const tempMin = new THREE.Vector3();
+const tempQ = new THREE.Quaternion();
+const tempEuler = new THREE.Euler();
+const tempFrom = new THREE.Vector3();
+const tempTo = new THREE.Vector3();
+
+const CAT_NAV = {
+  step: 0.32,
+  margin: 0.4,
+  clearance: 0.2,
+  repathInterval: 0.75,
+  stuckSpeed: 0.035,
+  stuckReset: 2.8,
+  hopCooldown: 0.5,
+  hopArc: 0.28,
+  hopDur: 0.38,
+  maxTurnRate: 2.5, // rad/sec
+  turnSlowThreshold: 0.65,
+  turnStopThreshold: 1.35,
+};
+
+const CAT_COLLISION = {
+  pickupRadiusBoost: 0.1,
+  pickupClearance: 0.16,
+  cupBodyClearance: 0.34,
+};
+
+const CUP_COLLISION = {
+  radius: 0.11,
+  topY: desk.topY + 0.015,
+};
+
+const SWIPE_TIMING = {
+  windup: 0.44,
+  strike: 0.16,
+  recover: 0.44,
+};
 
 const cat = buildCat();
 scene.add(cat.group);
+loadCatModel(cat);
 
 const cup = makeCup();
 scene.add(cup.group);
@@ -115,8 +184,6 @@ scene.add(cup.group);
 makeRoomCorner();
 makeDesk();
 makeBins();
-addFixedPickups();
-resetGame();
 
 catnipBtn.addEventListener("click", () => {
   if (game.state !== "playing") return;
@@ -141,15 +208,22 @@ const TARGET_BOUNDS = {
   maxY: 3.2,
 };
 
+const DESK_LEGS = [
+  { x: desk.pos.x - 1.45, z: desk.pos.z - 0.8, halfX: 0.1, halfZ: 0.1, topY: 1.02 },
+  { x: desk.pos.x + 1.45, z: desk.pos.z - 0.8, halfX: 0.1, halfZ: 0.1, topY: 1.02 },
+  { x: desk.pos.x - 1.45, z: desk.pos.z + 0.8, halfX: 0.1, halfZ: 0.1, topY: 1.02 },
+  { x: desk.pos.x + 1.45, z: desk.pos.z + 0.8, halfX: 0.1, halfZ: 0.1, topY: 1.02 },
+];
+
+setupPhysicsWorld();
+resetGame();
+
 const clock = new THREE.Clock();
 animate();
 
 window.addEventListener("resize", () => {
   aspect = window.innerWidth / window.innerHeight;
-  camera.left = (frustumSize * aspect) / -2;
-  camera.right = (frustumSize * aspect) / 2;
-  camera.top = frustumSize / 2;
-  camera.bottom = frustumSize / -2;
+  camera.aspect = aspect;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -205,19 +279,223 @@ function makeDesk() {
 }
 
 function makeBins() {
-  const hamperMesh = new THREE.Mesh(
-    new THREE.BoxGeometry(0.9, 0.95, 0.9),
-    new THREE.MeshStandardMaterial({ color: 0x4c84bc, roughness: 0.85 })
-  );
-  hamperMesh.position.set(hamper.pos.x, 0.48, hamper.pos.z);
-  scene.add(hamperMesh);
+  // Hamper: open basket + visible laundry so it's clearly the laundry bin.
+  const hamperWallMat = new THREE.MeshStandardMaterial({ color: 0x5b9bd2, roughness: 0.84 });
+  const hamperTrimMat = new THREE.MeshStandardMaterial({ color: 0xd5ecff, roughness: 0.56 });
+  const hamperClothMat = new THREE.MeshStandardMaterial({ color: 0xe8eff8, roughness: 0.95 });
 
-  const trashCanMesh = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.34, 0.29, 0.7, 20),
-    new THREE.MeshStandardMaterial({ color: 0xb66d3a, roughness: 0.8 })
+  const hamperGroup = new THREE.Group();
+  hamperGroup.position.set(hamper.pos.x, 0, hamper.pos.z);
+
+  const wallThick = 0.06;
+  const wallH = 0.88;
+  const xSpan = hamper.outerHalfX * 2;
+  const zSpan = hamper.outerHalfZ * 2;
+  const walls = [
+    new THREE.Mesh(new THREE.BoxGeometry(xSpan, wallH, wallThick), hamperWallMat),
+    new THREE.Mesh(new THREE.BoxGeometry(xSpan, wallH, wallThick), hamperWallMat),
+    new THREE.Mesh(new THREE.BoxGeometry(wallThick, wallH, zSpan), hamperWallMat),
+    new THREE.Mesh(new THREE.BoxGeometry(wallThick, wallH, zSpan), hamperWallMat),
+  ];
+  walls[0].position.set(0, wallH * 0.5, hamper.outerHalfZ);
+  walls[1].position.set(0, wallH * 0.5, -hamper.outerHalfZ);
+  walls[2].position.set(hamper.outerHalfX, wallH * 0.5, 0);
+  walls[3].position.set(-hamper.outerHalfX, wallH * 0.5, 0);
+  for (const w of walls) hamperGroup.add(w);
+
+  const rimBars = [
+    new THREE.Mesh(new THREE.BoxGeometry(xSpan + 0.08, 0.05, 0.05), hamperTrimMat),
+    new THREE.Mesh(new THREE.BoxGeometry(xSpan + 0.08, 0.05, 0.05), hamperTrimMat),
+    new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.05, zSpan + 0.08), hamperTrimMat),
+    new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.05, zSpan + 0.08), hamperTrimMat),
+  ];
+  rimBars[0].position.set(0, hamper.rimY, hamper.outerHalfZ + 0.02);
+  rimBars[1].position.set(0, hamper.rimY, -hamper.outerHalfZ - 0.02);
+  rimBars[2].position.set(hamper.outerHalfX + 0.02, hamper.rimY, 0);
+  rimBars[3].position.set(-hamper.outerHalfX - 0.02, hamper.rimY, 0);
+  for (const bar of rimBars) hamperGroup.add(bar);
+
+  for (let i = -1; i <= 1; i++) {
+    const vent = new THREE.Mesh(
+      new THREE.BoxGeometry(0.08, 0.24, 0.03),
+      hamperTrimMat
+    );
+    vent.position.set(i * 0.2, 0.28, hamper.outerHalfZ + 0.04);
+    hamperGroup.add(vent);
+  }
+
+  const hamperInside = new THREE.Mesh(
+    new THREE.BoxGeometry(xSpan - 0.08, 0.48, zSpan - 0.08),
+    new THREE.MeshStandardMaterial({ color: 0x8ea6b9, roughness: 0.98, side: THREE.BackSide })
   );
-  trashCanMesh.position.set(trashCan.pos.x, 0.35, trashCan.pos.z);
-  scene.add(trashCanMesh);
+  hamperInside.position.set(0, 0.29, 0);
+  hamperGroup.add(hamperInside);
+
+  // Laundry visible inside hamper, kept lower so top opening stays clear.
+  const laundryA = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.13, 0.4), hamperClothMat);
+  laundryA.position.set(-0.04, 0.56, 0.02);
+  laundryA.rotation.z = -0.14;
+  hamperGroup.add(laundryA);
+  const laundryB = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.1, 0.3), hamperClothMat);
+  laundryB.position.set(0.09, 0.62, -0.04);
+  laundryB.rotation.z = 0.11;
+  laundryB.rotation.x = 0.08;
+  hamperGroup.add(laundryB);
+
+  // Opening helper ring.
+  const hamperRing = new THREE.Mesh(
+    new THREE.RingGeometry(0.30, 0.43, 30),
+    new THREE.MeshBasicMaterial({ color: 0x77c9ff, transparent: true, opacity: 0.0, side: THREE.DoubleSide })
+  );
+  hamperRing.rotation.x = -Math.PI / 2;
+  hamperRing.position.set(0, hamper.rimY + 0.03, 0);
+  hamperGroup.add(hamperRing);
+
+  scene.add(hamperGroup);
+  binVisuals.hamper.shells = walls.concat(rimBars);
+  binVisuals.hamper.ring = hamperRing;
+
+  // Trash can with visible opening.
+  const trashShellMat = new THREE.MeshStandardMaterial({
+    color: 0x5b646f,
+    roughness: 0.7,
+    transparent: true,
+    opacity: 0.38,
+    side: THREE.DoubleSide,
+    depthWrite: true,
+  });
+  const trashRimMat = new THREE.MeshStandardMaterial({ color: 0xb5bec7, roughness: 0.62 });
+  const trashInsideMat = new THREE.MeshStandardMaterial({ color: 0x2f333b, roughness: 1.0 });
+
+  const trashGroup = new THREE.Group();
+  trashGroup.position.set(trashCan.pos.x, 0, trashCan.pos.z);
+
+  const trashBody = new THREE.Mesh(
+    new THREE.CylinderGeometry(
+      trashCan.outerRadius,
+      trashCan.outerRadius - 0.08,
+      0.78,
+      30,
+      1,
+      true
+    ),
+    trashShellMat
+  );
+  trashBody.position.y = 0.39;
+  trashGroup.add(trashBody);
+
+  const trashBottom = new THREE.Mesh(
+    new THREE.CircleGeometry(trashCan.outerRadius - 0.1, 28),
+    new THREE.MeshStandardMaterial({ color: 0x3b434d, roughness: 0.9 })
+  );
+  trashBottom.rotation.x = -Math.PI / 2;
+  trashBottom.position.y = 0.01;
+  trashGroup.add(trashBottom);
+
+  const trashRim = new THREE.Mesh(
+    new THREE.TorusGeometry(trashCan.outerRadius + 0.03, 0.02, 12, 32),
+    trashRimMat
+  );
+  trashRim.rotation.x = Math.PI / 2;
+  trashRim.position.y = trashCan.rimY + 0.012;
+  trashGroup.add(trashRim);
+
+  const trashInside = new THREE.Mesh(
+    new THREE.CylinderGeometry(trashCan.openingRadius - 0.03, trashCan.openingRadius - 0.08, 0.56, 24, 1, true),
+    trashInsideMat
+  );
+  trashInside.position.y = 0.31;
+  trashGroup.add(trashInside);
+
+  const trashRing = new THREE.Mesh(
+    new THREE.RingGeometry(trashCan.openingRadius - 0.07, trashCan.openingRadius + 0.09, 30),
+    new THREE.MeshBasicMaterial({ color: 0xffd3a9, transparent: true, opacity: 0.0, side: THREE.DoubleSide })
+  );
+  trashRing.rotation.x = -Math.PI / 2;
+  trashRing.position.set(0, trashCan.rimY + 0.035, 0);
+  trashGroup.add(trashRing);
+
+  scene.add(trashGroup);
+  binVisuals.trash.shells = [trashBody, trashRim];
+  binVisuals.trash.ring = trashRing;
+
+}
+
+function setupPhysicsWorld() {
+  const world = physics.world;
+  world.broadphase = new CANNON.SAPBroadphase(world);
+  world.allowSleep = true;
+  world.solver.iterations = 30;
+  world.solver.tolerance = 0.001;
+  world.gravity.set(0, -9.8, 0);
+
+  const floorMat = new CANNON.Material("floor");
+  const laundryMat = new CANNON.Material("laundry");
+  const paperMat = new CANNON.Material("paper");
+  const shellMat = new CANNON.Material("shell");
+  const rimMat = new CANNON.Material("rim");
+  physics.materials = { floorMat, laundryMat, paperMat, shellMat, rimMat };
+  world.defaultContactMaterial = new CANNON.ContactMaterial(shellMat, shellMat, {
+    friction: 0.5,
+    restitution: 0.06,
+  });
+
+  // Laundry feels heavy/soft.
+  world.addContactMaterial(new CANNON.ContactMaterial(laundryMat, floorMat, { friction: 0.9, restitution: 0.02 }));
+  world.addContactMaterial(new CANNON.ContactMaterial(laundryMat, shellMat, { friction: 0.94, restitution: 0.02 }));
+  world.addContactMaterial(new CANNON.ContactMaterial(laundryMat, rimMat, { friction: 0.88, restitution: 0.05 }));
+  // Paper feels light and bouncy, especially on rim glances.
+  world.addContactMaterial(new CANNON.ContactMaterial(paperMat, floorMat, { friction: 0.26, restitution: 0.2 }));
+  world.addContactMaterial(new CANNON.ContactMaterial(paperMat, shellMat, { friction: 0.18, restitution: 0.17 }));
+  world.addContactMaterial(new CANNON.ContactMaterial(paperMat, rimMat, { friction: 0.1, restitution: 0.28 }));
+  // Item-item contacts.
+  world.addContactMaterial(new CANNON.ContactMaterial(laundryMat, paperMat, { friction: 0.55, restitution: 0.08 }));
+  world.addContactMaterial(new CANNON.ContactMaterial(laundryMat, laundryMat, { friction: 0.78, restitution: 0.03 }));
+  world.addContactMaterial(new CANNON.ContactMaterial(paperMat, paperMat, { friction: 0.32, restitution: 0.14 }));
+
+  const addStaticBox = (x, y, z, hx, hy, hz, rotY = 0, material = shellMat) => {
+    const b = new CANNON.Body({ type: CANNON.Body.STATIC, mass: 0, material });
+    b.addShape(new CANNON.Box(new CANNON.Vec3(hx, hy, hz)));
+    b.position.set(x, y, z);
+    if (rotY !== 0) b.quaternion.setFromEuler(0, rotY, 0);
+    world.addBody(b);
+  };
+
+  // Floor and soft containment bounds.
+  addStaticBox(-1, -0.05, -1, 7, 0.05, 5, 0, floorMat);
+  addStaticBox(ROOM.minX - 0.03, 0.8, -1, 0.03, 0.8, 5);
+  addStaticBox(ROOM.maxX + 0.03, 0.8, -1, 0.03, 0.8, 5);
+  addStaticBox(-1, 0.8, ROOM.minZ - 0.03, 7, 0.8, 0.03);
+  addStaticBox(-1, 0.8, ROOM.maxZ + 0.03, 7, 0.8, 0.03);
+
+  // Desk legs are solid.
+  for (const leg of DESK_LEGS) {
+    addStaticBox(leg.x, 0.5, leg.z, leg.halfX, 0.5, leg.halfZ);
+  }
+
+  // Hamper walls.
+  addStaticBox(hamper.pos.x, hamper.rimY * 0.5, hamper.pos.z + hamper.outerHalfZ, hamper.outerHalfX, hamper.rimY * 0.5, 0.03);
+  addStaticBox(hamper.pos.x, hamper.rimY * 0.5, hamper.pos.z - hamper.outerHalfZ, hamper.outerHalfX, hamper.rimY * 0.5, 0.03);
+  addStaticBox(hamper.pos.x + hamper.outerHalfX, hamper.rimY * 0.5, hamper.pos.z, 0.03, hamper.rimY * 0.5, hamper.outerHalfZ);
+  addStaticBox(hamper.pos.x - hamper.outerHalfX, hamper.rimY * 0.5, hamper.pos.z, 0.03, hamper.rimY * 0.5, hamper.outerHalfZ);
+  // Hamper top rim edges.
+  addStaticBox(hamper.pos.x, hamper.rimY + 0.02, hamper.pos.z + hamper.outerHalfZ, hamper.outerHalfX + 0.02, 0.02, 0.03, 0, rimMat);
+  addStaticBox(hamper.pos.x, hamper.rimY + 0.02, hamper.pos.z - hamper.outerHalfZ, hamper.outerHalfX + 0.02, 0.02, 0.03, 0, rimMat);
+  addStaticBox(hamper.pos.x + hamper.outerHalfX, hamper.rimY + 0.02, hamper.pos.z, 0.03, 0.02, hamper.outerHalfZ + 0.02, 0, rimMat);
+  addStaticBox(hamper.pos.x - hamper.outerHalfX, hamper.rimY + 0.02, hamper.pos.z, 0.03, 0.02, hamper.outerHalfZ + 0.02, 0, rimMat);
+
+  // Trash can hollow shell and rim approximation.
+  const segments = 30;
+  const halfWallH = trashCan.rimY * 0.5;
+  for (let i = 0; i < segments; i++) {
+    const t = (i / segments) * Math.PI * 2;
+    const cx = trashCan.pos.x + Math.cos(t) * trashCan.outerRadius;
+    const cz = trashCan.pos.z + Math.sin(t) * trashCan.outerRadius;
+    addStaticBox(cx, halfWallH, cz, 0.1, halfWallH, 0.04, t, shellMat);
+    const rx = trashCan.pos.x + Math.cos(t) * (trashCan.outerRadius + 0.02);
+    const rz = trashCan.pos.z + Math.sin(t) * (trashCan.outerRadius + 0.02);
+    addStaticBox(rx, trashCan.rimY + 0.015, rz, 0.12, 0.025, 0.045, t, rimMat);
+  }
 }
 
 function addFixedPickups() {
@@ -230,26 +508,104 @@ function addFixedPickups() {
 
 function addPickup(type, x, z) {
   let mesh;
+  let body;
+  let mass;
   if (type === "laundry") {
-    mesh = new THREE.Mesh(
-      new THREE.BoxGeometry(0.44, 0.08, 0.34),
-      new THREE.MeshStandardMaterial({ color: 0xc7cfdb, roughness: 0.95 })
-    );
+    const clothMat = new THREE.MeshStandardMaterial({ color: 0xf2f4f9, roughness: 0.96 });
+    const foldMat = new THREE.MeshStandardMaterial({ color: 0xe4e9f2, roughness: 0.95 });
+    const pile = new THREE.Group();
+
+    // Flat folded laundry look.
+    const baseGeo = new THREE.BoxGeometry(0.48, 0.04, 0.36, 6, 1, 6);
+    jitterGeometry(baseGeo, 0.01);
+    const base = new THREE.Mesh(baseGeo, clothMat);
+    base.position.set(0, 0.03, 0);
+    pile.add(base);
+
+    const foldGeo = new THREE.BoxGeometry(0.38, 0.035, 0.27, 6, 1, 6);
+    jitterGeometry(foldGeo, 0.009);
+    const fold = new THREE.Mesh(foldGeo, foldMat);
+    fold.position.set(0.02, 0.055, -0.02);
+    fold.rotation.y = 0.32;
+    fold.rotation.x = 0.06;
+    pile.add(fold);
+
+    const flapGeo = new THREE.BoxGeometry(0.2, 0.03, 0.14, 4, 1, 4);
+    jitterGeometry(flapGeo, 0.008);
+    const flap = new THREE.Mesh(flapGeo, clothMat);
+    flap.position.set(0.09, 0.08, 0.08);
+    flap.rotation.y = -0.5;
+    flap.rotation.x = -0.05;
+    pile.add(flap);
+
+    mesh = pile;
+    mesh.rotation.x = (Math.random() - 0.5) * 0.07;
+    mesh.rotation.z = (Math.random() - 0.5) * 0.07;
+    mass = 0.56;
+    body = new CANNON.Body({
+      mass,
+      material: physics.materials.laundryMat,
+      linearDamping: 0.8,
+      angularDamping: 0.93,
+    });
+    body.addShape(new CANNON.Box(new CANNON.Vec3(0.24, 0.04, 0.18)));
   } else {
+    const geo = new THREE.IcosahedronGeometry(0.16, 1);
+    jitterGeometry(geo, 0.03);
     mesh = new THREE.Mesh(
-      new THREE.IcosahedronGeometry(0.16, 0),
-      new THREE.MeshStandardMaterial({ color: 0xf1f1f1, roughness: 0.93 })
+      geo,
+      new THREE.MeshStandardMaterial({ color: 0xefefef, roughness: 0.95 })
     );
+    mesh.rotation.x = (Math.random() - 0.5) * 0.28;
+    mesh.rotation.z = (Math.random() - 0.5) * 0.28;
+    mass = 0.2;
+    body = new CANNON.Body({
+      mass,
+      material: physics.materials.paperMat,
+      linearDamping: 0.18,
+      angularDamping: 0.24,
+    });
+    body.addShape(new CANNON.Box(new CANNON.Vec3(0.15, 0.03, 0.12)));
   }
   mesh.position.set(x, 0.08, z);
   mesh.rotation.y = Math.random() * Math.PI;
+  mesh.traverse((node) => {
+    if (node.isMesh) {
+      node.castShadow = false;
+      node.receiveShadow = false;
+    }
+  });
+
+  body.position.set(x, 0.08, z);
+  body.quaternion.setFromEuler(mesh.rotation.x, mesh.rotation.y, mesh.rotation.z);
+  body.sleepSpeedLimit = 0.09;
+  body.sleepTimeLimit = 0.4;
+  physics.world.addBody(body);
+
   scene.add(mesh);
   pickups.push({
     mesh,
+    body,
     type,
+    baseMass: mass,
     home: new THREE.Vector3(x, 0.08, z),
     pulseSeed: Math.random() * 6.28,
+    inMotion: false,
+    motion: null, // "drop" | "bounce" | "drag"
+    targetBin: null,
   });
+}
+
+function jitterGeometry(geometry, amount) {
+  const pos = geometry.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    const dx = (Math.random() - 0.5) * amount;
+    const dy = (Math.random() - 0.5) * amount;
+    const dz = (Math.random() - 0.5) * amount;
+    pos.setXYZ(i, pos.getX(i) + dx, pos.getY(i) + dy, pos.getZ(i) + dz);
+  }
+  pos.needsUpdate = true;
+  geometry.computeVertexNormals();
 }
 
 function makeCup() {
@@ -291,28 +647,34 @@ function makeCup() {
 
 function buildCat() {
   const group = new THREE.Group();
+  const simpleParts = [];
+  const addSimplePart = (mesh) => {
+    simpleParts.push(mesh);
+    group.add(mesh);
+    return mesh;
+  };
   const fur = new THREE.MeshStandardMaterial({ color: 0x8f7c69, roughness: 0.92 });
   const furDark = new THREE.MeshStandardMaterial({ color: 0x756555, roughness: 0.95 });
   const pawMat = new THREE.MeshStandardMaterial({ color: 0xd9c8b6, roughness: 0.9 });
 
   const body = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.22, 0.95), fur);
   body.position.set(0, 0.24, 0);
-  group.add(body);
+  addSimplePart(body);
 
   const chest = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.19, 0.36), furDark);
   chest.position.set(0, 0.27, 0.44);
-  group.add(chest);
+  addSimplePart(chest);
 
   const head = new THREE.Mesh(new THREE.BoxGeometry(0.31, 0.22, 0.26), fur);
   head.position.set(0, 0.36, 0.58);
-  group.add(head);
+  addSimplePart(head);
 
   const leftEar = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.12, 0.06), furDark);
   leftEar.position.set(-0.11, 0.49, 0.65);
-  group.add(leftEar);
+  addSimplePart(leftEar);
   const rightEar = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.12, 0.06), furDark);
   rightEar.position.set(0.11, 0.49, 0.65);
-  group.add(rightEar);
+  addSimplePart(rightEar);
 
   const legGeo = new THREE.BoxGeometry(0.1, 0.22, 0.1);
   const legs = [];
@@ -325,17 +687,20 @@ function buildCat() {
   for (const [x, y, z] of legOffsets) {
     const leg = new THREE.Mesh(legGeo, pawMat);
     leg.position.set(x, y, z);
-    group.add(leg);
+    addSimplePart(leg);
     legs.push(leg);
   }
 
   const tail = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.09, 0.44), furDark);
   tail.position.set(0, 0.35, -0.62);
-  group.add(tail);
+  addSimplePart(tail);
 
   const paw = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.06, 0.16), pawMat);
   paw.position.set(0.21, 0.25, 0.42);
-  group.add(paw);
+  addSimplePart(paw);
+
+  const modelAnchor = new THREE.Group();
+  group.add(modelAnchor);
 
   const waypoints = [
     new THREE.Vector3(1.5, 0, 1.7),
@@ -352,17 +717,184 @@ function buildCat() {
     tail,
     legs,
     paw,
+    simpleParts,
+    modelAnchor,
+    usingRealisticModel: false,
+    rig: null,
     pos: new THREE.Vector3(1.5, 0, 1.7),
-    state: "patrol", // patrol|toDesk|jumpUp|toCup|swipe|jumpDown|toCatnip|distracted
+    state: "patrol", // patrol|toDesk|prepareJump|toCup|swipe|jumpDown|toCatnip|distracted
+    lastState: "patrol",
+    stateT: 0,
     status: "Patrolling",
     onTable: false,
     speed: 1.0,
     wpIndex: 0,
     walkT: 0,
+    motionBlend: 0,
     phaseT: 0,
+    swipeHitDone: false,
     jump: null, // {from,to,fromY,toY,dur,t,arc,next}
+    jumpAnchor: null,
+    jumpApproachLock: false,
+    nextHopAt: 0,
+    nav: {
+      goal: new THREE.Vector3(1.5, 0, 1.7),
+      path: [],
+      index: 0,
+      repathAt: 0,
+      stuckT: 0,
+      lastPos: new THREE.Vector3(1.5, 0, 1.7),
+      lastSpeed: 0,
+    },
     waypoints,
   };
+}
+
+function normalizeCatModel(model) {
+  tempBox.setFromObject(model);
+  if (tempBox.isEmpty()) return;
+
+  tempBox.getSize(tempSize);
+  const sourceLength = Math.max(tempSize.x, tempSize.z, 0.001);
+  const targetLength = 0.92;
+  const scale = targetLength / sourceLength;
+  model.scale.multiplyScalar(scale);
+
+  tempBox.setFromObject(model);
+  tempBox.getCenter(tempCenter);
+  tempMin.copy(tempBox.min);
+
+  model.position.x -= tempCenter.x;
+  model.position.y -= tempMin.y;
+  model.position.z -= tempCenter.z;
+}
+
+function findBone(model, name) {
+  const node = model.getObjectByName(name);
+  return node && node.isBone ? node : null;
+}
+
+function cloneBoneRotation(bone) {
+  return bone ? bone.rotation.clone() : new THREE.Euler();
+}
+
+function createCatRig(model) {
+  const rig = {
+    root: findBone(model, "j_root"),
+    hips: findBone(model, "j_hips"),
+    spine1: findBone(model, "j_spine_1"),
+    spine2: findBone(model, "j_spine_2"),
+    spine3: findBone(model, "j_spine_3"),
+    neckBase: findBone(model, "j_neck_base"),
+    neck1: findBone(model, "j_neck_1"),
+    head: findBone(model, "j_head"),
+    tail: [
+      findBone(model, "j_tail_1"),
+      findBone(model, "j_tail_2"),
+      findBone(model, "j_tail_3"),
+      findBone(model, "j_tail_4"),
+      findBone(model, "j_tail_5"),
+      findBone(model, "j_tail_6"),
+    ],
+    frontL: {
+      shoulder: findBone(model, "j_l_humerous"),
+      elbow: findBone(model, "j_l_elbow"),
+      wrist: findBone(model, "j_l_wrist"),
+      paw: findBone(model, "j_l_palm"),
+    },
+    frontR: {
+      shoulder: findBone(model, "j_r_humerous"),
+      elbow: findBone(model, "j_r_elbow"),
+      wrist: findBone(model, "j_r_wrist"),
+      paw: findBone(model, "j_r_palm"),
+    },
+    backL: {
+      hip: findBone(model, "j_l_femur"),
+      knee: findBone(model, "j_l_knee"),
+      ankle: findBone(model, "j_l_ankle"),
+    },
+    backR: {
+      hip: findBone(model, "j_r_femur"),
+      knee: findBone(model, "j_r_knee"),
+      ankle: findBone(model, "j_r_ankle"),
+    },
+    base: {},
+  };
+
+  const allBones = [
+    rig.root, rig.hips, rig.spine1, rig.spine2, rig.spine3, rig.neckBase, rig.neck1, rig.head,
+    ...rig.tail,
+    rig.frontL.shoulder, rig.frontL.elbow, rig.frontL.wrist, rig.frontL.paw,
+    rig.frontR.shoulder, rig.frontR.elbow, rig.frontR.wrist, rig.frontR.paw,
+    rig.backL.hip, rig.backL.knee, rig.backL.ankle,
+    rig.backR.hip, rig.backR.knee, rig.backR.ankle,
+  ].filter(Boolean);
+
+  for (const bone of allBones) {
+    rig.base[bone.name] = cloneBoneRotation(bone);
+  }
+
+  return rig;
+}
+
+function setBonePose(rig, bone, x = 0, y = 0, z = 0, alpha = 1) {
+  if (!bone) return;
+  const base = rig.base[bone.name];
+  if (!base) return;
+  const targetX = base.x + x;
+  const targetY = base.y + y;
+  const targetZ = base.z + z;
+  bone.rotation.x = THREE.MathUtils.lerp(bone.rotation.x, targetX, alpha);
+  bone.rotation.y = THREE.MathUtils.lerp(bone.rotation.y, targetY, alpha);
+  bone.rotation.z = THREE.MathUtils.lerp(bone.rotation.z, targetZ, alpha);
+}
+
+function loadCatModel(catObject) {
+  const tryLoad = (idx) => {
+    if (idx >= CAT_MODEL_CANDIDATES.length) {
+      catObject.usingRealisticModel = false;
+      console.warn("Failed to load cat model from all paths:", CAT_MODEL_CANDIDATES);
+      return;
+    }
+
+    const url = CAT_MODEL_CANDIDATES[idx];
+    gltfLoader.load(
+      url,
+      (gltf) => {
+        const model = gltf.scene;
+        model.traverse((node) => {
+          if (!node.isMesh) return;
+          node.castShadow = false;
+          node.receiveShadow = false;
+          if (Array.isArray(node.material)) {
+            for (const mat of node.material) {
+              if (mat && "side" in mat) mat.side = THREE.DoubleSide;
+            }
+          } else if (node.material && "side" in node.material) {
+            node.material.side = THREE.DoubleSide;
+          }
+        });
+
+        model.rotation.y = CAT_MODEL_YAW_OFFSET;
+        normalizeCatModel(model);
+        catObject.modelAnchor.clear();
+        catObject.modelAnchor.add(model);
+        catObject.usingRealisticModel = true;
+        catObject.rig = createCatRig(model);
+
+        for (const mesh of catObject.simpleParts) {
+          mesh.visible = false;
+        }
+      },
+      undefined,
+      (error) => {
+        console.warn("Failed to load cat model path:", url, error);
+        tryLoad(idx + 1);
+      }
+    );
+  };
+
+  tryLoad(0);
 }
 
 function resetGame() {
@@ -373,6 +905,7 @@ function resetGame() {
   game.pendingLoseAt = null;
   game.placeCatnipMode = false;
   game.catnipCooldownUntil = 0;
+  game.invalidCatnipUntil = 0;
   if (game.catnip) {
     scene.remove(game.catnip.mesh);
     game.catnip = null;
@@ -387,8 +920,15 @@ function resetGame() {
 
   for (const bit of shatterBits) scene.remove(bit.mesh);
   shatterBits.length = 0;
+  dragState = null;
+  dragHover = { binType: null, topEntry: false };
+  controls.enabled = true;
+  setBinHighlight(null, false);
 
-  for (const p of pickups) scene.remove(p.mesh);
+  for (const p of pickups) {
+    scene.remove(p.mesh);
+    if (p.body) physics.world.removeBody(p.body);
+  }
   pickups.length = 0;
   addFixedPickups();
   game.total = pickups.length;
@@ -397,12 +937,150 @@ function resetGame() {
   cat.group.position.set(cat.pos.x, 0, cat.pos.z);
   cat.group.rotation.set(0, 2.4, 0);
   cat.state = "patrol";
+  cat.lastState = "patrol";
+  cat.stateT = 0;
   cat.status = "Patrolling";
   cat.onTable = false;
   cat.wpIndex = 0;
   cat.walkT = 0;
+  cat.motionBlend = 0;
   cat.phaseT = 0;
+  cat.swipeHitDone = false;
   cat.jump = null;
+  cat.jumpAnchor = null;
+  cat.jumpApproachLock = false;
+  cat.nextHopAt = 0;
+  cat.nav.goal.set(cat.pos.x, 0, cat.pos.z);
+  cat.nav.path.length = 0;
+  cat.nav.index = 0;
+  cat.nav.repathAt = 0;
+  cat.nav.stuckT = 0;
+  cat.nav.lastPos.copy(cat.pos);
+  cat.nav.lastSpeed = 0;
+}
+
+function setBinHighlight(binType, topEntry) {
+  const hamperOn = binType === "hamper";
+  const trashOn = binType === "trash";
+  const goodColor = topEntry ? 0x92ff86 : 0xffd58a;
+
+  if (binVisuals.hamper.ring) {
+    binVisuals.hamper.ring.material.opacity = hamperOn ? 0.55 : 0.0;
+    binVisuals.hamper.ring.material.color.setHex(hamperOn ? goodColor : 0x77c9ff);
+  }
+  if (binVisuals.trash.ring) {
+    binVisuals.trash.ring.material.opacity = trashOn ? 0.58 : 0.0;
+    binVisuals.trash.ring.material.color.setHex(trashOn ? goodColor : 0xffd3a9);
+  }
+
+  for (const m of binVisuals.hamper.shells) {
+    if (!m.material.emissive) continue;
+    m.material.emissive.setHex(hamperOn ? (topEntry ? 0x143018 : 0x3a2d13) : 0x000000);
+  }
+  for (const m of binVisuals.trash.shells) {
+    if (!m.material.emissive) continue;
+    m.material.emissive.setHex(trashOn ? (topEntry ? 0x143018 : 0x3a2d13) : 0x000000);
+  }
+}
+
+function isInsideHamperOpening(pos) {
+  return (
+    Math.abs(pos.x - hamper.pos.x) <= hamper.openingHalfX &&
+    Math.abs(pos.z - hamper.pos.z) <= hamper.openingHalfZ
+  );
+}
+
+function isInsideTrashOpening(pos) {
+  const dx = pos.x - trashCan.pos.x;
+  const dz = pos.z - trashCan.pos.z;
+  return dx * dx + dz * dz <= trashCan.openingRadius * trashCan.openingRadius;
+}
+
+function hitBinFromSide(pos, binType) {
+  if (binType === "hamper") {
+    const dx = Math.abs(pos.x - hamper.pos.x);
+    const dz = Math.abs(pos.z - hamper.pos.z);
+    const inOuter = dx <= hamper.outerHalfX + 0.1 && dz <= hamper.outerHalfZ + 0.1;
+    return inOuter && pos.y <= hamper.rimY + 0.1;
+  }
+
+  const dx = pos.x - trashCan.pos.x;
+  const dz = pos.z - trashCan.pos.z;
+  const d = Math.hypot(dx, dz);
+  return d <= trashCan.outerRadius + 0.11 && pos.y <= trashCan.rimY + 0.1;
+}
+
+function classifyBinContactForPickup(pickup) {
+  const pos = pickup.mesh.position;
+  const wantedBin = pickup.type === "laundry" ? "hamper" : "trash";
+  const otherBin = wantedBin === "hamper" ? "trash" : "hamper";
+
+  function topEntry(binType) {
+    if (binType === "hamper") return isInsideHamperOpening(pos) && pos.y >= hamper.rimY - 0.01;
+    return isInsideTrashOpening(pos) && pos.y >= trashCan.rimY - 0.01;
+  }
+
+  function sideHit(binType) {
+    return hitBinFromSide(pos, binType);
+  }
+
+  if (topEntry(wantedBin)) return { binType: wantedBin, topEntry: true, valid: true };
+  if (topEntry(otherBin)) return { binType: otherBin, topEntry: true, valid: false };
+  if (sideHit(wantedBin)) return { binType: wantedBin, topEntry: false, valid: false };
+  if (sideHit(otherBin)) return { binType: otherBin, topEntry: false, valid: false };
+  return { binType: null, topEntry: false, valid: false };
+}
+
+function classifyTopEntryAssist(pickup) {
+  const pos = pickup.mesh.position;
+  if (pickup.type === "laundry") {
+    const dx = Math.abs(pos.x - hamper.pos.x);
+    const dz = Math.abs(pos.z - hamper.pos.z);
+    const closeToOpening = dx <= hamper.openingHalfX + 0.06 && dz <= hamper.openingHalfZ + 0.06;
+    if (closeToOpening && pos.y >= hamper.rimY - 0.05) {
+      return { binType: "hamper", topEntry: true, valid: true };
+    }
+  } else {
+    const dx = pos.x - trashCan.pos.x;
+    const dz = pos.z - trashCan.pos.z;
+    const dist = Math.hypot(dx, dz);
+    if (dist <= trashCan.openingRadius + 0.06 && pos.y >= trashCan.rimY - 0.05) {
+      return { binType: "trash", topEntry: true, valid: true };
+    }
+  }
+  return null;
+}
+
+function classifyReleaseIntent(pickup) {
+  const pos = pickup.mesh.position;
+  if (pickup.type === "laundry") {
+    const dx = Math.abs(pos.x - hamper.pos.x);
+    const dz = Math.abs(pos.z - hamper.pos.z);
+    if (dx <= hamper.openingHalfX + 0.1 && dz <= hamper.openingHalfZ + 0.1) {
+      return { binType: "hamper", topEntry: true, valid: true };
+    }
+    return null;
+  }
+  const dx = pos.x - trashCan.pos.x;
+  const dz = pos.z - trashCan.pos.z;
+  const dist = Math.hypot(dx, dz);
+  if (dist <= trashCan.openingRadius + 0.09) {
+    return { binType: "trash", topEntry: true, valid: true };
+  }
+  return null;
+}
+
+function nearHamperDrop(pos) {
+  const dx = Math.abs(pos.x - hamper.pos.x);
+  const dz = Math.abs(pos.z - hamper.pos.z);
+  return dx <= hamper.openingHalfX + 0.1 && dz <= hamper.openingHalfZ + 0.1;
+}
+
+function nearTrashDrop(pos) {
+  const dx = pos.x - trashCan.pos.x;
+  const dz = pos.z - trashCan.pos.z;
+  const d = Math.hypot(dx, dz);
+  return d <= trashCan.openingRadius + 0.09;
 }
 
 function onPointerDown(event) {
@@ -414,13 +1092,12 @@ function onPointerDown(event) {
     return;
   }
 
-  const pickupMeshes = pickups.map((p) => p.mesh);
+  const pickupMeshes = pickups.filter((p) => !p.inMotion).map((p) => p.mesh);
   raycaster.setFromCamera(mouse, camera);
-  const hits = raycaster.intersectObjects(pickupMeshes, false);
+  const hits = raycaster.intersectObjects(pickupMeshes, true);
   if (!hits.length) return;
 
-  const mesh = hits[0].object;
-  const pickup = pickups.find((p) => p.mesh === mesh);
+  const pickup = findPickupFromObject(hits[0].object);
   if (!pickup) return;
 
   const planeY = 0.08;
@@ -430,9 +1107,20 @@ function onPointerDown(event) {
   dragState = {
     pickup,
     planeY,
-    offsetX: mesh.position.x - tempV3.x,
-    offsetZ: mesh.position.z - tempV3.z,
+    offsetX: pickup.mesh.position.x - tempV3.x,
+    offsetZ: pickup.mesh.position.z - tempV3.z,
   };
+  setPickupBodyMode(pickup, CANNON.Body.KINEMATIC);
+  pickup.body.velocity.setZero();
+  pickup.body.angularVelocity.setZero();
+  pickup.inMotion = false;
+  pickup.motion = "drag";
+  pickup.targetBin = null;
+  pickup.mesh.position.y = 0.28;
+  pickup.body.position.copy(pickup.mesh.position);
+  pickup.body.quaternion.setFromEuler(pickup.mesh.rotation.x, pickup.mesh.rotation.y, pickup.mesh.rotation.z);
+  dragHover = { binType: null, topEntry: false };
+  setBinHighlight(null, false);
   controls.enabled = false;
 }
 
@@ -446,43 +1134,221 @@ function onPointerMove(event) {
   const z = tempV3.z + dragState.offsetZ;
   dragState.pickup.mesh.position.x = THREE.MathUtils.clamp(x, ROOM.minX + 0.35, ROOM.maxX - 0.35);
   dragState.pickup.mesh.position.z = THREE.MathUtils.clamp(z, ROOM.minZ + 0.35, ROOM.maxZ - 0.35);
-  dragState.pickup.mesh.position.y = 0.12;
+  const lift = THREE.MathUtils.clamp(0.16 + ((mouse.y + 1) * 0.5) * 1.35, 0.14, 1.6);
+  dragState.pickup.mesh.position.y = lift;
+  constrainDragPosition(dragState.pickup, lift);
+  dragState.pickup.body.position.set(
+    dragState.pickup.mesh.position.x,
+    dragState.pickup.mesh.position.y,
+    dragState.pickup.mesh.position.z
+  );
+  dragState.pickup.body.velocity.setZero();
+  dragState.pickup.body.angularVelocity.setZero();
+
+  dragHover = classifyBinContactForPickup(dragState.pickup);
+  setBinHighlight(dragHover.binType, dragHover.topEntry);
 }
 
 function onPointerUp() {
   if (!dragState) return;
   const p = dragState.pickup;
-  const pos = p.mesh.position;
-  const inHamper = Math.abs(pos.x - hamper.pos.x) <= hamper.halfX && Math.abs(pos.z - hamper.pos.z) <= hamper.halfZ;
-  const inTrashCan = pos.distanceTo(trashCan.pos) <= trashCan.radius + 0.05;
+  const hit = classifyBinContactForPickup(p);
+  const assistedHit = hit.valid ? hit : classifyTopEntryAssist(p);
+  const intentHit = assistedHit || classifyReleaseIntent(p);
+  const fallbackHit =
+    p.type === "laundry"
+      ? (nearHamperDrop(p.mesh.position) ? { binType: "hamper", topEntry: true, valid: true } : null)
+      : (nearTrashDrop(p.mesh.position) ? { binType: "trash", topEntry: true, valid: true } : null);
+  const finalHit = intentHit || fallbackHit || hit;
+  setPickupBodyMode(p, CANNON.Body.DYNAMIC);
+  p.body.wakeUp();
 
-  if (p.type === "laundry" && inHamper) {
-    removePickup(p);
-  } else if (p.type === "trash" && inTrashCan) {
-    removePickup(p);
-  } else if ((p.type === "laundry" && inTrashCan) || (p.type === "trash" && inHamper)) {
-    // Wrong bin: snap back to original spawn.
-    p.mesh.position.copy(p.home);
+  if (finalHit.valid && finalHit.topEntry) {
+    startPickupIntoBin(p, finalHit.binType);
+  } else if (finalHit.binType != null) {
+    startPickupBounce(p, finalHit.binType);
   } else {
-    p.mesh.position.y = 0.08;
+    startPickupDrop(p);
   }
 
   dragState = null;
+  dragHover = { binType: null, topEntry: false };
+  setBinHighlight(null, false);
   controls.enabled = true;
 }
 
 function removePickup(pickup) {
   scene.remove(pickup.mesh);
+  if (pickup.body) physics.world.removeBody(pickup.body);
   const idx = pickups.indexOf(pickup);
   if (idx !== -1) pickups.splice(idx, 1);
   game.sorted++;
   if (game.sorted >= game.total) win();
 }
 
+function setPickupBodyMode(pickup, mode) {
+  pickup.body.type = mode;
+  if (mode === CANNON.Body.DYNAMIC) {
+    pickup.body.mass = pickup.baseMass;
+  } else {
+    pickup.body.mass = 0;
+  }
+  pickup.body.updateMassProperties();
+}
+
+function startPickupIntoBin(pickup, binType) {
+  pickup.inMotion = true;
+  pickup.motion = "drop";
+  pickup.targetBin = binType;
+  pickup.body.velocity.y = Math.min(pickup.body.velocity.y, -0.35);
+}
+
+function startPickupBounce(pickup, binType) {
+  pickup.inMotion = true;
+  pickup.motion = "bounce";
+  pickup.targetBin = null;
+
+  const center = binType === "hamper" ? hamper.pos : trashCan.pos;
+  const out = new THREE.Vector3(
+    pickup.body.position.x - center.x,
+    0,
+    pickup.body.position.z - center.z
+  );
+  if (out.lengthSq() < 1e-4) out.set(1, 0, 0);
+  out.normalize();
+  pickup.body.velocity.set(out.x * 1.6, 1.05, out.z * 1.6);
+  pickup.body.angularVelocity.set(0, 2.1, 0);
+}
+
+function startPickupDrop(pickup) {
+  pickup.inMotion = true;
+  pickup.motion = "drop";
+  pickup.targetBin = null;
+  pickup.body.velocity.y = Math.min(pickup.body.velocity.y, 0.0);
+}
+
+function pickupRadius(pickup) {
+  return pickup.type === "laundry" ? 0.2 : 0.16;
+}
+
+function pushOutFromAabbXZ(pos, cx, cz, hx, hz, radius) {
+  const dx = pos.x - cx;
+  const dz = pos.z - cz;
+  const limX = hx + radius;
+  const limZ = hz + radius;
+  if (Math.abs(dx) >= limX || Math.abs(dz) >= limZ) return;
+  const penX = limX - Math.abs(dx);
+  const penZ = limZ - Math.abs(dz);
+  if (penX < penZ) pos.x = cx + Math.sign(dx || 1) * limX;
+  else pos.z = cz + Math.sign(dz || 1) * limZ;
+}
+
+function constrainDragPosition(pickup, liftY) {
+  const pos = pickup.mesh.position;
+  const r = pickupRadius(pickup);
+  let targetY = liftY;
+
+  for (const leg of DESK_LEGS) {
+    if (pos.y <= leg.topY + 0.03) {
+      pushOutFromAabbXZ(pos, leg.x, leg.z, leg.halfX, leg.halfZ, r);
+    }
+  }
+
+  if (pos.y <= hamper.rimY + 0.2) {
+    const dx = pos.x - hamper.pos.x;
+    const dz = pos.z - hamper.pos.z;
+    const limX = hamper.outerHalfX + r;
+    const limZ = hamper.outerHalfZ + r;
+    const inOuter = Math.abs(dx) < limX && Math.abs(dz) < limZ;
+    const inOpening =
+      Math.abs(dx) <= hamper.openingHalfX - r * 0.45 &&
+      Math.abs(dz) <= hamper.openingHalfZ - r * 0.45;
+    if (inOuter && !inOpening) {
+      const penX = limX - Math.abs(dx);
+      const penZ = limZ - Math.abs(dz);
+      if (penX < penZ) {
+        pos.x = hamper.pos.x + Math.sign(dx || 1) * limX;
+      } else {
+        pos.z = hamper.pos.z + Math.sign(dz || 1) * limZ;
+      }
+      const penetration = Math.min(penX, penZ);
+      const climb = THREE.MathUtils.clamp((0.14 - penetration) * 0.8, 0, 0.12);
+      const mouseLiftInfluence = THREE.MathUtils.clamp((liftY - 0.22) * 0.35, 0, 0.18);
+      targetY = Math.max(targetY, hamper.rimY - 0.02 + climb + mouseLiftInfluence);
+    }
+    if (pickup.type === "laundry" && inOpening) {
+      targetY = Math.max(targetY, hamper.rimY + 0.14);
+    }
+  }
+
+  if (pos.y <= trashCan.rimY + 0.22) {
+    const dx = pos.x - trashCan.pos.x;
+    const dz = pos.z - trashCan.pos.z;
+    const d = Math.hypot(dx, dz);
+    const inOpening = d <= trashCan.openingRadius - r * 0.35;
+    if (!inOpening && d < trashCan.outerRadius + r) {
+      const n = d || 1;
+      const targetR = trashCan.outerRadius + r;
+      pos.x = trashCan.pos.x + (dx / n) * targetR;
+      pos.z = trashCan.pos.z + (dz / n) * targetR;
+      const penetration = targetR - d;
+      const climb = THREE.MathUtils.clamp(penetration * 0.55, 0, 0.14);
+      const mouseLiftInfluence = THREE.MathUtils.clamp((liftY - 0.2) * 0.36, 0, 0.2);
+      targetY = Math.max(targetY, trashCan.rimY - 0.02 + climb + mouseLiftInfluence);
+    }
+    if (pickup.type === "trash" && d <= trashCan.openingRadius + 0.08) {
+      targetY = Math.max(targetY, trashCan.rimY + 0.14);
+    }
+  }
+
+  pos.y = THREE.MathUtils.lerp(pos.y, targetY, 0.34);
+}
+
+function pickupTuning(pickup) {
+  if (pickup.type === "laundry") {
+    return {
+      friction: 0.18,
+      settleSpeed: 0.08,
+    };
+  }
+  return {
+    friction: 0.46,
+    settleSpeed: 0.16,
+  };
+}
+
 function setMouseFromEvent(event) {
   const rect = renderer.domElement.getBoundingClientRect();
   mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
   mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+}
+
+function isValidCatnipSpot(x, z) {
+  tempTo.set(x, 0, z);
+  const staticObstacles = buildCatObstacles(false);
+  if (isCatPointBlocked(tempTo.x, tempTo.z, staticObstacles, CAT_NAV.clearance * 0.9)) return false;
+
+  for (const p of pickups) {
+    if (p.mesh.position.y > 0.34) continue;
+    const dx = x - p.mesh.position.x;
+    const dz = z - p.mesh.position.z;
+    const rr = pickupRadius(p) + 0.28;
+    if (dx * dx + dz * dz < rr * rr) return false;
+  }
+
+  const start = cat.onTable ? findSafeGroundPoint(desk.approach) : cat.pos;
+  const dynamicObstacles = buildCatObstacles(true);
+  return canReachGroundTarget(start, tempTo, dynamicObstacles);
+}
+
+function findPickupFromObject(object3D) {
+  let node = object3D;
+  while (node) {
+    const hit = pickups.find((p) => p.mesh === node);
+    if (hit) return hit;
+    node = node.parent;
+  }
+  return null;
 }
 
 function placeCatnipFromMouse() {
@@ -492,6 +1358,10 @@ function placeCatnipFromMouse() {
 
   const x = THREE.MathUtils.clamp(tempV3.x, ROOM.minX + 0.6, ROOM.maxX - 0.6);
   const z = THREE.MathUtils.clamp(tempV3.z, ROOM.minZ + 0.6, ROOM.maxZ - 0.6);
+  if (!isValidCatnipSpot(x, z)) {
+    game.invalidCatnipUntil = clockTime + 1.1;
+    return;
+  }
 
   if (game.catnip) scene.remove(game.catnip.mesh);
   const marker = new THREE.Mesh(
@@ -506,19 +1376,161 @@ function placeCatnipFromMouse() {
     pos: new THREE.Vector3(x, 0, z),
     expiresAt: clockTime + 7,
   };
-  game.catnipCooldownUntil = clockTime + 30;
+  game.catnipCooldownUntil = game.catnip.expiresAt;
   game.placeCatnipMode = false;
+  game.invalidCatnipUntil = 0;
 }
 
 function updatePickups(dt) {
-  if (dragState) return;
-  for (const p of pickups) {
-    p.mesh.rotation.y += dt * 0.9;
-    p.mesh.position.y = 0.08 + Math.sin(clockTime * 2.0 + p.pulseSeed) * 0.01;
+  for (let i = pickups.length - 1; i >= 0; i--) {
+    const p = pickups[i];
+    const tuning = pickupTuning(p);
+    const b = p.body;
+    const maxLinear = p.type === "trash" ? 4.8 : 3.6;
+    const maxAngular = p.type === "trash" ? 9.0 : 6.0;
+
+    if (dragState && dragState.pickup === p) {
+      p.mesh.scale.x = THREE.MathUtils.damp(p.mesh.scale.x, 1, 10, dt);
+      p.mesh.scale.y = THREE.MathUtils.damp(p.mesh.scale.y, 1, 10, dt);
+      p.mesh.scale.z = THREE.MathUtils.damp(p.mesh.scale.z, 1, 10, dt);
+      continue;
+    }
+
+    if (p.type === "trash" && p.inMotion && b.position.y > 0.14) {
+      const fx = Math.sin(clockTime * 8 + p.pulseSeed) * 0.24;
+      const fz = Math.cos(clockTime * 9 + p.pulseSeed * 1.6) * 0.2;
+      b.applyForce(new CANNON.Vec3(fx, 0, fz), b.position);
+      b.angularVelocity.x += Math.cos(clockTime * 6 + p.pulseSeed) * 0.02;
+      b.angularVelocity.z += Math.sin(clockTime * 7 + p.pulseSeed) * 0.02;
+      b.angularVelocity.y += Math.sin(clockTime * 5 + p.pulseSeed) * 0.01;
+    }
+
+    const linearSpeed = b.velocity.length();
+    if (linearSpeed > maxLinear) {
+      b.velocity.scale(maxLinear / linearSpeed, b.velocity);
+    }
+    const angSpeed = b.angularVelocity.length();
+    if (angSpeed > maxAngular) {
+      b.angularVelocity.scale(maxAngular / angSpeed, b.angularVelocity);
+    }
+
+    if (cat.group.position.y <= 0.24 && b.position.y <= 0.62) {
+      const catRadius = 0.24;
+      const itemRadius = pickupRadius(p) * 0.86;
+      const minDist = catRadius + itemRadius;
+      let dxCat = b.position.x - cat.pos.x;
+      let dzCat = b.position.z - cat.pos.z;
+      let dist = Math.hypot(dxCat, dzCat);
+      if (dist < minDist) {
+        if (dist < 1e-4) {
+          dxCat = Math.sin(cat.group.rotation.y);
+          dzCat = Math.cos(cat.group.rotation.y);
+          dist = 1;
+        }
+        const nxCat = dxCat / dist;
+        const nzCat = dzCat / dist;
+        const push = minDist - dist + 0.05;
+        b.position.x += nxCat * push;
+        b.position.z += nzCat * push;
+        const bounce = p.type === "trash" ? 1.35 : 1.05;
+        b.velocity.x += nxCat * bounce;
+        b.velocity.z += nzCat * bounce;
+        b.velocity.y = Math.max(b.velocity.y, p.type === "trash" ? 0.9 : 0.72);
+        b.angularVelocity.y += (Math.random() - 0.5) * 2.1;
+        b.angularVelocity.x += (Math.random() - 0.5) * 1.4;
+        b.angularVelocity.z += (Math.random() - 0.5) * 1.4;
+        p.inMotion = true;
+        if (p.motion === "drag") p.motion = "bounce";
+      }
+    }
+
+    const dxTrash = b.position.x - trashCan.pos.x;
+    const dzTrash = b.position.z - trashCan.pos.z;
+    const dTrash = Math.hypot(dxTrash, dzTrash);
+    const dxHamper = b.position.x - hamper.pos.x;
+    const dzHamper = b.position.z - hamper.pos.z;
+
+    if (p.type === "trash") {
+      if ((p.targetBin === "trash" || nearTrashDrop(b.position)) && dTrash <= trashCan.openingRadius + 0.02 && b.position.y <= trashCan.rimY + 0.24) {
+        b.applyForce(new CANNON.Vec3(-dxTrash * 0.14, 0, -dzTrash * 0.14), b.position);
+      }
+      const nearRim = dTrash > trashCan.openingRadius - 0.01 && dTrash < trashCan.outerRadius + 0.02;
+      if (nearRim && b.position.y <= trashCan.rimY + 0.06 && b.velocity.y < 0) {
+        const nx = dxTrash / (dTrash || 1);
+        const nz = dzTrash / (dTrash || 1);
+        b.applyImpulse(new CANNON.Vec3(nx * 0.06, 0.04, nz * 0.06), b.position);
+      }
+      if (dTrash <= trashCan.openingRadius + 0.03 && b.position.y <= trashCan.rimY + 0.08 && b.velocity.y <= 0.25) {
+        removePickup(p);
+        continue;
+      }
+      // Wrong bin: keep trash out of hamper interior.
+      if (
+        Math.abs(dxHamper) <= hamper.openingHalfX - 0.02 &&
+        Math.abs(dzHamper) <= hamper.openingHalfZ - 0.02 &&
+        b.position.y <= hamper.rimY + 0.02
+      ) {
+        b.position.y = hamper.rimY + 0.06;
+        b.velocity.set(Math.sign(dxHamper || 1) * 0.5, 0.35, Math.sign(dzHamper || 1) * 0.5);
+      }
+    } else {
+      if (
+        (p.targetBin === "hamper" || nearHamperDrop(b.position)) &&
+        Math.abs(dxHamper) <= hamper.openingHalfX + 0.04 &&
+        Math.abs(dzHamper) <= hamper.openingHalfZ + 0.04 &&
+        b.position.y <= hamper.rimY + 0.25
+      ) {
+        b.applyForce(new CANNON.Vec3(-dxHamper * 0.16, 0, -dzHamper * 0.16), b.position);
+      }
+      if (
+        Math.abs(dxHamper) <= hamper.outerHalfX - 0.015 &&
+        Math.abs(dzHamper) <= hamper.outerHalfZ - 0.015 &&
+        b.position.y <= hamper.rimY + 0.1 &&
+        Math.abs(dxHamper) <= hamper.openingHalfX + 0.04 &&
+        Math.abs(dzHamper) <= hamper.openingHalfZ + 0.04 &&
+        b.velocity.y <= 0.25
+      ) {
+        removePickup(p);
+        continue;
+      }
+      // Wrong bin: keep laundry out of trash opening.
+      if (dTrash <= trashCan.openingRadius - 0.01 && b.position.y <= trashCan.rimY + 0.02) {
+        const nx = dxTrash / (dTrash || 1);
+        const nz = dzTrash / (dTrash || 1);
+        b.position.x = trashCan.pos.x + nx * (trashCan.openingRadius + pickupRadius(p) + 0.02);
+        b.position.z = trashCan.pos.z + nz * (trashCan.openingRadius + pickupRadius(p) + 0.02);
+        b.velocity.set(nx * 0.6, 0.4, nz * 0.6);
+      }
+    }
+
+    p.mesh.position.set(b.position.x, b.position.y, b.position.z);
+    p.mesh.quaternion.set(b.quaternion.x, b.quaternion.y, b.quaternion.z, b.quaternion.w);
+
+    const speed = b.velocity.length();
+    if (p.type === "laundry") {
+      const squash = THREE.MathUtils.clamp(speed * 0.08, 0, 0.28);
+      p.mesh.scale.set(1 + squash * 0.35, 1 - squash, 1 + squash * 0.35);
+    } else {
+      const squash = THREE.MathUtils.clamp(speed * 0.12, 0, 0.35);
+      p.mesh.scale.set(1 + squash * 0.35, 1 - squash, 1 + squash * 0.35);
+    }
+
+    if (b.position.y <= 0.082 && speed < tuning.settleSpeed) {
+      b.velocity.scale(tuning.friction, b.velocity);
+      if (speed < tuning.settleSpeed * 0.6) {
+        p.inMotion = false;
+        p.motion = null;
+        p.targetBin = null;
+      }
+    }
+
+    p.mesh.scale.x = THREE.MathUtils.damp(p.mesh.scale.x, 1, 10, dt);
+    p.mesh.scale.y = THREE.MathUtils.damp(p.mesh.scale.y, 1, 10, dt);
+    p.mesh.scale.z = THREE.MathUtils.damp(p.mesh.scale.z, 1, 10, dt);
   }
 }
 
-function startJump(to, toY, dur, arc, nextState) {
+function startJump(to, toY, dur, arc, nextState, opts = null) {
   cat.jump = {
     from: cat.pos.clone(),
     to: to.clone(),
@@ -528,6 +1540,9 @@ function startJump(to, toY, dur, arc, nextState) {
     t: 0,
     arc,
     nextState,
+    easePos: !!(opts && opts.easePos),
+    easeY: !!(opts && opts.easeY),
+    avoidDeskClip: !!(opts && opts.avoidDeskClip),
   };
 }
 
@@ -535,9 +1550,19 @@ function updateJump(dt) {
   if (!cat.jump) return false;
   cat.jump.t += dt;
   const u = Math.min(1, cat.jump.t / cat.jump.dur);
-  cat.pos.lerpVectors(cat.jump.from, cat.jump.to, u);
+  const uPos = cat.jump.easePos ? THREE.MathUtils.smootherstep(u, 0, 1) : u;
+  const uY = cat.jump.easeY ? Math.pow(u, 0.74) : u;
+  cat.pos.lerpVectors(cat.jump.from, cat.jump.to, uPos);
   const lift = Math.sin(Math.PI * u) * cat.jump.arc;
-  cat.group.position.set(cat.pos.x, THREE.MathUtils.lerp(cat.jump.fromY, cat.jump.toY, u) + lift, cat.pos.z);
+  let y = THREE.MathUtils.lerp(cat.jump.fromY, cat.jump.toY, uY) + lift;
+  if (cat.jump.avoidDeskClip && y < desk.topY + 0.08) {
+    const halfX = desk.sizeX * 0.5 + 0.12;
+    const halfZ = desk.sizeZ * 0.5 + 0.12;
+    if (Math.abs(cat.pos.x - desk.pos.x) <= halfX && Math.abs(cat.pos.z - desk.pos.z) <= halfZ) {
+      y = desk.topY + 0.08;
+    }
+  }
+  cat.group.position.set(cat.pos.x, y, cat.pos.z);
   if (u >= 1) {
     cat.group.position.y = cat.jump.toY;
     const next = cat.jump.nextState;
@@ -548,24 +1573,638 @@ function updateJump(dt) {
   return false;
 }
 
-function moveCatToward(target, dt, speed, yLevel) {
-  const dx = target.x - cat.pos.x;
-  const dz = target.z - cat.pos.z;
+function buildCatObstacles(includePickups = false) {
+  const obstacles = [
+    {
+      kind: "box",
+      x: hamper.pos.x,
+      z: hamper.pos.z,
+      hx: hamper.outerHalfX + 0.02,
+      hz: hamper.outerHalfZ + 0.02,
+    },
+    { kind: "circle", x: trashCan.pos.x, z: trashCan.pos.z, r: trashCan.outerRadius + 0.12 },
+  ];
+  for (const leg of DESK_LEGS) {
+    obstacles.push({
+      kind: "box",
+      x: leg.x,
+      z: leg.z,
+      hx: leg.halfX + 0.03,
+      hz: leg.halfZ + 0.03,
+    });
+  }
+  if (includePickups) {
+    for (const p of pickups) {
+      if (p.mesh.position.y > 0.34) continue;
+      const cdx = p.mesh.position.x - cat.pos.x;
+      const cdz = p.mesh.position.z - cat.pos.z;
+      if (cdx * cdx + cdz * cdz < 0.22 * 0.22) continue;
+      if (p.type === "laundry") {
+        tempQ.set(p.body.quaternion.x, p.body.quaternion.y, p.body.quaternion.z, p.body.quaternion.w);
+        tempEuler.setFromQuaternion(tempQ, "YXZ");
+        obstacles.push({
+          kind: "obb",
+          x: p.mesh.position.x,
+          z: p.mesh.position.z,
+          hx: 0.21,
+          hz: 0.14,
+          yaw: tempEuler.y,
+        });
+      } else {
+        obstacles.push({
+          kind: "circle",
+          x: p.mesh.position.x,
+          z: p.mesh.position.z,
+          r: pickupRadius(p) + CAT_COLLISION.pickupRadiusBoost * 0.8,
+        });
+      }
+    }
+  }
+  return obstacles;
+}
+
+function isCatPointBlocked(x, z, obstacles, clearance = CAT_NAV.clearance) {
+  if (
+    x < ROOM.minX + CAT_NAV.margin ||
+    x > ROOM.maxX - CAT_NAV.margin ||
+    z < ROOM.minZ + CAT_NAV.margin ||
+    z > ROOM.maxZ - CAT_NAV.margin
+  ) {
+    return true;
+  }
+  for (const obs of obstacles) {
+    const dx = x - obs.x;
+    const dz = z - obs.z;
+    if (obs.kind === "box") {
+      if (Math.abs(dx) < obs.hx + clearance && Math.abs(dz) < obs.hz + clearance) return true;
+      continue;
+    }
+    if (obs.kind === "obb") {
+      const c = Math.cos(obs.yaw);
+      const s = Math.sin(obs.yaw);
+      const lx = c * dx + s * dz;
+      const lz = -s * dx + c * dz;
+      if (Math.abs(lx) < obs.hx + clearance && Math.abs(lz) < obs.hz + clearance) return true;
+      continue;
+    }
+    const rr = obs.r + clearance;
+    if (dx * dx + dz * dz < rr * rr) return true;
+  }
+  return false;
+}
+
+function hasClearTravelLine(a, b, obstacles) {
+  const dx = b.x - a.x;
+  const dz = b.z - a.z;
+  const dist = Math.hypot(dx, dz);
+  if (dist < 0.001) return true;
+  const samples = Math.max(2, Math.ceil(dist / 0.18));
+  for (let i = 1; i <= samples; i++) {
+    const t = i / samples;
+    const x = a.x + dx * t;
+    const z = a.z + dz * t;
+    if (isCatPointBlocked(x, z, obstacles)) return false;
+  }
+  return true;
+}
+
+function smoothCatPath(path, obstacles) {
+  if (path.length <= 2) return path;
+  const out = [path[0]];
+  let i = 0;
+  while (i < path.length - 1) {
+    let j = path.length - 1;
+    while (j > i + 1) {
+      if (hasClearTravelLine(path[i], path[j], obstacles)) break;
+      j--;
+    }
+    out.push(path[j]);
+    i = j;
+  }
+  return out;
+}
+
+function computeCatPath(start, goal, obstacles) {
+  if (hasClearTravelLine(start, goal, obstacles)) {
+    return [start.clone(), goal.clone()];
+  }
+
+  const step = CAT_NAV.step;
+  const minX = ROOM.minX + CAT_NAV.margin;
+  const maxX = ROOM.maxX - CAT_NAV.margin;
+  const minZ = ROOM.minZ + CAT_NAV.margin;
+  const maxZ = ROOM.maxZ - CAT_NAV.margin;
+  const w = Math.floor((maxX - minX) / step) + 1;
+  const h = Math.floor((maxZ - minZ) / step) + 1;
+  const size = w * h;
+
+  const toIdx = (ix, iz) => iz * w + ix;
+  const toCell = (v, out) => {
+    out.x = THREE.MathUtils.clamp(Math.round((v.x - minX) / step), 0, w - 1);
+    out.y = THREE.MathUtils.clamp(Math.round((v.z - minZ) / step), 0, h - 1);
+  };
+  const cellPos = (ix, iz, out) => {
+    out.set(minX + ix * step, 0, minZ + iz * step);
+  };
+  const nearestFree = (sx, sz) => {
+    if (!isCatPointBlocked(sx, sz, obstacles)) return new THREE.Vector2(sx, sz);
+    for (let r = 1; r <= 8; r++) {
+      for (let az = -r; az <= r; az++) {
+        for (let ax = -r; ax <= r; ax++) {
+          if (Math.abs(ax) !== r && Math.abs(az) !== r) continue;
+          const x = sx + ax * step;
+          const z = sz + az * step;
+          if (!isCatPointBlocked(x, z, obstacles)) return new THREE.Vector2(x, z);
+        }
+      }
+    }
+    return new THREE.Vector2(sx, sz);
+  };
+
+  const freeStart = nearestFree(start.x, start.z);
+  const freeGoal = nearestFree(goal.x, goal.z);
+  tempFrom.set(freeStart.x, 0, freeStart.y);
+  tempTo.set(freeGoal.x, 0, freeGoal.y);
+
+  const startCell = new THREE.Vector2();
+  const goalCell = new THREE.Vector2();
+  toCell(tempFrom, startCell);
+  toCell(tempTo, goalCell);
+
+  const g = new Float32Array(size);
+  const f = new Float32Array(size);
+  const came = new Int32Array(size);
+  const closed = new Uint8Array(size);
+  for (let i = 0; i < size; i++) {
+    g[i] = Infinity;
+    f[i] = Infinity;
+    came[i] = -1;
+  }
+
+  const open = [];
+  const startId = toIdx(startCell.x, startCell.y);
+  const goalId = toIdx(goalCell.x, goalCell.y);
+  g[startId] = 0;
+  f[startId] = tempFrom.distanceTo(tempTo);
+  open.push(startId);
+
+  const currentPos = new THREE.Vector3();
+  const neighborPos = new THREE.Vector3();
+  while (open.length) {
+    let bestI = 0;
+    let bestF = f[open[0]];
+    for (let i = 1; i < open.length; i++) {
+      const score = f[open[i]];
+      if (score < bestF) {
+        bestF = score;
+        bestI = i;
+      }
+    }
+    const current = open[bestI];
+    open[bestI] = open[open.length - 1];
+    open.pop();
+    if (current === goalId) break;
+    if (closed[current]) continue;
+    closed[current] = 1;
+
+    const cx = current % w;
+    const cz = Math.floor(current / w);
+    cellPos(cx, cz, currentPos);
+    for (let oz = -1; oz <= 1; oz++) {
+      for (let ox = -1; ox <= 1; ox++) {
+        if (ox === 0 && oz === 0) continue;
+        const nx = cx + ox;
+        const nz = cz + oz;
+        if (nx < 0 || nx >= w || nz < 0 || nz >= h) continue;
+        const nid = toIdx(nx, nz);
+        if (closed[nid]) continue;
+        cellPos(nx, nz, neighborPos);
+        if (isCatPointBlocked(neighborPos.x, neighborPos.z, obstacles)) continue;
+        if (ox !== 0 && oz !== 0) {
+          const c1x = cx + ox;
+          const c1z = cz;
+          const c2x = cx;
+          const c2z = cz + oz;
+          cellPos(c1x, c1z, tempFrom);
+          cellPos(c2x, c2z, tempTo);
+          if (isCatPointBlocked(tempFrom.x, tempFrom.z, obstacles) || isCatPointBlocked(tempTo.x, tempTo.z, obstacles)) {
+            continue;
+          }
+        }
+        const stepCost = ox !== 0 && oz !== 0 ? 1.4142 : 1.0;
+        const candidate = g[current] + stepCost;
+        if (candidate >= g[nid]) continue;
+        came[nid] = current;
+        g[nid] = candidate;
+        f[nid] = candidate + neighborPos.distanceTo(tempTo);
+        open.push(nid);
+      }
+    }
+  }
+
+  if (came[goalId] === -1 && goalId !== startId) {
+    return [start.clone(), goal.clone()];
+  }
+
+  const rev = [];
+  let cur = goalId;
+  while (cur !== -1) {
+    const ix = cur % w;
+    const iz = Math.floor(cur / w);
+    cellPos(ix, iz, tempFrom);
+    rev.push(tempFrom.clone());
+    cur = came[cur];
+  }
+  rev.reverse();
+  if (!rev.length) return [start.clone(), goal.clone()];
+  rev[0].copy(start);
+  rev[rev.length - 1].copy(goal);
+  return smoothCatPath(rev, obstacles);
+}
+
+function isPathTraversable(path, obstacles) {
+  if (!path || path.length < 2) return false;
+  for (let i = 1; i < path.length; i++) {
+    if (!hasClearTravelLine(path[i - 1], path[i], obstacles)) return false;
+  }
+  return true;
+}
+
+function canReachGroundTarget(start, goal, obstacles) {
+  if (isCatPointBlocked(goal.x, goal.z, obstacles, CAT_NAV.clearance * 0.9)) return false;
+  if (start.distanceToSquared(goal) < 0.1 * 0.1) return true;
+  const path = computeCatPath(start, goal, obstacles);
+  return isPathTraversable(path, obstacles);
+}
+
+function ensureCatPath(target, force = false) {
+  if (cat.group.position.y > 0.02) return;
+  const goalDelta = cat.nav.goal.distanceToSquared(target);
+  if (!force && cat.nav.path.length > 1 && goalDelta < 0.05 * 0.05) return;
+  const obstacles = buildCatObstacles(true);
+  cat.nav.path = computeCatPath(cat.pos, target, obstacles);
+  cat.nav.index = cat.nav.path.length > 1 ? 1 : 0;
+  cat.nav.goal.copy(target);
+  cat.nav.repathAt = clockTime + CAT_NAV.repathInterval;
+}
+
+function nearestDeskJumpAnchor(from) {
+  const staticObstacles = buildCatObstacles(true);
+  let best = null;
+  let bestD = Infinity;
+  for (let i = 0; i < DESK_JUMP_ANCHORS.length; i++) {
+    const a = DESK_JUMP_ANCHORS[i];
+    if (isCatPointBlocked(a.x, a.z, staticObstacles, CAT_NAV.clearance * 0.85)) continue;
+    const d = from.distanceToSquared(a);
+    if (d < bestD) {
+      bestD = d;
+      best = a;
+    }
+  }
+  return best || DESK_JUMP_ANCHORS[0];
+}
+
+function rotateCatToward(yaw, dt) {
+  const delta = Math.atan2(Math.sin(yaw - cat.group.rotation.y), Math.cos(yaw - cat.group.rotation.y));
+  const maxStep = CAT_NAV.maxTurnRate * dt;
+  const clamped = THREE.MathUtils.clamp(delta, -maxStep, maxStep);
+  cat.group.rotation.y += clamped;
+  return delta;
+}
+
+function moveCatToward(target, dt, speed, yLevel, opts = {}) {
+  const direct = !!opts.direct;
+  const ignoreDynamic = !!opts.ignoreDynamic;
+  let chase = target;
+  if (yLevel <= 0.02) {
+    tempTo.set(target.x, 0, target.z);
+    if (!direct) {
+      const goalChanged = cat.nav.goal.distanceToSquared(tempTo) > 0.1 * 0.1;
+      const needsPath = cat.nav.path.length <= 1 && clockTime >= cat.nav.repathAt;
+      const stalePath = clockTime >= cat.nav.repathAt;
+      const force = goalChanged || needsPath || stalePath;
+      ensureCatPath(tempTo, force);
+      if (cat.nav.path.length > 1) {
+        let index = THREE.MathUtils.clamp(cat.nav.index, 1, cat.nav.path.length - 1);
+        while (index < cat.nav.path.length - 1 && cat.pos.distanceToSquared(cat.nav.path[index]) < 0.15 * 0.15) {
+          index++;
+        }
+        cat.nav.index = index;
+        chase = cat.nav.path[index];
+        const dynamicObstacles = buildCatObstacles(true);
+        if (!hasClearTravelLine(cat.pos, chase, dynamicObstacles)) {
+          ensureCatPath(tempTo, true);
+          if (cat.nav.path.length > 1) {
+            const nIndex = THREE.MathUtils.clamp(cat.nav.index, 1, cat.nav.path.length - 1);
+            chase = cat.nav.path[nIndex];
+          }
+        }
+      }
+    }
+  }
+
+  const dx = chase.x - cat.pos.x;
+  const dz = chase.z - cat.pos.z;
   const d = Math.hypot(dx, dz);
   if (d < 0.06) {
     cat.group.position.set(cat.pos.x, yLevel, cat.pos.z);
-    return true;
+    return cat.pos.distanceTo(target) < 0.14;
   }
   const nx = dx / d;
   const nz = dz / d;
-  const step = Math.min(d, speed * dt);
+  const yaw = Math.atan2(nx, nz);
+  const dy = rotateCatToward(yaw, dt);
+  let step = Math.min(d, speed * dt);
+  if (yLevel <= 0.02 && Math.abs(dy) > CAT_NAV.turnSlowThreshold) {
+    const t = THREE.MathUtils.clamp((Math.abs(dy) - CAT_NAV.turnSlowThreshold) / 0.9, 0, 1);
+    step *= THREE.MathUtils.lerp(1.0, 0.2, t);
+  }
+  if (yLevel <= 0.02 && Math.abs(dy) > CAT_NAV.turnStopThreshold) {
+    cat.group.position.set(cat.pos.x, yLevel, cat.pos.z);
+    cat.nav.lastSpeed = 0;
+    cat.nav.stuckT += dt * 0.65;
+    if (cat.nav.stuckT > 0.42) {
+      tryStartGroundHop(target);
+    }
+    return false;
+  }
+
+  if (yLevel <= 0.02) {
+    const staticObstacles = buildCatObstacles(false);
+    const dynamicObstacles = ignoreDynamic ? staticObstacles : buildCatObstacles(true);
+    const nextX = cat.pos.x + nx * step;
+    const nextZ = cat.pos.z + nz * step;
+    const blockedByStatic = isCatPointBlocked(nextX, nextZ, staticObstacles, CAT_NAV.clearance * 0.9);
+    const shouldUseDynamic = !ignoreDynamic;
+    const dynamicClearance = CAT_NAV.clearance + CAT_COLLISION.pickupClearance;
+    const blockedByDynamic =
+      shouldUseDynamic && !blockedByStatic && isCatPointBlocked(nextX, nextZ, dynamicObstacles, dynamicClearance);
+
+    if (blockedByDynamic) {
+      const leftX = -nz;
+      const leftZ = nx;
+      const tryDirs = [
+        [nx + leftX * 0.65, nz + leftZ * 0.65],
+        [nx - leftX * 0.65, nz - leftZ * 0.65],
+      ];
+      let slid = false;
+      for (const [sx, sz] of tryDirs) {
+        const sn = Math.hypot(sx, sz) || 1;
+        const tx = cat.pos.x + (sx / sn) * step;
+        const tz = cat.pos.z + (sz / sn) * step;
+        if (isCatPointBlocked(tx, tz, staticObstacles, CAT_NAV.clearance * 0.9)) continue;
+        if (isCatPointBlocked(tx, tz, dynamicObstacles, dynamicClearance * 0.9)) continue;
+        cat.pos.x = tx;
+        cat.pos.z = tz;
+        cat.group.position.set(cat.pos.x, yLevel, cat.pos.z);
+        const slideYaw = Math.atan2(sx / sn, sz / sn);
+        rotateCatToward(slideYaw, dt);
+        cat.nav.lastSpeed = step / Math.max(dt, 1e-5);
+        cat.nav.stuckT = Math.max(0, cat.nav.stuckT - dt * 0.9);
+        slid = true;
+        break;
+      }
+      if (slid) return cat.pos.distanceToSquared(target) < 0.14 * 0.14;
+      cat.nav.stuckT += dt;
+      if (cat.nav.stuckT > 0.28) {
+        nudgeBlockingPickupAwayFromCat();
+      }
+      if (cat.nav.stuckT > 0.34 && tryStartGroundHop(target)) {
+        cat.status = "Hopping over clutter";
+        return false;
+      }
+      if (cat.nav.stuckT > 0.42 && clockTime >= cat.nav.repathAt) {
+        ensureCatPath(target, true);
+        cat.nav.repathAt = clockTime + 0.65;
+        cat.nav.stuckT = Math.max(0.2, cat.nav.stuckT * 0.5);
+      }
+      return false;
+    }
+
+    if (blockedByStatic) {
+      cat.nav.stuckT += dt;
+      if (cat.nav.stuckT > 0.25 && clockTime >= cat.nav.repathAt) {
+        ensureCatPath(target, true);
+        cat.nav.repathAt = clockTime + 0.8;
+        cat.nav.stuckT = 0;
+      }
+      return false;
+    }
+  }
+
+  tempFrom.copy(cat.pos);
   cat.pos.x += nx * step;
   cat.pos.z += nz * step;
   cat.group.position.set(cat.pos.x, yLevel, cat.pos.z);
-  const yaw = Math.atan2(nx, nz);
-  const dy = Math.atan2(Math.sin(yaw - cat.group.rotation.y), Math.cos(yaw - cat.group.rotation.y));
-  cat.group.rotation.y += dy * Math.min(1, dt * 9.0);
-  return d < 0.14;
+
+  if (yLevel <= 0.02) {
+    const moved = cat.pos.distanceTo(tempFrom);
+    if (moved < CAT_NAV.stuckSpeed * dt && d > 0.18) {
+      cat.nav.stuckT += dt;
+      if (cat.nav.stuckT > 0.45 && tryStartGroundHop(target)) {
+        cat.status = "Hopping over clutter";
+        return false;
+      }
+      if (cat.nav.stuckT > 0.5) {
+        ensureCatPath(target, true);
+        cat.nav.stuckT = 0;
+      }
+    } else {
+      cat.nav.stuckT = Math.max(0, cat.nav.stuckT - dt * 0.8);
+    }
+    cat.nav.lastPos.copy(cat.pos);
+    cat.nav.lastSpeed = moved / Math.max(dt, 1e-5);
+  }
+
+  return cat.pos.distanceToSquared(target) < 0.14 * 0.14;
+}
+
+function findSafeGroundPoint(preferred) {
+  const obstacles = buildCatObstacles(true);
+  const clearance = CAT_NAV.clearance * 0.9;
+  if (!isCatPointBlocked(preferred.x, preferred.z, obstacles, clearance)) {
+    return preferred.clone();
+  }
+
+  let best = null;
+  let bestD = Infinity;
+  for (let r = 0.36; r <= 2.4; r += 0.24) {
+    const steps = Math.max(8, Math.floor(r * 16));
+    for (let i = 0; i < steps; i++) {
+      const t = (i / steps) * Math.PI * 2;
+      const x = preferred.x + Math.cos(t) * r;
+      const z = preferred.z + Math.sin(t) * r;
+      if (isCatPointBlocked(x, z, obstacles, clearance)) continue;
+      const d = (x - preferred.x) * (x - preferred.x) + (z - preferred.z) * (z - preferred.z);
+      if (d < bestD) {
+        bestD = d;
+        if (!best) best = new THREE.Vector3();
+        best.set(x, 0, z);
+      }
+    }
+    if (best) break;
+  }
+  return best || preferred.clone();
+}
+
+function sampleSwipePose(t) {
+  const w = SWIPE_TIMING.windup;
+  const s = SWIPE_TIMING.strike;
+  const r = Math.max(0.01, SWIPE_TIMING.recover);
+  const ws = w;
+  const ss = w + s;
+  const rs = w + s + r;
+
+  const pose = {
+    lift: 0,
+    reach: 0,
+    lean: 0,
+    hit: false,
+    done: false,
+  };
+
+  if (t < ws) {
+    const u = THREE.MathUtils.smootherstep(t / Math.max(ws, 1e-5), 0, 1);
+    pose.lift = u;
+    pose.reach = -0.24 * u;
+    pose.lean = 0.18 * u;
+    return pose;
+  }
+
+  if (t < ss) {
+    const u = THREE.MathUtils.smootherstep((t - ws) / Math.max(s, 1e-5), 0, 1);
+    pose.lift = 1.0 - u * 0.58;
+    pose.reach = -0.24 + u * 1.22;
+    pose.lean = 0.18 - u * 0.34;
+    pose.hit = u >= 0.55;
+    return pose;
+  }
+
+  if (t < rs) {
+    const u = THREE.MathUtils.smootherstep((t - ss) / Math.max(r, 1e-5), 0, 1);
+    pose.lift = 0.42 * (1 - u);
+    pose.reach = 0.98 - u * 0.76;
+    pose.lean = -0.16 * (1 - u);
+    return pose;
+  }
+
+  pose.done = true;
+  return pose;
+}
+
+function nudgeBlockingPickupAwayFromCat() {
+  let best = null;
+  let bestD2 = Infinity;
+  for (const p of pickups) {
+    if (!p.body) continue;
+    if (dragState && dragState.pickup === p) continue;
+    if (p.body.position.y > 0.34) continue;
+    const dx = p.body.position.x - cat.pos.x;
+    const dz = p.body.position.z - cat.pos.z;
+    const d2 = dx * dx + dz * dz;
+    if (d2 < bestD2 && d2 < 0.54 * 0.54) {
+      best = p;
+      bestD2 = d2;
+    }
+  }
+  if (!best) return false;
+
+  let dx = best.body.position.x - cat.pos.x;
+  let dz = best.body.position.z - cat.pos.z;
+  let d = Math.hypot(dx, dz);
+  if (d < 1e-4) {
+    dx = Math.sin(cat.group.rotation.y);
+    dz = Math.cos(cat.group.rotation.y);
+    d = 1;
+  }
+  const nx = dx / d;
+  const nz = dz / d;
+  const minDist = 0.28 + pickupRadius(best) * 0.9;
+  best.body.position.x = cat.pos.x + nx * (minDist + 0.08);
+  best.body.position.z = cat.pos.z + nz * (minDist + 0.08);
+  best.body.velocity.x += nx * (best.type === "trash" ? 1.25 : 0.95);
+  best.body.velocity.z += nz * (best.type === "trash" ? 1.25 : 0.95);
+  best.body.velocity.y = Math.max(best.body.velocity.y, best.type === "trash" ? 0.8 : 0.62);
+  best.body.wakeUp();
+  best.inMotion = true;
+  if (best.motion === "drag") best.motion = "bounce";
+  return true;
+}
+
+function tryStartGroundHop(target) {
+  if (cat.jump || cat.onTable) return false;
+  if (clockTime < cat.nextHopAt) return false;
+  if (cat.group.position.y > 0.05) return false;
+
+  const staticObstacles = buildCatObstacles(false);
+  const dynamicObstacles = buildCatObstacles(true);
+  const baseDir = new THREE.Vector2(target.x - cat.pos.x, target.z - cat.pos.z);
+  if (baseDir.lengthSq() < 1e-4) {
+    baseDir.set(Math.sin(cat.group.rotation.y), Math.cos(cat.group.rotation.y));
+  }
+  baseDir.normalize();
+
+  const distances = [0.62, 0.78, 0.92];
+  const yawOffsets = [0, 0.42, -0.42, 0.78, -0.78];
+  for (const dist of distances) {
+    for (const yawOff of yawOffsets) {
+      const c = Math.cos(yawOff);
+      const s = Math.sin(yawOff);
+      const dx = baseDir.x * c - baseDir.y * s;
+      const dz = baseDir.x * s + baseDir.y * c;
+      const landX = cat.pos.x + dx * dist;
+      const landZ = cat.pos.z + dz * dist;
+
+      if (isCatPointBlocked(landX, landZ, staticObstacles, CAT_NAV.clearance * 0.9)) continue;
+      if (isCatPointBlocked(landX, landZ, dynamicObstacles, CAT_NAV.clearance * 0.55)) continue;
+      tempFrom.set(cat.pos.x, 0, cat.pos.z);
+      tempTo.set(landX, 0, landZ);
+      if (!hasClearTravelLine(tempFrom, tempTo, staticObstacles)) continue;
+
+      cat.nextHopAt = clockTime + CAT_NAV.hopCooldown;
+      cat.nav.path.length = 0;
+      cat.nav.index = 0;
+      cat.nav.repathAt = clockTime + 0.2;
+      cat.nav.stuckT = 0;
+      startJump(new THREE.Vector3(landX, 0, landZ), 0, CAT_NAV.hopDur, CAT_NAV.hopArc, cat.state, {
+        easePos: true,
+        easeY: true,
+        avoidDeskClip: false,
+      });
+      return true;
+    }
+  }
+  return false;
+}
+
+function getCurrentGroundGoal() {
+  if (cat.state === "patrol") return cat.waypoints[cat.wpIndex];
+  if (cat.state === "toDesk") return cat.jumpAnchor || nearestDeskJumpAnchor(cat.pos);
+  if (cat.state === "toCatnip" && game.catnip) return game.catnip.pos;
+  if (cat.state === "toCup") return new THREE.Vector3(desk.cup.x - 0.36, 0, desk.cup.z + 0.02);
+  return null;
+}
+
+function keepCatAwayFromCup(minDist) {
+  if (cup.broken || cup.falling) return;
+  const cx = cup.group.position.x;
+  const cz = cup.group.position.z;
+  let dx = cat.pos.x - cx;
+  let dz = cat.pos.z - cz;
+  let d = Math.hypot(dx, dz);
+  if (d >= minDist) return;
+  if (d < 1e-4) {
+    const yaw = cat.group.rotation.y;
+    dx = Math.sin(yaw);
+    dz = Math.cos(yaw);
+    d = 1;
+  }
+  const nx = dx / d;
+  const nz = dz / d;
+  cat.pos.x = cx + nx * minDist;
+  cat.pos.z = cz + nz * minDist;
+  cat.group.position.x = cat.pos.x;
+  cat.group.position.z = cat.pos.z;
 }
 
 function knockCup() {
@@ -600,12 +2239,54 @@ function spawnCupShatter(x, z) {
   }
 }
 
+function resolveCupDeskCollision() {
+  if (cup.broken) return;
+  const p = cup.group.position;
+  const v = cup.vel;
+  const r = CUP_COLLISION.radius;
+
+  const topHalfX = desk.sizeX * 0.5 - 0.06;
+  const topHalfZ = desk.sizeZ * 0.5 - 0.06;
+  const inTopX = Math.abs(p.x - desk.pos.x) <= topHalfX;
+  const inTopZ = Math.abs(p.z - desk.pos.z) <= topHalfZ;
+  if (inTopX && inTopZ && p.y < CUP_COLLISION.topY && v.y < 0) {
+    p.y = CUP_COLLISION.topY;
+    v.y = Math.max(0, -v.y * 0.14);
+    v.x *= 0.92;
+    v.z *= 0.92;
+  }
+
+  for (const leg of DESK_LEGS) {
+    if (p.y > leg.topY + 0.16 || p.y < 0.02) continue;
+    const dx = p.x - leg.x;
+    const dz = p.z - leg.z;
+    const limX = leg.halfX + r;
+    const limZ = leg.halfZ + r;
+    if (Math.abs(dx) >= limX || Math.abs(dz) >= limZ) continue;
+    const penX = limX - Math.abs(dx);
+    const penZ = limZ - Math.abs(dz);
+    if (penX < penZ) {
+      const sx = Math.sign(dx || 1);
+      p.x = leg.x + sx * limX;
+      v.x = Math.abs(v.x) * sx * 0.55;
+      v.z *= 0.84;
+    } else {
+      const sz = Math.sign(dz || 1);
+      p.z = leg.z + sz * limZ;
+      v.z = Math.abs(v.z) * sz * 0.55;
+      v.x *= 0.84;
+    }
+    v.y = Math.max(v.y, 0.12);
+  }
+}
+
 function updateCup(dt) {
   if (!cup.falling || cup.broken) return;
   cup.vel.y -= 9.4 * dt;
   cup.group.position.addScaledVector(cup.vel, dt);
   cup.group.rotation.x += dt * 6.2;
   cup.group.rotation.z += dt * 5.2;
+  resolveCupDeskCollision();
 
   if (cup.group.position.y <= 0.06) {
     cup.group.position.y = 0.06;
@@ -644,6 +2325,37 @@ function updateShatter(dt) {
 function updateCat(dt) {
   if (game.state !== "playing") return;
 
+  if (cat.state !== cat.lastState) {
+    cat.lastState = cat.state;
+    cat.stateT = 0;
+  } else {
+    cat.stateT += dt;
+  }
+
+  if (!cat.jump && cat.group.position.y <= 0.03 && cat.nav.stuckT > CAT_NAV.stuckReset) {
+    cat.state = "patrol";
+    cat.jumpAnchor = null;
+    cat.jumpApproachLock = false;
+    cat.nav.path.length = 0;
+    cat.nav.index = 0;
+    cat.nav.repathAt = 0;
+    cat.nav.stuckT = 0;
+    cat.wpIndex = (cat.wpIndex + 1) % cat.waypoints.length;
+  }
+
+  if (!cat.jump && cat.group.position.y <= 0.03 && cat.nav.stuckT > 0.7) {
+    const rescueGoal = getCurrentGroundGoal();
+    if (rescueGoal && tryStartGroundHop(rescueGoal)) {
+      cat.status = "Hopping over clutter";
+      animateCatPose(dt, false);
+      return;
+    }
+    if (cat.nav.stuckT > 1.1 && nudgeBlockingPickupAwayFromCat()) {
+      cat.nav.repathAt = 0;
+      cat.nav.stuckT = Math.max(0.25, cat.nav.stuckT * 0.55);
+    }
+  }
+
   if (game.catnip && clockTime >= game.catnip.expiresAt) {
     scene.remove(game.catnip.mesh);
     game.catnip = null;
@@ -663,9 +2375,16 @@ function updateCat(dt) {
   if (game.catnip) {
     if (cat.onTable) {
       cat.onTable = false;
-      startJump(desk.approach, 0, 0.55, 0.28, "toCatnip");
+      const downPoint = findSafeGroundPoint(desk.approach);
+      startJump(downPoint, 0, 0.62, 0.34, "toCatnip", {
+        easePos: true,
+        easeY: true,
+        avoidDeskClip: true,
+      });
       return;
     }
+    cat.jumpAnchor = null;
+    cat.jumpApproachLock = false;
     cat.state = "toCatnip";
     const atCatnip = moveCatToward(game.catnip.pos, dt, 1.0, 0);
     cat.status = atCatnip ? "Distracted" : "Going to catnip";
@@ -674,6 +2393,8 @@ function updateCat(dt) {
   }
 
   if ((clockTime >= game.nextKnockAt) && !cup.broken && !cup.falling && cat.state === "patrol") {
+    cat.jumpAnchor = null;
+    cat.jumpApproachLock = false;
     cat.state = "toDesk";
   }
 
@@ -687,12 +2408,55 @@ function updateCat(dt) {
   }
 
   if (cat.state === "toDesk") {
-    const reachedDesk = moveCatToward(desk.approach, dt, 1.0, 0);
-    cat.status = "Approaching desk";
+    if (cat.stateT > 8.0) {
+      cat.jumpAnchor = nearestDeskJumpAnchor(cat.pos);
+      cat.jumpApproachLock = false;
+      cat.nav.path.length = 0;
+      cat.nav.index = 0;
+      cat.nav.repathAt = 0;
+      cat.stateT = 0;
+    }
+    if (!cat.jumpAnchor) cat.jumpAnchor = nearestDeskJumpAnchor(cat.pos);
+    if (!cat.jumpApproachLock && cat.pos.distanceToSquared(cat.jumpAnchor) < 0.62 * 0.62) {
+      cat.jumpApproachLock = true;
+    }
+    const reachedDesk = moveCatToward(cat.jumpAnchor, dt, 0.92, 0, {
+      direct: cat.jumpApproachLock,
+      ignoreDynamic: cat.jumpApproachLock,
+    });
+    cat.status = "Approaching jump point";
     animateCatPose(dt, true);
     if (reachedDesk) {
+      cat.state = "prepareJump";
+      cat.phaseT = 0;
+      cat.nav.path.length = 0;
+      cat.nav.index = 0;
+    }
+    return;
+  }
+
+  if (cat.state === "prepareJump") {
+    cat.phaseT += dt;
+    if (cat.jumpAnchor) {
+      cat.pos.x = cat.jumpAnchor.x;
+      cat.pos.z = cat.jumpAnchor.z;
+      cat.group.position.set(cat.pos.x, 0, cat.pos.z);
+    }
+    const dx = desk.perch.x - cat.pos.x;
+    const dz = desk.perch.z - cat.pos.z;
+    const yaw = Math.atan2(dx, dz);
+    const dy = Math.atan2(Math.sin(yaw - cat.group.rotation.y), Math.cos(yaw - cat.group.rotation.y));
+    cat.group.rotation.y += dy * Math.min(1, dt * 5.5);
+    cat.status = "Preparing jump";
+    animateCatPose(dt, false);
+    if (cat.phaseT >= 0.46) {
       cat.onTable = true;
-      startJump(desk.perch, desk.topY + 0.02, 0.62, 0.34, "toCup");
+      cat.jumpApproachLock = false;
+      startJump(desk.perch, desk.topY + 0.02, 0.72, 0.52, "toCup", {
+        easePos: true,
+        easeY: true,
+        avoidDeskClip: true,
+      });
     }
     return;
   }
@@ -700,11 +2464,14 @@ function updateCat(dt) {
   if (cat.state === "toCup") {
     const target = new THREE.Vector3(desk.cup.x - 0.36, 0, desk.cup.z + 0.02);
     const reachedCup = moveCatToward(target, dt, 0.65, desk.topY + 0.02);
+    keepCatAwayFromCup(CAT_COLLISION.cupBodyClearance);
+    const closeEnough = cat.pos.distanceToSquared(target) < 0.18 * 0.18;
     cat.status = "Stalking cup";
     animateCatPose(dt, true);
-    if (reachedCup) {
+    if (reachedCup || closeEnough) {
       cat.state = "swipe";
       cat.phaseT = 0;
+      cat.swipeHitDone = false;
     }
     return;
   }
@@ -713,13 +2480,29 @@ function updateCat(dt) {
     cat.phaseT += dt;
     cat.status = "Swiping";
     cat.group.position.y = desk.topY + 0.02;
-    cat.paw.position.y = 0.28 + Math.min(0.19, cat.phaseT * 0.8);
-    if (cat.phaseT > 0.52) {
+    keepCatAwayFromCup(CAT_COLLISION.cupBodyClearance);
+    const swipePose = sampleSwipePose(cat.phaseT);
+    cat.paw.position.y = 0.25 + swipePose.lift * 0.24;
+    cat.paw.position.x = 0.21 + swipePose.reach * 0.32;
+    if (swipePose.hit && !cat.swipeHitDone) {
       knockCup();
+      cat.swipeHitDone = true;
+    }
+    if (swipePose.done) {
       cat.paw.position.y = 0.25;
+      cat.paw.position.x = 0.21;
       cat.state = "jumpDown";
       cat.onTable = false;
-      startJump(desk.approach, 0, 0.56, 0.2, "patrol");
+      cat.jumpAnchor = null;
+      cat.jumpApproachLock = false;
+      cat.nav.path.length = 0;
+      cat.nav.index = 0;
+      const downPoint = findSafeGroundPoint(desk.approach);
+      startJump(downPoint, 0, 0.64, 0.34, "patrol", {
+        easePos: true,
+        easeY: true,
+        avoidDeskClip: true,
+      });
       game.nextKnockAt = clockTime + 12;
     }
     animateCatPose(dt, false);
@@ -734,11 +2517,114 @@ function updateCat(dt) {
 }
 
 function animateCatPose(dt, moving) {
-  if (moving) {
+  const movingTarget = moving || cat.nav.lastSpeed > 0.24 ? 1 : 0;
+  cat.motionBlend = THREE.MathUtils.damp(cat.motionBlend, movingTarget, 8, dt);
+  const movingAmt = cat.motionBlend;
+
+  if (movingAmt > 0.02) {
     cat.walkT += dt * 8.0;
   } else {
     cat.walkT *= Math.max(0, 1 - dt * 8.0);
   }
+
+  if (cat.usingRealisticModel) {
+    const rig = cat.rig;
+    if (!rig) return;
+
+    const gaitL = Math.sin(cat.walkT) * movingAmt;
+    const gaitR = Math.sin(cat.walkT + Math.PI) * movingAmt;
+    const breathe = Math.sin(clockTime * 2.2) * 0.03;
+    const isSwipe = cat.state === "swipe";
+    const swipePose = isSwipe ? sampleSwipePose(cat.phaseT) : null;
+    const swipeLift = swipePose ? swipePose.lift : 0;
+    const swipeReach = swipePose ? swipePose.reach : 0;
+    const swipeLean = swipePose ? swipePose.lean : 0;
+    const swipeForward = Math.max(0, swipeReach);
+    const swipeBack = Math.max(0, -swipeReach);
+    const isJumping = !!cat.jump;
+    const jumpU = isJumping ? THREE.MathUtils.clamp(cat.jump.t / cat.jump.dur, 0, 1) : 0;
+    const jumpArc = isJumping ? Math.sin(Math.PI * jumpU) : 0;
+    const jumpPush = isJumping ? Math.sin(Math.PI * THREE.MathUtils.clamp(jumpU * 1.15, 0, 1)) : 0;
+    const jumpReach = isJumping ? Math.sin(Math.PI * THREE.MathUtils.clamp(jumpU * 0.9, 0, 1)) : 0;
+    const crouchBase = cat.state === "prepareJump" ? 0.34 : cat.state === "toCup" ? 0.2 : 0;
+    const crouch = crouchBase + (isJumping ? (1 - jumpU) * 0.26 : 0);
+    const baseAlpha = THREE.MathUtils.clamp(dt * 12, 0.08, 0.55);
+
+    cat.modelAnchor.position.y = Math.max(0, gaitL) * 0.02 + jumpArc * 0.015;
+    cat.modelAnchor.rotation.z = gaitL * 0.028;
+    const targetPitch = -swipeLean * 0.42 - jumpArc * 0.12;
+    cat.modelAnchor.rotation.x = THREE.MathUtils.damp(cat.modelAnchor.rotation.x, targetPitch, 10, dt);
+
+    setBonePose(rig, rig.spine1, -0.11 - crouch * 0.09 + breathe * 0.2 + swipeLean * 0.11 - jumpArc * 0.1, 0, 0, baseAlpha);
+    setBonePose(rig, rig.spine2, -0.05 - crouch * 0.05 + breathe * 0.15 + swipeLean * 0.08 - jumpArc * 0.06, 0, 0, baseAlpha);
+    setBonePose(rig, rig.spine3, -0.03 + breathe * 0.15 + swipeLean * 0.04, 0, 0, baseAlpha);
+    setBonePose(rig, rig.neckBase, -0.03 + crouch * 0.06 - swipeLean * 0.06 + jumpArc * 0.02, 0, 0, baseAlpha);
+    setBonePose(rig, rig.neck1, 0.03 + crouch * 0.05 - swipeLean * 0.12 + jumpArc * 0.05, 0, 0, baseAlpha);
+    setBonePose(rig, rig.head, 0.05 + crouch * 0.08 - swipeLean * 0.2 + jumpArc * 0.09, 0, 0, baseAlpha);
+
+    for (let i = 0; i < rig.tail.length; i++) {
+      const tailBone = rig.tail[i];
+      const wave = Math.sin(clockTime * 3.2 + i * 0.6) * 0.08;
+      const sway = moving ? Math.sin(cat.walkT + i * 0.5) * 0.03 : 0;
+      const jumpSway = isJumping ? Math.sin(clockTime * 7 + i * 0.3) * 0.04 : 0;
+      setBonePose(rig, tailBone, 0.02 + wave * 0.35, sway, wave * 0.2, baseAlpha);
+      if (isJumping) setBonePose(rig, tailBone, 0.18 + jumpSway, sway, wave * 0.2, baseAlpha);
+    }
+
+    const foreStrideL = gaitL;
+    const foreStrideR = gaitR;
+    const hindStrideL = gaitR;
+    const hindStrideR = gaitL;
+
+    setBonePose(rig, rig.frontL.shoulder, foreStrideL * 0.28 - 0.1 - jumpArc * 0.2 + jumpReach * 0.08, 0, 0, baseAlpha);
+    setBonePose(rig, rig.frontL.elbow, -foreStrideL * 0.22 + 0.18 + jumpArc * 0.26 - jumpReach * 0.2, 0, 0, baseAlpha);
+    setBonePose(rig, rig.frontL.wrist, foreStrideL * 0.15 - 0.06 + jumpArc * 0.14 - jumpReach * 0.12, 0, 0, baseAlpha);
+
+    setBonePose(
+      rig,
+      rig.frontR.shoulder,
+      foreStrideR * 0.28 - 0.1 - swipeLift * 0.5 - jumpArc * 0.18 + jumpReach * 0.07,
+      0,
+      -swipeForward * 0.95 + swipeBack * 0.16,
+      baseAlpha
+    );
+    setBonePose(
+      rig,
+      rig.frontR.elbow,
+      -foreStrideR * 0.2 + 0.2 + swipeLift * 0.62 - swipeForward * 0.24 + jumpArc * 0.22 - jumpReach * 0.17,
+      0,
+      -swipeForward * 0.35,
+      baseAlpha
+    );
+    setBonePose(
+      rig,
+      rig.frontR.wrist,
+      foreStrideR * 0.14 - 0.04 + swipeLift * 0.22 - swipeForward * 0.36 + jumpArc * 0.11 - jumpReach * 0.1,
+      0,
+      -swipeForward * 0.66,
+      baseAlpha
+    );
+    setBonePose(rig, rig.frontR.paw, 0, 0, -swipeForward * 0.35, baseAlpha);
+
+    setBonePose(rig, rig.backL.hip, hindStrideL * 0.24 + 0.08 + jumpPush * 0.24, 0, 0, baseAlpha);
+    setBonePose(rig, rig.backL.knee, -hindStrideL * 0.24 - 0.1 - jumpPush * 0.42, 0, 0, baseAlpha);
+    setBonePose(rig, rig.backL.ankle, hindStrideL * 0.13 + 0.04 + jumpPush * 0.26, 0, 0, baseAlpha);
+
+    setBonePose(rig, rig.backR.hip, hindStrideR * 0.24 + 0.08 + jumpPush * 0.24, 0, 0, baseAlpha);
+    setBonePose(rig, rig.backR.knee, -hindStrideR * 0.24 - 0.1 - jumpPush * 0.42, 0, 0, baseAlpha);
+    setBonePose(rig, rig.backR.ankle, hindStrideR * 0.13 + 0.04 + jumpPush * 0.26, 0, 0, baseAlpha);
+
+    if (movingAmt < 0.18 && !isSwipe && !isJumping) {
+      const idleBlend = 0.18 + breathe * 0.08;
+      setBonePose(rig, rig.frontL.elbow, 0.2 + idleBlend, 0, 0, baseAlpha);
+      setBonePose(rig, rig.frontR.elbow, 0.2 + idleBlend, 0, 0, baseAlpha);
+      setBonePose(rig, rig.backL.knee, -0.15 - idleBlend * 0.6, 0, 0, baseAlpha);
+      setBonePose(rig, rig.backR.knee, -0.15 - idleBlend * 0.6, 0, 0, baseAlpha);
+    }
+
+    return;
+  }
+
   const swing = Math.sin(cat.walkT) * (moving ? 0.06 : 0);
   cat.legs[0].position.z = 0.31 + swing;
   cat.legs[1].position.z = 0.31 - swing;
@@ -767,7 +2653,7 @@ function updateUI() {
   else cupStatEl.textContent = "On desk";
 
   if (game.placeCatnipMode) {
-    catnipStatEl.textContent = "Click floor to place";
+    catnipStatEl.textContent = clockTime < game.invalidCatnipUntil ? "Invalid spot" : "Click floor to place";
   } else if (game.catnip) {
     catnipStatEl.textContent = `Active (${Math.max(0, Math.ceil(game.catnip.expiresAt - clockTime))}s)`;
   } else if (clockTime < game.catnipCooldownUntil) {
@@ -796,6 +2682,7 @@ function animate() {
   controls.target.y = THREE.MathUtils.clamp(controls.target.y, TARGET_BOUNDS.minY, TARGET_BOUNDS.maxY);
 
   if (game.state === "playing") {
+    physics.world.step(physics.fixedStep, dt, 10);
     updatePickups(dt);
     updateCat(dt);
     updateCup(dt);
