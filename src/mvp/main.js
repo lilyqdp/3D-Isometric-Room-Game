@@ -86,11 +86,12 @@ const hamper = {
 
 const trashCan = {
   pos: new THREE.Vector3(2.6, 0, 2.4),
-  outerRadius: 0.42,
-  radius: 0.4,
-  openingRadius: 0.33,
-  rimY: 0.7,
-  sinkY: 0.16,
+  outerRadius: 0.52,
+  radius: 0.5,
+  openingRadius: 0.42,
+  rimY: 0.62,
+  sinkY: 0.14,
+  modelWidthScale: 1.2,
 };
 
 const game = {
@@ -132,6 +133,15 @@ const CAT_MODEL_URL = `${import.meta.env.BASE_URL}mvp/cat.glb`;
 const CAT_MODEL_YAW_OFFSET = -Math.PI * 0.5;
 const CAT_MODEL_CANDIDATES = Array.from(
   new Set([CAT_MODEL_URL, "/mvp/cat.glb", `${import.meta.env.BASE_URL}public/mvp/cat.glb`, "/public/mvp/cat.glb"])
+);
+const TRASH_CAN_MODEL_URL = `${import.meta.env.BASE_URL}mvp/trash_can.glb`;
+const TRASH_CAN_MODEL_CANDIDATES = Array.from(
+  new Set([
+    TRASH_CAN_MODEL_URL,
+    "/mvp/trash_can.glb",
+    `${import.meta.env.BASE_URL}public/mvp/trash_can.glb`,
+    "/public/mvp/trash_can.glb",
+  ])
 );
 const tempBox = new THREE.Box3();
 const tempSize = new THREE.Vector3();
@@ -369,19 +379,21 @@ function makeBins() {
 
   const trashGroup = new THREE.Group();
   trashGroup.position.set(trashCan.pos.x, 0, trashCan.pos.z);
+  const trashBodyHeight = trashCan.rimY + 0.08;
+  const trashInsideHeight = Math.max(0.36, trashCan.rimY - 0.12);
 
   const trashBody = new THREE.Mesh(
     new THREE.CylinderGeometry(
       trashCan.outerRadius,
       trashCan.outerRadius - 0.08,
-      0.78,
+      trashBodyHeight,
       30,
       1,
       true
     ),
     trashShellMat
   );
-  trashBody.position.y = 0.39;
+  trashBody.position.y = trashBodyHeight * 0.5;
   trashGroup.add(trashBody);
 
   const trashBottom = new THREE.Mesh(
@@ -401,10 +413,17 @@ function makeBins() {
   trashGroup.add(trashRim);
 
   const trashInside = new THREE.Mesh(
-    new THREE.CylinderGeometry(trashCan.openingRadius - 0.03, trashCan.openingRadius - 0.08, 0.56, 24, 1, true),
+    new THREE.CylinderGeometry(
+      trashCan.openingRadius - 0.03,
+      trashCan.openingRadius - 0.08,
+      trashInsideHeight,
+      24,
+      1,
+      true
+    ),
     trashInsideMat
   );
-  trashInside.position.y = 0.31;
+  trashInside.position.y = trashInsideHeight * 0.5 + 0.03;
   trashGroup.add(trashInside);
 
   const trashRing = new THREE.Mesh(
@@ -415,10 +434,73 @@ function makeBins() {
   trashRing.position.set(0, trashCan.rimY + 0.035, 0);
   trashGroup.add(trashRing);
 
+  const trashFallbackMeshes = [trashBody, trashBottom, trashRim, trashInside];
+  loadTrashCanModel(trashGroup, trashFallbackMeshes);
+
   scene.add(trashGroup);
   binVisuals.trash.shells = [trashBody, trashRim];
   binVisuals.trash.ring = trashRing;
 
+}
+
+function loadTrashCanModel(trashGroup, fallbackMeshes) {
+  const tryLoad = (idx) => {
+    if (idx >= TRASH_CAN_MODEL_CANDIDATES.length) {
+      console.warn("Failed to load trash can model from all paths:", TRASH_CAN_MODEL_CANDIDATES);
+      return;
+    }
+
+    const url = TRASH_CAN_MODEL_CANDIDATES[idx];
+    gltfLoader.load(
+      url,
+      (gltf) => {
+        const model = gltf.scene;
+        model.traverse((node) => {
+          if (!node.isMesh) return;
+          node.castShadow = false;
+          node.receiveShadow = false;
+          if (Array.isArray(node.material)) {
+            for (const mat of node.material) {
+              if (mat && "side" in mat) mat.side = THREE.DoubleSide;
+            }
+          } else if (node.material && "side" in node.material) {
+            node.material.side = THREE.DoubleSide;
+          }
+        });
+
+        const box = new THREE.Box3().setFromObject(model);
+        if (box.isEmpty()) return;
+        const size = new THREE.Vector3();
+        const center = new THREE.Vector3();
+        const min = new THREE.Vector3();
+        box.getSize(size);
+        const targetHeight = trashCan.rimY + 0.08;
+        const s = targetHeight / Math.max(size.y, 0.001);
+        model.scale.multiplyScalar(s);
+        if (trashCan.modelWidthScale && trashCan.modelWidthScale !== 1) {
+          model.scale.x *= trashCan.modelWidthScale;
+          model.scale.z *= trashCan.modelWidthScale;
+        }
+
+        box.setFromObject(model);
+        box.getCenter(center);
+        min.copy(box.min);
+        model.position.x -= center.x;
+        model.position.z -= center.z;
+        model.position.y -= min.y;
+
+        for (const m of fallbackMeshes) m.visible = false;
+        trashGroup.add(model);
+      },
+      undefined,
+      (error) => {
+        console.warn("Failed to load trash can model path:", url, error);
+        tryLoad(idx + 1);
+      }
+    );
+  };
+
+  tryLoad(0);
 }
 
 function setupPhysicsWorld() {
@@ -444,14 +526,14 @@ function setupPhysicsWorld() {
   world.addContactMaterial(new CANNON.ContactMaterial(laundryMat, floorMat, { friction: 0.9, restitution: 0.02 }));
   world.addContactMaterial(new CANNON.ContactMaterial(laundryMat, shellMat, { friction: 0.94, restitution: 0.02 }));
   world.addContactMaterial(new CANNON.ContactMaterial(laundryMat, rimMat, { friction: 0.88, restitution: 0.05 }));
-  // Paper feels light and bouncy, especially on rim glances.
-  world.addContactMaterial(new CANNON.ContactMaterial(paperMat, floorMat, { friction: 0.26, restitution: 0.2 }));
-  world.addContactMaterial(new CANNON.ContactMaterial(paperMat, shellMat, { friction: 0.18, restitution: 0.17 }));
-  world.addContactMaterial(new CANNON.ContactMaterial(paperMat, rimMat, { friction: 0.1, restitution: 0.28 }));
+  // Paper feels light but should settle cleanly into bins instead of pinging around rims.
+  world.addContactMaterial(new CANNON.ContactMaterial(paperMat, floorMat, { friction: 0.28, restitution: 0.16 }));
+  world.addContactMaterial(new CANNON.ContactMaterial(paperMat, shellMat, { friction: 0.26, restitution: 0.09 }));
+  world.addContactMaterial(new CANNON.ContactMaterial(paperMat, rimMat, { friction: 0.22, restitution: 0.12 }));
   // Item-item contacts.
   world.addContactMaterial(new CANNON.ContactMaterial(laundryMat, paperMat, { friction: 0.55, restitution: 0.08 }));
   world.addContactMaterial(new CANNON.ContactMaterial(laundryMat, laundryMat, { friction: 0.78, restitution: 0.03 }));
-  world.addContactMaterial(new CANNON.ContactMaterial(paperMat, paperMat, { friction: 0.32, restitution: 0.14 }));
+  world.addContactMaterial(new CANNON.ContactMaterial(paperMat, paperMat, { friction: 0.34, restitution: 0.1 }));
 
   const addStaticBox = (x, y, z, hx, hy, hz, rotY = 0, material = shellMat) => {
     const b = new CANNON.Body({ type: CANNON.Body.STATIC, mass: 0, material });
@@ -472,6 +554,8 @@ function setupPhysicsWorld() {
   for (const leg of DESK_LEGS) {
     addStaticBox(leg.x, 0.5, leg.z, leg.halfX, 0.5, leg.halfZ);
   }
+  // Desk top is a solid surface so items can rest on it instead of falling through.
+  addStaticBox(desk.pos.x, 1.02, desk.pos.z, desk.sizeX * 0.5, 0.06, desk.sizeZ * 0.5, 0, shellMat);
 
   // Hamper walls.
   addStaticBox(hamper.pos.x, hamper.rimY * 0.5, hamper.pos.z + hamper.outerHalfZ, hamper.outerHalfX, hamper.rimY * 0.5, 0.03);
@@ -485,16 +569,16 @@ function setupPhysicsWorld() {
   addStaticBox(hamper.pos.x - hamper.outerHalfX, hamper.rimY + 0.02, hamper.pos.z, 0.03, 0.02, hamper.outerHalfZ + 0.02, 0, rimMat);
 
   // Trash can hollow shell and rim approximation.
-  const segments = 30;
+  const segments = 48;
   const halfWallH = trashCan.rimY * 0.5;
   for (let i = 0; i < segments; i++) {
     const t = (i / segments) * Math.PI * 2;
     const cx = trashCan.pos.x + Math.cos(t) * trashCan.outerRadius;
     const cz = trashCan.pos.z + Math.sin(t) * trashCan.outerRadius;
-    addStaticBox(cx, halfWallH, cz, 0.1, halfWallH, 0.04, t, shellMat);
+    addStaticBox(cx, halfWallH, cz, 0.12, halfWallH, 0.055, t, shellMat);
     const rx = trashCan.pos.x + Math.cos(t) * (trashCan.outerRadius + 0.02);
     const rz = trashCan.pos.z + Math.sin(t) * (trashCan.outerRadius + 0.02);
-    addStaticBox(rx, trashCan.rimY + 0.015, rz, 0.12, 0.025, 0.045, t, rimMat);
+    addStaticBox(rx, trashCan.rimY + 0.015, rz, 0.14, 0.025, 0.06, t, rimMat);
   }
 }
 
@@ -566,6 +650,14 @@ function addPickup(type, x, z) {
       angularDamping: 0.24,
     });
     body.addShape(new CANNON.Box(new CANNON.Vec3(0.15, 0.03, 0.12)));
+
+    // Slightly larger invisible hit volume so small trash remains easy to click.
+    const hitProxy = new THREE.Mesh(
+      new THREE.SphereGeometry(0.23, 10, 8),
+      new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false })
+    );
+    hitProxy.position.set(0, 0.02, 0);
+    mesh.add(hitProxy);
   }
   mesh.position.set(x, 0.08, z);
   mesh.rotation.y = Math.random() * Math.PI;
@@ -962,24 +1054,24 @@ function resetGame() {
 function setBinHighlight(binType, topEntry) {
   const hamperOn = binType === "hamper";
   const trashOn = binType === "trash";
-  const goodColor = topEntry ? 0x92ff86 : 0xffd58a;
+  const activeColor = 0x91f0ff;
 
   if (binVisuals.hamper.ring) {
     binVisuals.hamper.ring.material.opacity = hamperOn ? 0.55 : 0.0;
-    binVisuals.hamper.ring.material.color.setHex(hamperOn ? goodColor : 0x77c9ff);
+    binVisuals.hamper.ring.material.color.setHex(hamperOn ? activeColor : 0x77c9ff);
   }
   if (binVisuals.trash.ring) {
     binVisuals.trash.ring.material.opacity = trashOn ? 0.58 : 0.0;
-    binVisuals.trash.ring.material.color.setHex(trashOn ? goodColor : 0xffd3a9);
+    binVisuals.trash.ring.material.color.setHex(trashOn ? activeColor : 0xffd3a9);
   }
 
   for (const m of binVisuals.hamper.shells) {
     if (!m.material.emissive) continue;
-    m.material.emissive.setHex(hamperOn ? (topEntry ? 0x143018 : 0x3a2d13) : 0x000000);
+    m.material.emissive.setHex(hamperOn ? 0x12313a : 0x000000);
   }
   for (const m of binVisuals.trash.shells) {
     if (!m.material.emissive) continue;
-    m.material.emissive.setHex(trashOn ? (topEntry ? 0x143018 : 0x3a2d13) : 0x000000);
+    m.material.emissive.setHex(trashOn ? 0x12313a : 0x000000);
   }
 }
 
@@ -1014,10 +1106,20 @@ function classifyBinContactForPickup(pickup) {
   const pos = pickup.mesh.position;
   const wantedBin = pickup.type === "laundry" ? "hamper" : "trash";
   const otherBin = wantedBin === "hamper" ? "trash" : "hamper";
+  const r = pickupRadius(pickup);
 
   function topEntry(binType) {
-    if (binType === "hamper") return isInsideHamperOpening(pos) && pos.y >= hamper.rimY - 0.01;
-    return isInsideTrashOpening(pos) && pos.y >= trashCan.rimY - 0.01;
+    if (binType === "hamper") {
+      return (
+        Math.abs(pos.x - hamper.pos.x) <= hamper.openingHalfX - r * 0.2 &&
+        Math.abs(pos.z - hamper.pos.z) <= hamper.openingHalfZ - r * 0.2 &&
+        pos.y >= hamper.rimY + 0.03
+      );
+    }
+    const dx = pos.x - trashCan.pos.x;
+    const dz = pos.z - trashCan.pos.z;
+    const dist = Math.hypot(dx, dz);
+    return dist <= trashCan.openingRadius - r * 0.08 && pos.y >= trashCan.rimY - 0.01;
   }
 
   function sideHit(binType) {
@@ -1031,58 +1133,6 @@ function classifyBinContactForPickup(pickup) {
   return { binType: null, topEntry: false, valid: false };
 }
 
-function classifyTopEntryAssist(pickup) {
-  const pos = pickup.mesh.position;
-  if (pickup.type === "laundry") {
-    const dx = Math.abs(pos.x - hamper.pos.x);
-    const dz = Math.abs(pos.z - hamper.pos.z);
-    const closeToOpening = dx <= hamper.openingHalfX + 0.06 && dz <= hamper.openingHalfZ + 0.06;
-    if (closeToOpening && pos.y >= hamper.rimY - 0.05) {
-      return { binType: "hamper", topEntry: true, valid: true };
-    }
-  } else {
-    const dx = pos.x - trashCan.pos.x;
-    const dz = pos.z - trashCan.pos.z;
-    const dist = Math.hypot(dx, dz);
-    if (dist <= trashCan.openingRadius + 0.06 && pos.y >= trashCan.rimY - 0.05) {
-      return { binType: "trash", topEntry: true, valid: true };
-    }
-  }
-  return null;
-}
-
-function classifyReleaseIntent(pickup) {
-  const pos = pickup.mesh.position;
-  if (pickup.type === "laundry") {
-    const dx = Math.abs(pos.x - hamper.pos.x);
-    const dz = Math.abs(pos.z - hamper.pos.z);
-    if (dx <= hamper.openingHalfX + 0.1 && dz <= hamper.openingHalfZ + 0.1) {
-      return { binType: "hamper", topEntry: true, valid: true };
-    }
-    return null;
-  }
-  const dx = pos.x - trashCan.pos.x;
-  const dz = pos.z - trashCan.pos.z;
-  const dist = Math.hypot(dx, dz);
-  if (dist <= trashCan.openingRadius + 0.09) {
-    return { binType: "trash", topEntry: true, valid: true };
-  }
-  return null;
-}
-
-function nearHamperDrop(pos) {
-  const dx = Math.abs(pos.x - hamper.pos.x);
-  const dz = Math.abs(pos.z - hamper.pos.z);
-  return dx <= hamper.openingHalfX + 0.1 && dz <= hamper.openingHalfZ + 0.1;
-}
-
-function nearTrashDrop(pos) {
-  const dx = pos.x - trashCan.pos.x;
-  const dz = pos.z - trashCan.pos.z;
-  const d = Math.hypot(dx, dz);
-  return d <= trashCan.openingRadius + 0.09;
-}
-
 function onPointerDown(event) {
   if (game.state !== "playing") return;
   setMouseFromEvent(event);
@@ -1092,7 +1142,8 @@ function onPointerDown(event) {
     return;
   }
 
-  const pickupMeshes = pickups.filter((p) => !p.inMotion).map((p) => p.mesh);
+  // Keep pickups selectable even while they are still settling after a drop.
+  const pickupMeshes = pickups.map((p) => p.mesh);
   raycaster.setFromCamera(mouse, camera);
   const hits = raycaster.intersectObjects(pickupMeshes, true);
   if (!hits.length) return;
@@ -1134,7 +1185,8 @@ function onPointerMove(event) {
   const z = tempV3.z + dragState.offsetZ;
   dragState.pickup.mesh.position.x = THREE.MathUtils.clamp(x, ROOM.minX + 0.35, ROOM.maxX - 0.35);
   dragState.pickup.mesh.position.z = THREE.MathUtils.clamp(z, ROOM.minZ + 0.35, ROOM.maxZ - 0.35);
-  const lift = THREE.MathUtils.clamp(0.16 + ((mouse.y + 1) * 0.5) * 1.35, 0.14, 1.6);
+  const baseLift = THREE.MathUtils.clamp(0.16 + ((mouse.y + 1) * 0.5) * 1.35, 0.14, 1.6);
+  const lift = dragState.pickup.type === "trash" ? baseLift * 2.0 : baseLift;
   dragState.pickup.mesh.position.y = lift;
   constrainDragPosition(dragState.pickup, lift);
   dragState.pickup.body.position.set(
@@ -1152,14 +1204,7 @@ function onPointerMove(event) {
 function onPointerUp() {
   if (!dragState) return;
   const p = dragState.pickup;
-  const hit = classifyBinContactForPickup(p);
-  const assistedHit = hit.valid ? hit : classifyTopEntryAssist(p);
-  const intentHit = assistedHit || classifyReleaseIntent(p);
-  const fallbackHit =
-    p.type === "laundry"
-      ? (nearHamperDrop(p.mesh.position) ? { binType: "hamper", topEntry: true, valid: true } : null)
-      : (nearTrashDrop(p.mesh.position) ? { binType: "trash", topEntry: true, valid: true } : null);
-  const finalHit = intentHit || fallbackHit || hit;
+  const finalHit = classifyBinContactForPickup(p);
   setPickupBodyMode(p, CANNON.Body.DYNAMIC);
   p.body.wakeUp();
 
@@ -1200,7 +1245,18 @@ function startPickupIntoBin(pickup, binType) {
   pickup.inMotion = true;
   pickup.motion = "drop";
   pickup.targetBin = binType;
-  pickup.body.velocity.y = Math.min(pickup.body.velocity.y, -0.35);
+  if (binType === "trash") {
+    // Start clearly above the opening and bias inward for a clean drop.
+    pickup.body.position.y = Math.max(pickup.body.position.y, trashCan.rimY + 0.34);
+    const dx = pickup.body.position.x - trashCan.pos.x;
+    const dz = pickup.body.position.z - trashCan.pos.z;
+    pickup.body.velocity.x = pickup.body.velocity.x * 0.35 + (-dx * 0.62);
+    pickup.body.velocity.z = pickup.body.velocity.z * 0.35 + (-dz * 0.62);
+    pickup.body.angularVelocity.scale(0.45, pickup.body.angularVelocity);
+  } else if (binType === "hamper") {
+    pickup.body.position.y = Math.max(pickup.body.position.y, hamper.rimY + 0.18);
+  }
+  pickup.body.velocity.y = Math.min(pickup.body.velocity.y, -0.48);
 }
 
 function startPickupBounce(pickup, binType) {
@@ -1248,6 +1304,14 @@ function constrainDragPosition(pickup, liftY) {
   const r = pickupRadius(pickup);
   let targetY = liftY;
 
+  // If dragged over desk top, keep the item above the desk surface.
+  const overDeskTop =
+    Math.abs(pos.x - desk.pos.x) <= desk.sizeX * 0.5 - r * 0.2 &&
+    Math.abs(pos.z - desk.pos.z) <= desk.sizeZ * 0.5 - r * 0.2;
+  if (overDeskTop) {
+    targetY = Math.max(targetY, desk.topY + r * 0.55);
+  }
+
   for (const leg of DESK_LEGS) {
     if (pos.y <= leg.topY + 0.03) {
       pushOutFromAabbXZ(pos, leg.x, leg.z, leg.halfX, leg.halfZ, r);
@@ -1285,10 +1349,10 @@ function constrainDragPosition(pickup, liftY) {
     const dx = pos.x - trashCan.pos.x;
     const dz = pos.z - trashCan.pos.z;
     const d = Math.hypot(dx, dz);
-    const inOpening = d <= trashCan.openingRadius - r * 0.35;
-    if (!inOpening && d < trashCan.outerRadius + r) {
+    const inOpening = d <= trashCan.openingRadius - r * 0.12;
+    if (!inOpening && d < trashCan.outerRadius + r * 0.8) {
       const n = d || 1;
-      const targetR = trashCan.outerRadius + r;
+      const targetR = trashCan.outerRadius + r * 0.8;
       pos.x = trashCan.pos.x + (dx / n) * targetR;
       pos.z = trashCan.pos.z + (dz / n) * targetR;
       const penetration = targetR - d;
@@ -1296,8 +1360,9 @@ function constrainDragPosition(pickup, liftY) {
       const mouseLiftInfluence = THREE.MathUtils.clamp((liftY - 0.2) * 0.36, 0, 0.2);
       targetY = Math.max(targetY, trashCan.rimY - 0.02 + climb + mouseLiftInfluence);
     }
-    if (pickup.type === "trash" && d <= trashCan.openingRadius + 0.08) {
-      targetY = Math.max(targetY, trashCan.rimY + 0.14);
+    if (pickup.type === "trash" && d <= trashCan.openingRadius + 0.12) {
+      // Keep trash clearly above rim during drag so release falls in naturally.
+      targetY = Math.max(targetY, trashCan.rimY + 0.32);
     }
   }
 
@@ -1315,6 +1380,16 @@ function pickupTuning(pickup) {
     friction: 0.46,
     settleSpeed: 0.16,
   };
+}
+
+function isPickupRestingOnDesk(pickup) {
+  const b = pickup.body;
+  const halfY = pickup.type === "laundry" ? 0.04 : 0.03;
+  const onDeskY = Math.abs(b.position.y - (desk.topY + halfY)) <= 0.08;
+  const onDeskXZ =
+    Math.abs(b.position.x - desk.pos.x) <= desk.sizeX * 0.5 + 0.03 &&
+    Math.abs(b.position.z - desk.pos.z) <= desk.sizeZ * 0.5 + 0.03;
+  return onDeskY && onDeskXZ;
 }
 
 function setMouseFromEvent(event) {
@@ -1451,31 +1526,34 @@ function updatePickups(dt) {
     const dzHamper = b.position.z - hamper.pos.z;
 
     if (p.type === "trash") {
-      if ((p.targetBin === "trash" || nearTrashDrop(b.position)) && dTrash <= trashCan.openingRadius + 0.02 && b.position.y <= trashCan.rimY + 0.24) {
-        b.applyForce(new CANNON.Vec3(-dxTrash * 0.14, 0, -dzTrash * 0.14), b.position);
+      if (p.targetBin === "trash" && dTrash <= trashCan.openingRadius + 0.2 && b.position.y <= trashCan.rimY + 0.46) {
+        const radial = Math.max(dTrash - trashCan.openingRadius * 0.25, 0);
+        const inward = THREE.MathUtils.clamp(radial * 0.9, 0.22, 1.05);
+        const down = dTrash <= trashCan.openingRadius ? 0.54 : 0.22;
+        b.applyForce(new CANNON.Vec3(-dxTrash * inward, -down, -dzTrash * inward), b.position);
+        if (dTrash <= trashCan.openingRadius + 0.02) {
+          b.velocity.x *= 0.9;
+          b.velocity.z *= 0.9;
+          b.angularVelocity.scale(0.88, b.angularVelocity);
+        }
       }
       const nearRim = dTrash > trashCan.openingRadius - 0.01 && dTrash < trashCan.outerRadius + 0.02;
-      if (nearRim && b.position.y <= trashCan.rimY + 0.06 && b.velocity.y < 0) {
+      if (p.targetBin !== "trash" && nearRim && b.position.y <= trashCan.rimY + 0.06 && b.velocity.y < 0) {
         const nx = dxTrash / (dTrash || 1);
         const nz = dzTrash / (dTrash || 1);
         b.applyImpulse(new CANNON.Vec3(nx * 0.06, 0.04, nz * 0.06), b.position);
       }
-      if (dTrash <= trashCan.openingRadius + 0.03 && b.position.y <= trashCan.rimY + 0.08 && b.velocity.y <= 0.25) {
+      if (
+        dTrash <= trashCan.openingRadius - 0.015 &&
+        b.position.y <= trashCan.sinkY + 0.11 &&
+        b.velocity.length() <= 0.5
+      ) {
         removePickup(p);
         continue;
       }
-      // Wrong bin: keep trash out of hamper interior.
-      if (
-        Math.abs(dxHamper) <= hamper.openingHalfX - 0.02 &&
-        Math.abs(dzHamper) <= hamper.openingHalfZ - 0.02 &&
-        b.position.y <= hamper.rimY + 0.02
-      ) {
-        b.position.y = hamper.rimY + 0.06;
-        b.velocity.set(Math.sign(dxHamper || 1) * 0.5, 0.35, Math.sign(dzHamper || 1) * 0.5);
-      }
     } else {
       if (
-        (p.targetBin === "hamper" || nearHamperDrop(b.position)) &&
+        p.targetBin === "hamper" &&
         Math.abs(dxHamper) <= hamper.openingHalfX + 0.04 &&
         Math.abs(dzHamper) <= hamper.openingHalfZ + 0.04 &&
         b.position.y <= hamper.rimY + 0.25
@@ -1485,21 +1563,13 @@ function updatePickups(dt) {
       if (
         Math.abs(dxHamper) <= hamper.outerHalfX - 0.015 &&
         Math.abs(dzHamper) <= hamper.outerHalfZ - 0.015 &&
-        b.position.y <= hamper.rimY + 0.1 &&
+        b.position.y <= hamper.sinkY + 0.12 &&
         Math.abs(dxHamper) <= hamper.openingHalfX + 0.04 &&
         Math.abs(dzHamper) <= hamper.openingHalfZ + 0.04 &&
-        b.velocity.y <= 0.25
+        b.velocity.length() <= 0.45
       ) {
         removePickup(p);
         continue;
-      }
-      // Wrong bin: keep laundry out of trash opening.
-      if (dTrash <= trashCan.openingRadius - 0.01 && b.position.y <= trashCan.rimY + 0.02) {
-        const nx = dxTrash / (dTrash || 1);
-        const nz = dzTrash / (dTrash || 1);
-        b.position.x = trashCan.pos.x + nx * (trashCan.openingRadius + pickupRadius(p) + 0.02);
-        b.position.z = trashCan.pos.z + nz * (trashCan.openingRadius + pickupRadius(p) + 0.02);
-        b.velocity.set(nx * 0.6, 0.4, nz * 0.6);
       }
     }
 
@@ -1515,7 +1585,7 @@ function updatePickups(dt) {
       p.mesh.scale.set(1 + squash * 0.35, 1 - squash, 1 + squash * 0.35);
     }
 
-    if (b.position.y <= 0.082 && speed < tuning.settleSpeed) {
+    if ((b.position.y <= 0.082 || isPickupRestingOnDesk(p)) && speed < tuning.settleSpeed) {
       b.velocity.scale(tuning.friction, b.velocity);
       if (speed < tuning.settleSpeed * 0.6) {
         p.inMotion = false;
