@@ -2,12 +2,88 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>isometric-room</title>
+    <title>3D Isometric Room - MVP Slice</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #d9dce2;
+        font-family: "Segoe UI", Arial, sans-serif;
+      }
+      #hud {
+        position: fixed;
+        top: 12px;
+        left: 12px;
+        z-index: 10;
+        min-width: 290px;
+        padding: 12px;
+        border-radius: 10px;
+        background: rgba(23, 26, 30, 0.8);
+        color: #f5f7fa;
+        font-size: 13px;
+        line-height: 1.4;
+      }
+      #hud b.title {
+        display: block;
+        margin-bottom: 6px;
+        font-size: 14px;
+      }
+      .row {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        margin: 4px 0;
+      }
+      .label {
+        opacity: 0.82;
+      }
+      .value {
+        font-weight: 700;
+      }
+      #hudButtons {
+        margin-top: 8px;
+        display: flex;
+        gap: 8px;
+      }
+      button {
+        border: 0;
+        border-radius: 8px;
+        padding: 7px 10px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      #catnipBtn {
+        background: #79b87f;
+        color: #102312;
+      }
+      #restartBtn {
+        background: #d28888;
+        color: #251010;
+      }
+      #result {
+        margin-top: 8px;
+        font-weight: 800;
+        min-height: 18px;
+      }
+    </style>
   </head>
   <body>
-    <div id="app"></div>
-    <script type="module" src="/src/main.js"></script>
+    <div id="hud">
+      <b class="title">MVP Room Slice</b>
+      <div class="row"><span class="label">Items sorted</span><span class="value" id="sortedStat">0 / 0</span></div>
+      <div class="row"><span class="label">Cat state</span><span class="value" id="catStateStat">Patrolling</span></div>
+      <div class="row"><span class="label">Cup status</span><span class="value" id="cupStat">On desk</span></div>
+      <div class="row"><span class="label">Catnip</span><span class="value" id="catnipStat">Ready</span></div>
+      <div id="hudButtons">
+        <button id="catnipBtn" type="button">Place Catnip</button>
+        <button id="restartBtn" type="button">Restart</button>
+      </div>
+      <div id="result"></div>
+    </div>
+    <script type="module" src="/src/mvp/main.js"></script>
   </body>
 </html>
