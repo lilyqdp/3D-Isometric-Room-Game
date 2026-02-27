@@ -130,7 +130,7 @@ const tempV3 = new THREE.Vector3();
 const floorPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 const gltfLoader = new GLTFLoader();
 const CAT_MODEL_URL = `${import.meta.env.BASE_URL}mvp/cat.glb`;
-const CAT_MODEL_YAW_OFFSET = -Math.PI * 0.5;
+const CAT_MODEL_YAW_OFFSET = Math.PI * 0.5;
 const CAT_MODEL_CANDIDATES = Array.from(
   new Set([CAT_MODEL_URL, "/mvp/cat.glb", `${import.meta.env.BASE_URL}public/mvp/cat.glb`, "/public/mvp/cat.glb"])
 );
@@ -179,9 +179,17 @@ const CUP_COLLISION = {
 };
 
 const SWIPE_TIMING = {
-  windup: 0.44,
-  strike: 0.16,
-  recover: 0.44,
+  windup: 0.62,
+  strike: 0.22,
+  recover: 0.58,
+};
+const JUMP_UP_TIME_SCALE = 4.0;
+const JUMP_UP_TIMING = {
+  prepare: 0.42 * JUMP_UP_TIME_SCALE,
+  launch: 0.36 * JUMP_UP_TIME_SCALE,
+  hook: 0.22 * JUMP_UP_TIME_SCALE,
+  pull: 0.34 * JUMP_UP_TIME_SCALE,
+  settle: 0.24 * JUMP_UP_TIME_SCALE,
 };
 
 const cat = buildCat();
@@ -813,8 +821,14 @@ function buildCat() {
     modelAnchor,
     usingRealisticModel: false,
     rig: null,
+    clipMixer: null,
+    clipActions: new Map(),
+    walkAction: null,
+    idleAction: null,
+    activeClipAction: null,
+    useClipLocomotion: false,
     pos: new THREE.Vector3(1.5, 0, 1.7),
-    state: "patrol", // patrol|toDesk|prepareJump|toCup|swipe|jumpDown|toCatnip|distracted
+    state: "patrol", // patrol|toDesk|prepareJump|launchUp|forepawHook|pullUp|jumpSettle|toCup|swipe|jumpDown|sit|toCatnip|distracted
     lastState: "patrol",
     stateT: 0,
     status: "Patrolling",
@@ -827,6 +841,7 @@ function buildCat() {
     swipeHitDone: false,
     jump: null, // {from,to,fromY,toY,dur,t,arc,next}
     jumpAnchor: null,
+    jumpTargets: null, // {hook, top}
     jumpApproachLock: false,
     nextHopAt: 0,
     nav: {
@@ -866,52 +881,94 @@ function findBone(model, name) {
   return node && node.isBone ? node : null;
 }
 
+function findBoneByAliases(model, aliases) {
+  if (!aliases || aliases.length === 0) return null;
+
+  const bones = [];
+  model.traverse((node) => {
+    // Some GLB rigs expose joints as Object3D nodes (not Bone), so accept both.
+    if (
+      node.isBone ||
+      (node.name && !node.isMesh && !node.isCamera && !node.isLight)
+    ) {
+      bones.push(node);
+    }
+  });
+
+  for (const alias of aliases) {
+    if (!alias) continue;
+    const exact = bones.find((b) => b.name === alias);
+    if (exact) return exact;
+  }
+
+  const lowerNames = bones.map((b) => ({ bone: b, name: b.name.toLowerCase() }));
+  for (const alias of aliases) {
+    if (!alias) continue;
+    const q = alias.toLowerCase();
+    const loose = lowerNames.find((entry) => entry.name === q || entry.name.includes(q));
+    if (loose) return loose.bone;
+  }
+
+  return null;
+}
+
 function cloneBoneRotation(bone) {
   return bone ? bone.rotation.clone() : new THREE.Euler();
 }
 
 function createCatRig(model) {
   const rig = {
-    root: findBone(model, "j_root"),
-    hips: findBone(model, "j_hips"),
-    spine1: findBone(model, "j_spine_1"),
-    spine2: findBone(model, "j_spine_2"),
-    spine3: findBone(model, "j_spine_3"),
-    neckBase: findBone(model, "j_neck_base"),
-    neck1: findBone(model, "j_neck_1"),
-    head: findBone(model, "j_head"),
+    root: findBoneByAliases(model, ["j_root", "_rootJoint", "Root_00", "root"]),
+    hips: findBoneByAliases(model, ["j_hips", "Hip_011", "hips", "hip"]),
+    spine1: findBoneByAliases(model, ["j_spine_1", "spine_1", "spine1", "spine"]),
+    spine2: findBoneByAliases(model, ["j_spine_2", "spine_2", "spine2"]),
+    spine3: findBoneByAliases(model, ["j_spine_3", "spine_3", "spine3"]),
+    neckBase: findBoneByAliases(model, ["j_neck_base", "Neck_01", "neck_base", "neck"]),
+    neck1: findBoneByAliases(model, ["j_neck_1", "neck_1", "neck1"]),
+    head: findBoneByAliases(model, ["j_head", "Head_02", "head"]),
     tail: [
-      findBone(model, "j_tail_1"),
-      findBone(model, "j_tail_2"),
-      findBone(model, "j_tail_3"),
-      findBone(model, "j_tail_4"),
-      findBone(model, "j_tail_5"),
-      findBone(model, "j_tail_6"),
+      findBoneByAliases(model, ["j_tail_1", "Tail_1_012", "tail_1"]),
+      findBoneByAliases(model, ["j_tail_2", "Tail_2_013", "tail_2"]),
+      findBoneByAliases(model, ["j_tail_3", "Tail_3_014", "tail_3"]),
+      findBoneByAliases(model, ["j_tail_4", "Tail_4_015", "tail_4"]),
+      findBoneByAliases(model, ["j_tail_5", "Tail_5_016", "tail_5"]),
+      findBoneByAliases(model, ["j_tail_6", "tail_6"]),
     ],
     frontL: {
-      shoulder: findBone(model, "j_l_humerous"),
-      elbow: findBone(model, "j_l_elbow"),
-      wrist: findBone(model, "j_l_wrist"),
-      paw: findBone(model, "j_l_palm"),
+      shoulder: findBoneByAliases(model, ["j_l_humerous", "Left_leg_front_09", "Slim_Cat_L_Front_Leg", "left_leg_front"]),
+      elbow: findBoneByAliases(model, ["j_l_elbow", "Left_paw_front_010", "left_paw_front", "left_elbow"]),
+      wrist: findBoneByAliases(model, ["j_l_wrist", "Left_paw_front_010", "left_wrist"]),
+      paw: findBoneByAliases(model, ["j_l_palm", "Left_paw_front_010", "left_paw"]),
     },
     frontR: {
-      shoulder: findBone(model, "j_r_humerous"),
-      elbow: findBone(model, "j_r_elbow"),
-      wrist: findBone(model, "j_r_wrist"),
-      paw: findBone(model, "j_r_palm"),
+      shoulder: findBoneByAliases(model, ["j_r_humerous", "Right__leg_front_021", "Slim_Cat_R_Front_Leg", "right_leg_front"]),
+      elbow: findBoneByAliases(model, ["j_r_elbow", "Right__paw_front_022", "right_paw_front", "right_elbow"]),
+      wrist: findBoneByAliases(model, ["j_r_wrist", "Right__paw_front_022", "right_wrist"]),
+      paw: findBoneByAliases(model, ["j_r_palm", "Right__paw_front_022", "right_paw"]),
     },
     backL: {
-      hip: findBone(model, "j_l_femur"),
-      knee: findBone(model, "j_l_knee"),
-      ankle: findBone(model, "j_l_ankle"),
+      hip: findBoneByAliases(model, ["j_l_femur", "Left_leg_back_017", "Slim_Cat_L_Hind_Leg", "left_leg_back"]),
+      knee: findBoneByAliases(model, ["j_l_knee", "Left_paw_back_018", "left_paw_back", "left_knee"]),
+      ankle: findBoneByAliases(model, ["j_l_ankle", "Left_paw_back_018", "left_ankle"]),
     },
     backR: {
-      hip: findBone(model, "j_r_femur"),
-      knee: findBone(model, "j_r_knee"),
-      ankle: findBone(model, "j_r_ankle"),
+      hip: findBoneByAliases(model, ["j_r_femur", "Right__leg_back_019", "Slim_Cat_R_Hind_Leg", "right_leg_back"]),
+      knee: findBoneByAliases(model, ["j_r_knee", "Right__paw_back_020", "right_paw_back", "right_knee"]),
+      ankle: findBoneByAliases(model, ["j_r_ankle", "Right__paw_back_020", "right_ankle"]),
     },
     base: {},
+    profile: "default",
   };
+
+  const hasWalkingCatBones = !!findBoneByAliases(model, [
+    "Left_leg_front_09",
+    "Right__leg_front_021",
+    "Left_leg_back_017",
+    "Right__leg_back_019",
+  ]);
+  if (hasWalkingCatBones) {
+    rig.profile = "walkingcat";
+  }
 
   const allBones = [
     rig.root, rig.hips, rig.spine1, rig.spine2, rig.spine3, rig.neckBase, rig.neck1, rig.head,
@@ -936,9 +993,110 @@ function setBonePose(rig, bone, x = 0, y = 0, z = 0, alpha = 1) {
   const targetX = base.x + x;
   const targetY = base.y + y;
   const targetZ = base.z + z;
-  bone.rotation.x = THREE.MathUtils.lerp(bone.rotation.x, targetX, alpha);
-  bone.rotation.y = THREE.MathUtils.lerp(bone.rotation.y, targetY, alpha);
-  bone.rotation.z = THREE.MathUtils.lerp(bone.rotation.z, targetZ, alpha);
+  const lerpAngle = (current, target, t) => {
+    const delta = Math.atan2(Math.sin(target - current), Math.cos(target - current));
+    return current + delta * t;
+  };
+  bone.rotation.x = lerpAngle(bone.rotation.x, targetX, alpha);
+  bone.rotation.y = lerpAngle(bone.rotation.y, targetY, alpha);
+  bone.rotation.z = lerpAngle(bone.rotation.z, targetZ, alpha);
+}
+
+function pickAnimationClip(clips, patterns) {
+  for (const pattern of patterns) {
+    const clip = clips.find((c) => pattern.test(c.name));
+    if (clip) return clip;
+  }
+  return null;
+}
+
+function setupCatClipAnimations(catObject, model, clips) {
+  catObject.clipMixer = null;
+  catObject.clipActions.clear();
+  catObject.walkAction = null;
+  catObject.idleAction = null;
+  catObject.activeClipAction = null;
+  catObject.useClipLocomotion = false;
+
+  if (!clips || clips.length === 0) return;
+
+  const mixer = new THREE.AnimationMixer(model);
+  catObject.clipMixer = mixer;
+  for (const clip of clips) {
+    const action = mixer.clipAction(clip);
+    action.enabled = true;
+    action.setLoop(THREE.LoopRepeat, Infinity);
+    catObject.clipActions.set(clip.name, action);
+  }
+
+  const walkClip =
+    pickAnimationClip(clips, [/walk/i, /locomot/i, /trot/i, /run/i, /move/i]) || clips[0];
+  const idleClip =
+    pickAnimationClip(clips, [/idle/i, /rest/i, /stand/i, /wait/i]) || walkClip || clips[0];
+
+  const walkAction = mixer.clipAction(walkClip);
+  const idleAction = mixer.clipAction(idleClip);
+  walkAction.play();
+  if (idleAction !== walkAction) idleAction.play();
+
+  walkAction.setEffectiveWeight(0);
+  idleAction.setEffectiveWeight(1);
+  idleAction.setEffectiveTimeScale(1);
+
+  catObject.walkAction = walkAction;
+  catObject.idleAction = idleAction;
+  catObject.activeClipAction = idleAction;
+  catObject.useClipLocomotion = true;
+}
+
+function setCatClipSpecialPose(catObject, special) {
+  if (!catObject.useClipLocomotion || !catObject.walkAction || !catObject.idleAction) return;
+  catObject.walkAction.enabled = true;
+  catObject.idleAction.enabled = true;
+  if (special) {
+    catObject.walkAction.play();
+    catObject.idleAction.play();
+    catObject.walkAction.setEffectiveWeight(0);
+    catObject.idleAction.setEffectiveWeight(0);
+  }
+}
+
+function updateCatClipLocomotion(catObject, dt, moving, speedNorm) {
+  if (!catObject.useClipLocomotion || !catObject.clipMixer || !catObject.walkAction || !catObject.idleAction) return;
+
+  const walkAction = catObject.walkAction;
+  const idleAction = catObject.idleAction;
+  walkAction.enabled = true;
+  idleAction.enabled = true;
+  walkAction.play();
+  idleAction.play();
+  const target = moving ? walkAction : idleAction;
+
+  if (catObject.activeClipAction !== target) {
+    target.reset().play();
+    if (catObject.activeClipAction && catObject.activeClipAction !== target) {
+      catObject.activeClipAction.crossFadeTo(target, 0.22, false);
+    } else {
+      target.setEffectiveWeight(1);
+    }
+    catObject.activeClipAction = target;
+  }
+
+  if (walkAction === idleAction) {
+    walkAction.setEffectiveWeight(1);
+    walkAction.setEffectiveTimeScale(moving ? THREE.MathUtils.clamp(0.75 + speedNorm * 0.7, 0.7, 1.65) : 0.45);
+  } else if (moving) {
+    walkAction.setEffectiveWeight(1);
+    idleAction.setEffectiveWeight(0);
+    walkAction.setEffectiveTimeScale(THREE.MathUtils.clamp(0.75 + speedNorm * 0.7, 0.7, 1.65));
+    idleAction.setEffectiveTimeScale(1.0);
+  } else {
+    walkAction.setEffectiveWeight(0);
+    idleAction.setEffectiveWeight(1);
+    idleAction.setEffectiveTimeScale(1.0);
+  }
+
+  catObject.clipMixer.update(dt);
 }
 
 function loadCatModel(catObject) {
@@ -973,6 +1131,7 @@ function loadCatModel(catObject) {
         catObject.modelAnchor.add(model);
         catObject.usingRealisticModel = true;
         catObject.rig = createCatRig(model);
+        setupCatClipAnimations(catObject, model, gltf.animations || []);
 
         for (const mesh of catObject.simpleParts) {
           mesh.visible = false;
@@ -1040,6 +1199,7 @@ function resetGame() {
   cat.swipeHitDone = false;
   cat.jump = null;
   cat.jumpAnchor = null;
+  cat.jumpTargets = null;
   cat.jumpApproachLock = false;
   cat.nextHopAt = 0;
   cat.nav.goal.set(cat.pos.x, 0, cat.pos.z);
@@ -1049,6 +1209,8 @@ function resetGame() {
   cat.nav.stuckT = 0;
   cat.nav.lastPos.copy(cat.pos);
   cat.nav.lastSpeed = 0;
+  cat.modelAnchor.position.set(0, 0, 0);
+  cat.modelAnchor.rotation.set(0, 0, 0);
 }
 
 function setBinHighlight(binType, topEntry) {
@@ -1934,6 +2096,39 @@ function nearestDeskJumpAnchor(from) {
   return best || DESK_JUMP_ANCHORS[0];
 }
 
+function computeDeskJumpTargets(anchor) {
+  const relX = anchor.x - desk.pos.x;
+  const relZ = anchor.z - desk.pos.z;
+  const hook = new THREE.Vector3();
+  const top = new THREE.Vector3();
+  const edgeOut = 0.24;
+  const topIn = 0.34;
+
+  if (Math.abs(relX) >= Math.abs(relZ)) {
+    const sx = Math.sign(relX || 1);
+    const edgeX = desk.pos.x + sx * (desk.sizeX * 0.5 + edgeOut);
+    const z = THREE.MathUtils.clamp(
+      anchor.z,
+      desk.pos.z - desk.sizeZ * 0.5 + 0.24,
+      desk.pos.z + desk.sizeZ * 0.5 - 0.24
+    );
+    hook.set(edgeX, 0, z);
+    top.set(desk.pos.x + sx * (desk.sizeX * 0.5 - topIn), 0, z);
+  } else {
+    const sz = Math.sign(relZ || 1);
+    const edgeZ = desk.pos.z + sz * (desk.sizeZ * 0.5 + edgeOut);
+    const x = THREE.MathUtils.clamp(
+      anchor.x,
+      desk.pos.x - desk.sizeX * 0.5 + 0.3,
+      desk.pos.x + desk.sizeX * 0.5 - 0.3
+    );
+    hook.set(x, 0, edgeZ);
+    top.set(x, 0, desk.pos.z + sz * (desk.sizeZ * 0.5 - topIn));
+  }
+
+  return { hook, top };
+}
+
 function rotateCatToward(yaw, dt) {
   const delta = Math.atan2(Math.sin(yaw - cat.group.rotation.y), Math.cos(yaw - cat.group.rotation.y));
   const maxStep = CAT_NAV.maxTurnRate * dt;
@@ -2398,6 +2593,7 @@ function updateCat(dt) {
   if (cat.state !== cat.lastState) {
     cat.lastState = cat.state;
     cat.stateT = 0;
+    cat.phaseT = 0;
   } else {
     cat.stateT += dt;
   }
@@ -2405,6 +2601,7 @@ function updateCat(dt) {
   if (!cat.jump && cat.group.position.y <= 0.03 && cat.nav.stuckT > CAT_NAV.stuckReset) {
     cat.state = "patrol";
     cat.jumpAnchor = null;
+    cat.jumpTargets = null;
     cat.jumpApproachLock = false;
     cat.nav.path.length = 0;
     cat.nav.index = 0;
@@ -2436,7 +2633,10 @@ function updateCat(dt) {
 
   if (cat.jump) {
     updateJump(dt);
-    cat.status = "Jumping";
+    if (cat.state === "launchUp") cat.status = "Jumping up";
+    else if (cat.state === "pullUp") cat.status = "Pulling up";
+    else if (cat.state === "jumpDown") cat.status = "Jumping down";
+    else cat.status = "Jumping";
     animateCatPose(dt, false);
     return;
   }
@@ -2454,6 +2654,7 @@ function updateCat(dt) {
       return;
     }
     cat.jumpAnchor = null;
+    cat.jumpTargets = null;
     cat.jumpApproachLock = false;
     cat.state = "toCatnip";
     const atCatnip = moveCatToward(game.catnip.pos, dt, 1.0, 0);
@@ -2464,6 +2665,7 @@ function updateCat(dt) {
 
   if ((clockTime >= game.nextKnockAt) && !cup.broken && !cup.falling && cat.state === "patrol") {
     cat.jumpAnchor = null;
+    cat.jumpTargets = null;
     cat.jumpApproachLock = false;
     cat.state = "toDesk";
   }
@@ -2480,6 +2682,7 @@ function updateCat(dt) {
   if (cat.state === "toDesk") {
     if (cat.stateT > 8.0) {
       cat.jumpAnchor = nearestDeskJumpAnchor(cat.pos);
+      cat.jumpTargets = null;
       cat.jumpApproachLock = false;
       cat.nav.path.length = 0;
       cat.nav.index = 0;
@@ -2499,6 +2702,7 @@ function updateCat(dt) {
     if (reachedDesk) {
       cat.state = "prepareJump";
       cat.phaseT = 0;
+      cat.jumpTargets = null;
       cat.nav.path.length = 0;
       cat.nav.index = 0;
     }
@@ -2512,21 +2716,59 @@ function updateCat(dt) {
       cat.pos.z = cat.jumpAnchor.z;
       cat.group.position.set(cat.pos.x, 0, cat.pos.z);
     }
-    const dx = desk.perch.x - cat.pos.x;
-    const dz = desk.perch.z - cat.pos.z;
+    if (!cat.jumpTargets && cat.jumpAnchor) {
+      cat.jumpTargets = computeDeskJumpTargets(cat.jumpAnchor);
+    }
+    const lookTarget = cat.jumpTargets ? cat.jumpTargets.hook : desk.perch;
+    const dx = lookTarget.x - cat.pos.x;
+    const dz = lookTarget.z - cat.pos.z;
     const yaw = Math.atan2(dx, dz);
     const dy = Math.atan2(Math.sin(yaw - cat.group.rotation.y), Math.cos(yaw - cat.group.rotation.y));
     cat.group.rotation.y += dy * Math.min(1, dt * 5.5);
     cat.status = "Preparing jump";
     animateCatPose(dt, false);
-    if (cat.phaseT >= 0.46) {
-      cat.onTable = true;
+    if (cat.phaseT >= JUMP_UP_TIMING.prepare && cat.jumpTargets) {
       cat.jumpApproachLock = false;
-      startJump(desk.perch, desk.topY + 0.02, 0.72, 0.52, "toCup", {
+      cat.state = "launchUp";
+      startJump(cat.jumpTargets.hook, desk.topY - 0.18, JUMP_UP_TIMING.launch, 0.4, "forepawHook", {
         easePos: true,
         easeY: true,
         avoidDeskClip: true,
       });
+    }
+    return;
+  }
+
+  if (cat.state === "forepawHook") {
+    cat.phaseT += dt;
+    cat.status = "Grabbing edge";
+    animateCatPose(dt, false);
+    if (cat.phaseT >= JUMP_UP_TIMING.hook && cat.jumpTargets) {
+      cat.state = "pullUp";
+      startJump(cat.jumpTargets.top, desk.topY + 0.02, JUMP_UP_TIMING.pull, 0.26, "jumpSettle", {
+        easePos: true,
+        easeY: true,
+        avoidDeskClip: true,
+      });
+    }
+    return;
+  }
+
+  if (cat.state === "jumpSettle") {
+    cat.phaseT += dt;
+    if (cat.stateT <= 0.001) {
+      cat.onTable = true;
+      cat.jumpAnchor = null;
+      cat.jumpTargets = null;
+      cat.jumpApproachLock = false;
+      cat.nav.path.length = 0;
+      cat.nav.index = 0;
+    }
+    cat.status = "Settling on desk";
+    animateCatPose(dt, false);
+    if (cat.phaseT >= JUMP_UP_TIMING.settle) {
+      cat.state = "toCup";
+      cat.phaseT = 0;
     }
     return;
   }
@@ -2563,12 +2805,14 @@ function updateCat(dt) {
       cat.paw.position.x = 0.21;
       cat.state = "jumpDown";
       cat.onTable = false;
+      cat.phaseT = 0;
       cat.jumpAnchor = null;
+      cat.jumpTargets = null;
       cat.jumpApproachLock = false;
       cat.nav.path.length = 0;
       cat.nav.index = 0;
       const downPoint = findSafeGroundPoint(desk.approach);
-      startJump(downPoint, 0, 0.64, 0.34, "patrol", {
+      startJump(downPoint, 0, 0.64, 0.34, "sit", {
         easePos: true,
         easeY: true,
         avoidDeskClip: true,
@@ -2584,10 +2828,33 @@ function updateCat(dt) {
     animateCatPose(dt, false);
     return;
   }
+
+  if (cat.state === "sit") {
+    cat.phaseT += dt;
+    cat.status = "Sitting";
+    animateCatPose(dt, false);
+    if (cat.phaseT >= 1.25) {
+      cat.state = "patrol";
+      cat.phaseT = 0;
+    }
+    return;
+  }
 }
 
 function animateCatPose(dt, moving) {
-  const movingTarget = moving || cat.nav.lastSpeed > 0.24 ? 1 : 0;
+  const isPrepareJump = cat.state === "prepareJump";
+  const isLaunchUp = cat.state === "launchUp";
+  const isForepawHook = cat.state === "forepawHook";
+  const isPullUp = cat.state === "pullUp";
+  const isJumpSettle = cat.state === "jumpSettle";
+  const forceStill =
+    cat.state === "swipe" ||
+    cat.state === "sit" ||
+    isPrepareJump ||
+    isForepawHook ||
+    isJumpSettle ||
+    !!cat.jump;
+  const movingTarget = forceStill ? 0 : (moving || cat.nav.lastSpeed > 0.24 ? 1 : 0);
   cat.motionBlend = THREE.MathUtils.damp(cat.motionBlend, movingTarget, 8, dt);
   const movingAmt = cat.motionBlend;
 
@@ -2598,6 +2865,30 @@ function animateCatPose(dt, moving) {
   }
 
   if (cat.usingRealisticModel) {
+    const isSit = cat.state === "sit";
+    const usesSpecialPose =
+      cat.state === "swipe" ||
+      isPrepareJump ||
+      isLaunchUp ||
+      isForepawHook ||
+      isPullUp ||
+      isJumpSettle ||
+      isSit ||
+      !!cat.jump;
+    if (cat.useClipLocomotion && cat.clipMixer) {
+      setCatClipSpecialPose(cat, usesSpecialPose);
+      if (!usesSpecialPose) {
+        const speedNorm = THREE.MathUtils.clamp(cat.nav.lastSpeed / Math.max(cat.speed, 0.001), 0, 1.5);
+        updateCatClipLocomotion(cat, dt, movingAmt > 0.08, speedNorm);
+
+        cat.modelAnchor.position.y = THREE.MathUtils.damp(cat.modelAnchor.position.y, 0, 10, dt);
+        cat.modelAnchor.rotation.x = THREE.MathUtils.damp(cat.modelAnchor.rotation.x, 0, 10, dt);
+        cat.modelAnchor.rotation.z = THREE.MathUtils.damp(cat.modelAnchor.rotation.z, 0, 10, dt);
+        return;
+      }
+      cat.clipMixer.update(dt);
+    }
+
     const rig = cat.rig;
     if (!rig) return;
 
@@ -2616,11 +2907,23 @@ function animateCatPose(dt, moving) {
     const jumpArc = isJumping ? Math.sin(Math.PI * jumpU) : 0;
     const jumpPush = isJumping ? Math.sin(Math.PI * THREE.MathUtils.clamp(jumpU * 1.15, 0, 1)) : 0;
     const jumpReach = isJumping ? Math.sin(Math.PI * THREE.MathUtils.clamp(jumpU * 0.9, 0, 1)) : 0;
-    const crouchBase = cat.state === "prepareJump" ? 0.34 : cat.state === "toCup" ? 0.2 : 0;
+    const crouchBase =
+      isPrepareJump
+        ? 0.46
+        : cat.state === "toCup"
+          ? 0.2
+          : isForepawHook
+            ? 0.28
+            : isJumpSettle
+              ? 0.2
+              : isSit
+                ? 0.52
+                : 0;
     const crouch = crouchBase + (isJumping ? (1 - jumpU) * 0.26 : 0);
     const baseAlpha = THREE.MathUtils.clamp(dt * 12, 0.08, 0.55);
 
     cat.modelAnchor.position.y = Math.max(0, gaitL) * 0.02 + jumpArc * 0.015;
+    cat.modelAnchor.position.z = THREE.MathUtils.damp(cat.modelAnchor.position.z, 0, 10, dt);
     cat.modelAnchor.rotation.z = gaitL * 0.028;
     const targetPitch = -swipeLean * 0.42 - jumpArc * 0.12;
     cat.modelAnchor.rotation.x = THREE.MathUtils.damp(cat.modelAnchor.rotation.x, targetPitch, 10, dt);
@@ -2641,10 +2944,10 @@ function animateCatPose(dt, moving) {
       if (isJumping) setBonePose(rig, tailBone, 0.18 + jumpSway, sway, wave * 0.2, baseAlpha);
     }
 
-    const foreStrideL = gaitL;
-    const foreStrideR = gaitR;
-    const hindStrideL = gaitR;
-    const hindStrideR = gaitL;
+    const foreStrideL = isSwipe ? 0 : gaitL;
+    const foreStrideR = isSwipe ? 0 : gaitR;
+    const hindStrideL = isSwipe ? 0 : gaitR;
+    const hindStrideR = isSwipe ? 0 : gaitL;
 
     setBonePose(rig, rig.frontL.shoulder, foreStrideL * 0.28 - 0.1 - jumpArc * 0.2 + jumpReach * 0.08, 0, 0, baseAlpha);
     setBonePose(rig, rig.frontL.elbow, -foreStrideL * 0.22 + 0.18 + jumpArc * 0.26 - jumpReach * 0.2, 0, 0, baseAlpha);
@@ -2684,7 +2987,129 @@ function animateCatPose(dt, moving) {
     setBonePose(rig, rig.backR.knee, -hindStrideR * 0.24 - 0.1 - jumpPush * 0.42, 0, 0, baseAlpha);
     setBonePose(rig, rig.backR.ankle, hindStrideR * 0.13 + 0.04 + jumpPush * 0.26, 0, 0, baseAlpha);
 
-    if (movingAmt < 0.18 && !isSwipe && !isJumping) {
+    if (isPrepareJump) {
+      const u = THREE.MathUtils.clamp(cat.phaseT / JUMP_UP_TIMING.prepare, 0, 1);
+      // Rear-up prep: front body lifts while hind legs stay planted to load jump force.
+      setBonePose(rig, rig.spine1, 0.16 * u, 0, 0, baseAlpha);
+      setBonePose(rig, rig.spine2, 0.2 * u, 0, 0, baseAlpha);
+      setBonePose(rig, rig.spine3, 0.16 * u, 0, 0, baseAlpha);
+      setBonePose(rig, rig.neckBase, -0.22 * u, 0, 0, baseAlpha);
+      setBonePose(rig, rig.neck1, -0.18 * u, 0, 0, baseAlpha);
+      setBonePose(rig, rig.head, -0.08 * u, 0, 0, baseAlpha);
+
+      setBonePose(rig, rig.frontL.shoulder, -0.64 * u, 0, 0, baseAlpha);
+      setBonePose(rig, rig.frontR.shoulder, -0.64 * u, 0, 0, baseAlpha);
+      setBonePose(rig, rig.frontL.elbow, 1.0 * u, 0, 0, baseAlpha);
+      setBonePose(rig, rig.frontR.elbow, 1.0 * u, 0, 0, baseAlpha);
+      setBonePose(rig, rig.frontL.wrist, -0.68 * u, 0, 0, baseAlpha);
+      setBonePose(rig, rig.frontR.wrist, -0.68 * u, 0, 0, baseAlpha);
+
+      setBonePose(rig, rig.backL.hip, 0.18 * u, 0, 0, baseAlpha);
+      setBonePose(rig, rig.backR.hip, 0.18 * u, 0, 0, baseAlpha);
+      setBonePose(rig, rig.backL.knee, -0.32 * u, 0, 0, baseAlpha);
+      setBonePose(rig, rig.backR.knee, -0.32 * u, 0, 0, baseAlpha);
+      setBonePose(rig, rig.backL.ankle, 0.12 * u, 0, 0, baseAlpha);
+      setBonePose(rig, rig.backR.ankle, 0.12 * u, 0, 0, baseAlpha);
+
+      // Make the rear-up clearly visible from gameplay camera.
+      cat.modelAnchor.position.y += 0.16 * u;
+      cat.modelAnchor.rotation.x = THREE.MathUtils.damp(cat.modelAnchor.rotation.x, 0.44 * u, 12, dt);
+    }
+
+    if (isLaunchUp) {
+      const u = jumpU;
+      setBonePose(rig, rig.frontL.shoulder, -0.52 + 0.2 * u, 0, 0, baseAlpha);
+      setBonePose(rig, rig.frontR.shoulder, -0.52 + 0.2 * u, 0, 0, baseAlpha);
+      setBonePose(rig, rig.frontL.elbow, 0.66 - 0.18 * u, 0, 0, baseAlpha);
+      setBonePose(rig, rig.frontR.elbow, 0.66 - 0.18 * u, 0, 0, baseAlpha);
+      setBonePose(rig, rig.frontL.wrist, -0.34 + 0.12 * u, 0, 0, baseAlpha);
+      setBonePose(rig, rig.frontR.wrist, -0.34 + 0.12 * u, 0, 0, baseAlpha);
+      setBonePose(rig, rig.backL.hip, 0.4 * (1 - u), 0, 0, baseAlpha);
+      setBonePose(rig, rig.backR.hip, 0.4 * (1 - u), 0, 0, baseAlpha);
+      setBonePose(rig, rig.backL.knee, -0.62 * (1 - u), 0, 0, baseAlpha);
+      setBonePose(rig, rig.backR.knee, -0.62 * (1 - u), 0, 0, baseAlpha);
+      setBonePose(rig, rig.backL.ankle, 0.26 * (1 - u), 0, 0, baseAlpha);
+      setBonePose(rig, rig.backR.ankle, 0.26 * (1 - u), 0, 0, baseAlpha);
+    }
+
+    if (isForepawHook) {
+      const u = THREE.MathUtils.clamp(cat.phaseT / JUMP_UP_TIMING.hook, 0, 1);
+      setBonePose(rig, rig.frontL.shoulder, -0.44, 0, 0, baseAlpha);
+      setBonePose(rig, rig.frontR.shoulder, -0.44, 0, 0, baseAlpha);
+      setBonePose(rig, rig.frontL.elbow, 0.74, 0, 0, baseAlpha);
+      setBonePose(rig, rig.frontR.elbow, 0.74, 0, 0, baseAlpha);
+      setBonePose(rig, rig.frontL.wrist, -0.38, 0, 0, baseAlpha);
+      setBonePose(rig, rig.frontR.wrist, -0.38, 0, 0, baseAlpha);
+      setBonePose(rig, rig.backL.hip, 0.14 + 0.2 * u, 0, 0, baseAlpha);
+      setBonePose(rig, rig.backR.hip, 0.14 + 0.2 * u, 0, 0, baseAlpha);
+      setBonePose(rig, rig.backL.knee, -0.24 - 0.2 * u, 0, 0, baseAlpha);
+      setBonePose(rig, rig.backR.knee, -0.24 - 0.2 * u, 0, 0, baseAlpha);
+    }
+
+    if (isPullUp) {
+      const u = jumpU;
+      setBonePose(rig, rig.frontL.shoulder, -0.38 + 0.18 * u, 0, 0, baseAlpha);
+      setBonePose(rig, rig.frontR.shoulder, -0.38 + 0.18 * u, 0, 0, baseAlpha);
+      setBonePose(rig, rig.frontL.elbow, 0.88 - 0.46 * u, 0, 0, baseAlpha);
+      setBonePose(rig, rig.frontR.elbow, 0.88 - 0.46 * u, 0, 0, baseAlpha);
+      setBonePose(rig, rig.frontL.wrist, -0.48 + 0.24 * u, 0, 0, baseAlpha);
+      setBonePose(rig, rig.frontR.wrist, -0.48 + 0.24 * u, 0, 0, baseAlpha);
+      setBonePose(rig, rig.backL.hip, 0.56 * u, 0, 0, baseAlpha);
+      setBonePose(rig, rig.backR.hip, 0.56 * u, 0, 0, baseAlpha);
+      setBonePose(rig, rig.backL.knee, -0.84 * u, 0, 0, baseAlpha);
+      setBonePose(rig, rig.backR.knee, -0.84 * u, 0, 0, baseAlpha);
+      setBonePose(rig, rig.backL.ankle, 0.36 * u, 0, 0, baseAlpha);
+      setBonePose(rig, rig.backR.ankle, 0.36 * u, 0, 0, baseAlpha);
+    }
+
+    if (isJumpSettle) {
+      const u = THREE.MathUtils.clamp(cat.phaseT / JUMP_UP_TIMING.settle, 0, 1);
+      setBonePose(rig, rig.frontL.elbow, 0.42 * (1 - u), 0, 0, baseAlpha);
+      setBonePose(rig, rig.frontR.elbow, 0.42 * (1 - u), 0, 0, baseAlpha);
+      setBonePose(rig, rig.backL.knee, -0.34 * (1 - u), 0, 0, baseAlpha);
+      setBonePose(rig, rig.backR.knee, -0.34 * (1 - u), 0, 0, baseAlpha);
+    }
+
+    if (isSwipe) {
+      // Keep non-swiping limbs planted: swipe is a single front-paw action.
+      setBonePose(rig, rig.frontL.shoulder, -0.16, 0, 0, baseAlpha);
+      setBonePose(rig, rig.frontL.elbow, 0.32, 0, 0, baseAlpha);
+      setBonePose(rig, rig.frontL.wrist, -0.12, 0, 0, baseAlpha);
+      setBonePose(rig, rig.frontL.paw, 0, 0, 0, baseAlpha);
+
+      setBonePose(rig, rig.backL.hip, 0.12, 0, 0, baseAlpha);
+      setBonePose(rig, rig.backL.knee, -0.24, 0, 0, baseAlpha);
+      setBonePose(rig, rig.backL.ankle, 0.08, 0, 0, baseAlpha);
+      setBonePose(rig, rig.backR.hip, 0.12, 0, 0, baseAlpha);
+      setBonePose(rig, rig.backR.knee, -0.24, 0, 0, baseAlpha);
+      setBonePose(rig, rig.backR.ankle, 0.08, 0, 0, baseAlpha);
+    }
+
+    if (isSit) {
+      const sitIn = THREE.MathUtils.clamp(cat.phaseT / 0.35, 0, 1);
+      setBonePose(rig, rig.spine1, 0.04 * sitIn, 0, 0, baseAlpha);
+      setBonePose(rig, rig.spine2, 0.08 * sitIn, 0, 0, baseAlpha);
+      setBonePose(rig, rig.spine3, 0.12 * sitIn, 0, 0, baseAlpha);
+      setBonePose(rig, rig.neckBase, -0.08 * sitIn, 0, 0, baseAlpha);
+      setBonePose(rig, rig.neck1, -0.06 * sitIn, 0, 0, baseAlpha);
+      setBonePose(rig, rig.head, 0.02 * sitIn, 0, 0, baseAlpha);
+
+      setBonePose(rig, rig.frontL.shoulder, -0.2 * sitIn, 0, 0, baseAlpha);
+      setBonePose(rig, rig.frontR.shoulder, -0.2 * sitIn, 0, 0, baseAlpha);
+      setBonePose(rig, rig.frontL.elbow, 0.34 * sitIn, 0, 0, baseAlpha);
+      setBonePose(rig, rig.frontR.elbow, 0.34 * sitIn, 0, 0, baseAlpha);
+      setBonePose(rig, rig.frontL.wrist, -0.16 * sitIn, 0, 0, baseAlpha);
+      setBonePose(rig, rig.frontR.wrist, -0.16 * sitIn, 0, 0, baseAlpha);
+
+      setBonePose(rig, rig.backL.hip, 0.64 * sitIn, 0, 0, baseAlpha);
+      setBonePose(rig, rig.backR.hip, 0.64 * sitIn, 0, 0, baseAlpha);
+      setBonePose(rig, rig.backL.knee, -0.94 * sitIn, 0, 0, baseAlpha);
+      setBonePose(rig, rig.backR.knee, -0.94 * sitIn, 0, 0, baseAlpha);
+      setBonePose(rig, rig.backL.ankle, 0.34 * sitIn, 0, 0, baseAlpha);
+      setBonePose(rig, rig.backR.ankle, 0.34 * sitIn, 0, 0, baseAlpha);
+    }
+
+    if (movingAmt < 0.18 && !isSwipe && !isJumping && !isSit) {
       const idleBlend = 0.18 + breathe * 0.08;
       setBonePose(rig, rig.frontL.elbow, 0.2 + idleBlend, 0, 0, baseAlpha);
       setBonePose(rig, rig.frontR.elbow, 0.2 + idleBlend, 0, 0, baseAlpha);
@@ -2696,6 +3121,14 @@ function animateCatPose(dt, moving) {
   }
 
   const swing = Math.sin(cat.walkT) * (moving ? 0.06 : 0);
+  if (cat.state === "sit") {
+    cat.legs[0].position.z = 0.26;
+    cat.legs[1].position.z = 0.26;
+    cat.legs[2].position.z = -0.21;
+    cat.legs[3].position.z = -0.21;
+    cat.tail.rotation.x = 0.48;
+    return;
+  }
   cat.legs[0].position.z = 0.31 + swing;
   cat.legs[1].position.z = 0.31 - swing;
   cat.legs[2].position.z = -0.29 - swing;
