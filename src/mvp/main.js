@@ -10,6 +10,7 @@ const catnipStatEl = document.getElementById("catnipStat");
 const resultEl = document.getElementById("result");
 const catnipBtn = document.getElementById("catnipBtn");
 const restartBtn = document.getElementById("restartBtn");
+const debugBtnEl = document.getElementById("debugBtn");
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
@@ -122,7 +123,51 @@ const physics = {
   fixedStep: 1 / 180,
   world: new CANNON.World({ gravity: new CANNON.Vec3(0, -9.8, 0) }),
   materials: {},
+  staticBoxes: [],
 };
+
+const DEBUG_VIEW = {
+  enabled: true,
+  navRefreshInterval: 0.22,
+  collisionColor: 0xffff00,
+  navColor: 0xff8a00,
+  pathColor: 0x1de9b6,
+  pathRadius: 0.075,
+};
+
+const debugView = {
+  root: new THREE.Group(),
+  staticCollisionGroup: new THREE.Group(),
+  dynamicCollisionGroup: new THREE.Group(),
+  navObstacleGroup: new THREE.Group(),
+  navMeshLines: null,
+  pathMesh: null,
+  nextNavRefreshAt: 0,
+  visible: false,
+};
+debugView.root.name = "debugView";
+debugView.staticCollisionGroup.name = "debugStaticCollision";
+debugView.dynamicCollisionGroup.name = "debugDynamicCollision";
+debugView.navObstacleGroup.name = "debugNavObstacles";
+
+const DEBUG_COLLISION_MAT = new THREE.LineBasicMaterial({
+  color: DEBUG_VIEW.collisionColor,
+  transparent: true,
+  opacity: 0.95,
+  depthTest: false,
+});
+const DEBUG_NAV_MAT = new THREE.LineBasicMaterial({
+  color: DEBUG_VIEW.navColor,
+  transparent: true,
+  opacity: 0.75,
+  depthTest: false,
+});
+const DEBUG_PATH_MAT = new THREE.MeshBasicMaterial({
+  color: DEBUG_VIEW.pathColor,
+  transparent: true,
+  opacity: 0.95,
+  depthTest: false,
+});
 
 const raycaster = new THREE.Raycaster();
 const mouse = new THREE.Vector2();
@@ -205,6 +250,7 @@ scene.add(cup.group);
 makeRoomCorner();
 makeDesk();
 makeBins();
+if (DEBUG_VIEW.enabled) scene.add(debugView.root);
 
 catnipBtn.addEventListener("click", () => {
   if (game.state !== "playing") return;
@@ -215,10 +261,14 @@ catnipBtn.addEventListener("click", () => {
 restartBtn.addEventListener("click", () => {
   resetGame();
 });
+if (debugBtnEl) {
+  debugBtnEl.addEventListener("click", () => toggleDebugView());
+}
 
 renderer.domElement.addEventListener("pointerdown", onPointerDown);
 window.addEventListener("pointermove", onPointerMove);
 window.addEventListener("pointerup", onPointerUp);
+window.addEventListener("keydown", onKeyDown);
 
 const TARGET_BOUNDS = {
   minX: -5.2,
@@ -238,6 +288,7 @@ const DESK_LEGS = [
 
 setupPhysicsWorld();
 resetGame();
+initDebugView();
 
 const clock = new THREE.Clock();
 animate();
@@ -516,6 +567,7 @@ function loadTrashCanModel(trashGroup, fallbackMeshes) {
 
 function setupPhysicsWorld() {
   const world = physics.world;
+  physics.staticBoxes = [];
   world.broadphase = new CANNON.SAPBroadphase(world);
   world.allowSleep = true;
   world.solver.iterations = 30;
@@ -552,6 +604,7 @@ function setupPhysicsWorld() {
     b.position.set(x, y, z);
     if (rotY !== 0) b.quaternion.setFromEuler(0, rotY, 0);
     world.addBody(b);
+    physics.staticBoxes.push({ x, y, z, hx, hy, hz, rotY });
   };
 
   // Floor and soft containment bounds.
@@ -591,6 +644,238 @@ function setupPhysicsWorld() {
     const rz = trashCan.pos.z + Math.sin(t) * (trashCan.outerRadius + 0.02);
     addStaticBox(rx, trashCan.rimY + 0.015, rz, 0.14, 0.025, 0.06, t, rimMat);
   }
+}
+
+function clearDebugChildren(group) {
+  for (let i = group.children.length - 1; i >= 0; i--) {
+    const child = group.children[i];
+    group.remove(child);
+    if (child.geometry) child.geometry.dispose();
+  }
+}
+
+function makeDebugBoxEdges(hx, hy, hz) {
+  const geo = new THREE.EdgesGeometry(new THREE.BoxGeometry(hx * 2, hy * 2, hz * 2));
+  return new THREE.LineSegments(geo, DEBUG_COLLISION_MAT);
+}
+
+function makeDebugCircleLoop(radius, y = 0, segments = 28) {
+  const verts = [];
+  for (let i = 0; i < segments; i++) {
+    const t = (i / segments) * Math.PI * 2;
+    verts.push(new THREE.Vector3(Math.cos(t) * radius, y, Math.sin(t) * radius));
+  }
+  const geo = new THREE.BufferGeometry().setFromPoints(verts);
+  return new THREE.LineLoop(geo, DEBUG_COLLISION_MAT);
+}
+
+function makeDebugRectLoop(hx, hz, y = 0) {
+  const verts = [
+    new THREE.Vector3(-hx, y, -hz),
+    new THREE.Vector3(hx, y, -hz),
+    new THREE.Vector3(hx, y, hz),
+    new THREE.Vector3(-hx, y, hz),
+  ];
+  const geo = new THREE.BufferGeometry().setFromPoints(verts);
+  return new THREE.LineLoop(geo, DEBUG_COLLISION_MAT);
+}
+
+function rebuildStaticCollisionDebug() {
+  if (!DEBUG_VIEW.enabled) return;
+  clearDebugChildren(debugView.staticCollisionGroup);
+
+  for (const box of physics.staticBoxes) {
+    const line = makeDebugBoxEdges(box.hx, box.hy, box.hz);
+    line.position.set(box.x, box.y, box.z);
+    line.rotation.y = box.rotY || 0;
+    line.renderOrder = 12;
+    debugView.staticCollisionGroup.add(line);
+  }
+}
+
+function rebuildDynamicCollisionDebug() {
+  if (!DEBUG_VIEW.enabled) return;
+  clearDebugChildren(debugView.dynamicCollisionGroup);
+
+  for (const p of pickups) {
+    const shape = p.body.shapes[0];
+    if (!shape || !shape.halfExtents) continue;
+    const line = makeDebugBoxEdges(shape.halfExtents.x, shape.halfExtents.y, shape.halfExtents.z);
+    line.position.set(p.body.position.x, p.body.position.y, p.body.position.z);
+    line.quaternion.set(p.body.quaternion.x, p.body.quaternion.y, p.body.quaternion.z, p.body.quaternion.w);
+    line.renderOrder = 13;
+    debugView.dynamicCollisionGroup.add(line);
+  }
+
+  const catRing = makeDebugCircleLoop(CAT_COLLISION.catBodyRadius, 0.03, 36);
+  catRing.position.set(cat.pos.x, cat.group.position.y, cat.pos.z);
+  catRing.renderOrder = 13;
+  debugView.dynamicCollisionGroup.add(catRing);
+
+  if (!cup.broken) {
+    const cupRing = makeDebugCircleLoop(CUP_COLLISION.radius, 0.03, 24);
+    cupRing.position.set(cup.group.position.x, cup.group.position.y, cup.group.position.z);
+    cupRing.renderOrder = 13;
+    debugView.dynamicCollisionGroup.add(cupRing);
+  }
+}
+
+function rebuildNavObstacleDebug() {
+  if (!DEBUG_VIEW.enabled) return;
+  clearDebugChildren(debugView.navObstacleGroup);
+  const obstacles = buildCatObstacles(true, true);
+  for (const obs of obstacles) {
+    let line = null;
+    if (obs.kind === "circle") {
+      line = makeDebugCircleLoop(obs.r, 0.04, 36);
+      line.position.set(obs.x, 0, obs.z);
+    } else if (obs.kind === "box") {
+      line = makeDebugRectLoop(obs.hx, obs.hz, 0.04);
+      line.position.set(obs.x, 0, obs.z);
+    } else if (obs.kind === "obb") {
+      line = makeDebugRectLoop(obs.hx, obs.hz, 0.04);
+      line.position.set(obs.x, 0, obs.z);
+      line.rotation.y = obs.yaw;
+    }
+    if (!line) continue;
+    line.renderOrder = 14;
+    debugView.navObstacleGroup.add(line);
+  }
+}
+
+function rebuildNavMeshDebug() {
+  if (!DEBUG_VIEW.enabled) return;
+  if (debugView.navMeshLines) {
+    debugView.root.remove(debugView.navMeshLines);
+    if (debugView.navMeshLines.geometry) debugView.navMeshLines.geometry.dispose();
+    debugView.navMeshLines = null;
+  }
+
+  const obstacles = buildCatObstacles(true, true);
+  const step = CAT_NAV.step;
+  const minX = ROOM.minX + CAT_NAV.margin;
+  const maxX = ROOM.maxX - CAT_NAV.margin;
+  const minZ = ROOM.minZ + CAT_NAV.margin;
+  const maxZ = ROOM.maxZ - CAT_NAV.margin;
+  const w = Math.floor((maxX - minX) / step) + 1;
+  const h = Math.floor((maxZ - minZ) / step) + 1;
+  const y = 0.045;
+  const verts = [];
+  const addLine = (ax, az, bx, bz) => {
+    verts.push(ax, y, az, bx, y, bz);
+  };
+
+  for (let iz = 0; iz < h - 1; iz++) {
+    for (let ix = 0; ix < w - 1; ix++) {
+      const x0 = minX + ix * step;
+      const z0 = minZ + iz * step;
+      const x1 = x0 + step;
+      const z1 = z0 + step;
+      const cx = x0 + step * 0.5;
+      const cz = z0 + step * 0.5;
+      if (isCatPointBlocked(cx, cz, obstacles, CAT_NAV.clearance * 0.9)) continue;
+
+      addLine(x0, z0, x1, z0);
+      addLine(x1, z0, x1, z1);
+      addLine(x1, z1, x0, z1);
+      addLine(x0, z1, x0, z0);
+      addLine(x0, z0, x1, z1);
+    }
+  }
+
+  if (!verts.length) return;
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.Float32BufferAttribute(verts, 3));
+  debugView.navMeshLines = new THREE.LineSegments(geo, DEBUG_NAV_MAT);
+  debugView.navMeshLines.renderOrder = 9;
+  debugView.root.add(debugView.navMeshLines);
+}
+
+function rebuildCurrentPathDebug() {
+  if (!DEBUG_VIEW.enabled) return;
+  if (debugView.pathMesh) {
+    debugView.root.remove(debugView.pathMesh);
+    if (debugView.pathMesh.geometry) debugView.pathMesh.geometry.dispose();
+    debugView.pathMesh = null;
+  }
+
+  const points = [new THREE.Vector3(cat.pos.x, cat.group.position.y + 0.08, cat.pos.z)];
+  if (cat.nav.path.length > 1) {
+    const start = THREE.MathUtils.clamp(cat.nav.index, 1, cat.nav.path.length - 1);
+    for (let i = start; i < cat.nav.path.length; i++) {
+      points.push(new THREE.Vector3(cat.nav.path[i].x, 0.08, cat.nav.path[i].z));
+    }
+  } else {
+    points.push(new THREE.Vector3(cat.nav.goal.x, 0.08, cat.nav.goal.z));
+  }
+
+  const filtered = [points[0]];
+  for (let i = 1; i < points.length; i++) {
+    if (points[i].distanceToSquared(filtered[filtered.length - 1]) > 0.0005) filtered.push(points[i]);
+  }
+  if (filtered.length < 2) return;
+
+  const curve = new THREE.CatmullRomCurve3(filtered, false, "catmullrom", 0.5);
+  const tubularSegments = Math.max(14, (filtered.length - 1) * 20);
+  const geo = new THREE.TubeGeometry(curve, tubularSegments, DEBUG_VIEW.pathRadius, 8, false);
+  const mesh = new THREE.Mesh(geo, DEBUG_PATH_MAT);
+  mesh.renderOrder = 15;
+  debugView.pathMesh = mesh;
+  debugView.root.add(mesh);
+}
+
+function initDebugView() {
+  if (!DEBUG_VIEW.enabled) return;
+  if (!debugView.staticCollisionGroup.parent) debugView.root.add(debugView.staticCollisionGroup);
+  if (!debugView.dynamicCollisionGroup.parent) debugView.root.add(debugView.dynamicCollisionGroup);
+  if (!debugView.navObstacleGroup.parent) debugView.root.add(debugView.navObstacleGroup);
+  debugView.root.visible = debugView.visible;
+  rebuildStaticCollisionDebug();
+  rebuildDynamicCollisionDebug();
+  rebuildNavObstacleDebug();
+  rebuildNavMeshDebug();
+  rebuildCurrentPathDebug();
+  debugView.nextNavRefreshAt = clockTime + DEBUG_VIEW.navRefreshInterval;
+  updateDebugButtonLabel();
+}
+
+function updateDebugView() {
+  if (!DEBUG_VIEW.enabled) return;
+  if (!debugView.visible) return;
+  rebuildDynamicCollisionDebug();
+  rebuildCurrentPathDebug();
+  if (clockTime >= debugView.nextNavRefreshAt || !debugView.navMeshLines) {
+    rebuildNavObstacleDebug();
+    rebuildNavMeshDebug();
+    debugView.nextNavRefreshAt = clockTime + DEBUG_VIEW.navRefreshInterval;
+  }
+}
+
+function updateDebugButtonLabel() {
+  if (!debugBtnEl) return;
+  debugBtnEl.textContent = debugView.visible ? "Debug: On (B)" : "Debug: Off (B)";
+}
+
+function setDebugViewVisible(visible) {
+  debugView.visible = !!visible;
+  debugView.root.visible = debugView.visible;
+  if (debugView.visible) {
+    debugView.nextNavRefreshAt = 0;
+    updateDebugView();
+  }
+  updateDebugButtonLabel();
+}
+
+function toggleDebugView() {
+  setDebugViewVisible(!debugView.visible);
+}
+
+function onKeyDown(event) {
+  if (event.repeat) return;
+  if ((event.key || "").toLowerCase() !== "b") return;
+  if (event.target && (event.target.tagName === "INPUT" || event.target.tagName === "TEXTAREA")) return;
+  event.preventDefault();
+  toggleDebugView();
 }
 
 function addFixedPickups() {
@@ -3474,6 +3759,7 @@ function animate() {
     }
   }
 
+  updateDebugView();
   controls.update();
   updateUI();
   renderer.render(scene, camera);
