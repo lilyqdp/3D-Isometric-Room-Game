@@ -153,23 +153,26 @@ const tempFrom = new THREE.Vector3();
 const tempTo = new THREE.Vector3();
 
 const CAT_NAV = {
-  step: 0.32,
+  step: 0.26,
   margin: 0.4,
   clearance: 0.2,
-  repathInterval: 0.75,
+  repathInterval: 0.4,
   stuckSpeed: 0.035,
   stuckReset: 2.8,
-  hopCooldown: 0.5,
-  hopArc: 0.28,
-  hopDur: 0.38,
   maxTurnRate: 2.5, // rad/sec
   turnSlowThreshold: 0.65,
   turnStopThreshold: 1.35,
+  localLookAhead: 0.56,
+  steerSwitchPenalty: 0.36,
+  steerFacingPenalty: 0.58,
+  unstuckCheckInterval: 0.1,
+  unstuckMinMove: 0.02,
 };
 
 const CAT_COLLISION = {
+  catBodyRadius: 0.26,
   pickupRadiusBoost: 0.1,
-  pickupClearance: 0.16,
+  pickupClearance: 0.1,
   cupBodyClearance: 0.34,
 };
 
@@ -183,7 +186,7 @@ const SWIPE_TIMING = {
   strike: 0.22,
   recover: 0.58,
 };
-const JUMP_UP_TIME_SCALE = 4.0;
+const JUMP_UP_TIME_SCALE = 2.0;
 const JUMP_UP_TIMING = {
   prepare: 0.42 * JUMP_UP_TIME_SCALE,
   launch: 0.36 * JUMP_UP_TIME_SCALE,
@@ -843,12 +846,16 @@ function buildCat() {
     jumpAnchor: null,
     jumpTargets: null, // {hook, top}
     jumpApproachLock: false,
-    nextHopAt: 0,
     nav: {
       goal: new THREE.Vector3(1.5, 0, 1.7),
       path: [],
       index: 0,
       repathAt: 0,
+      anchorReplanAt: 0,
+      steerYaw: NaN,
+      pickupTrapT: 0,
+      unstuckCheckAt: 0,
+      unstuckCheckPos: new THREE.Vector3(1.5, 0, 1.7),
       stuckT: 0,
       lastPos: new THREE.Vector3(1.5, 0, 1.7),
       lastSpeed: 0,
@@ -1201,11 +1208,15 @@ function resetGame() {
   cat.jumpAnchor = null;
   cat.jumpTargets = null;
   cat.jumpApproachLock = false;
-  cat.nextHopAt = 0;
   cat.nav.goal.set(cat.pos.x, 0, cat.pos.z);
   cat.nav.path.length = 0;
   cat.nav.index = 0;
   cat.nav.repathAt = 0;
+  cat.nav.anchorReplanAt = 0;
+  cat.nav.steerYaw = NaN;
+  cat.nav.pickupTrapT = 0;
+  cat.nav.unstuckCheckAt = clockTime;
+  cat.nav.unstuckCheckPos.copy(cat.pos);
   cat.nav.stuckT = 0;
   cat.nav.lastPos.copy(cat.pos);
   cat.nav.lastSpeed = 0;
@@ -1651,8 +1662,8 @@ function updatePickups(dt) {
       b.angularVelocity.scale(maxAngular / angSpeed, b.angularVelocity);
     }
 
-    if (cat.group.position.y <= 0.24 && b.position.y <= 0.62) {
-      const catRadius = 0.24;
+    if (cat.group.position.y <= 0.24 && b.position.y <= 1.2) {
+      const catRadius = CAT_COLLISION.catBodyRadius;
       const itemRadius = pickupRadius(p) * 0.86;
       const minDist = catRadius + itemRadius;
       let dxCat = b.position.x - cat.pos.x;
@@ -1669,10 +1680,16 @@ function updatePickups(dt) {
         const push = minDist - dist + 0.05;
         b.position.x += nxCat * push;
         b.position.z += nzCat * push;
-        const bounce = p.type === "trash" ? 1.35 : 1.05;
+        const impact = Math.max(0, -b.velocity.y);
+        const bounce = p.type === "trash" ? 1.35 + Math.min(0.45, impact * 0.16) : 1.28 + Math.min(0.36, impact * 0.14);
         b.velocity.x += nxCat * bounce;
         b.velocity.z += nzCat * bounce;
-        b.velocity.y = Math.max(b.velocity.y, p.type === "trash" ? 0.9 : 0.72);
+        if (p.type === "laundry") {
+          const side = (Math.random() - 0.5) * 0.28;
+          b.velocity.x += -nzCat * side;
+          b.velocity.z += nxCat * side;
+        }
+        b.velocity.y = Math.max(b.velocity.y, p.type === "trash" ? 0.9 : 0.82);
         b.angularVelocity.y += (Math.random() - 0.5) * 2.1;
         b.angularVelocity.x += (Math.random() - 0.5) * 1.4;
         b.angularVelocity.z += (Math.random() - 0.5) * 1.4;
@@ -1805,7 +1822,7 @@ function updateJump(dt) {
   return false;
 }
 
-function buildCatObstacles(includePickups = false) {
+function buildCatObstacles(includePickups = false, includeClosePickups = false) {
   const obstacles = [
     {
       kind: "box",
@@ -1830,7 +1847,7 @@ function buildCatObstacles(includePickups = false) {
       if (p.mesh.position.y > 0.34) continue;
       const cdx = p.mesh.position.x - cat.pos.x;
       const cdz = p.mesh.position.z - cat.pos.z;
-      if (cdx * cdx + cdz * cdz < 0.22 * 0.22) continue;
+      if (!includeClosePickups && cdx * cdx + cdz * cdz < 0.22 * 0.22) continue;
       if (p.type === "laundry") {
         tempQ.set(p.body.quaternion.x, p.body.quaternion.y, p.body.quaternion.z, p.body.quaternion.w);
         tempEuler.setFromQuaternion(tempQ, "YXZ");
@@ -1838,8 +1855,8 @@ function buildCatObstacles(includePickups = false) {
           kind: "obb",
           x: p.mesh.position.x,
           z: p.mesh.position.z,
-          hx: 0.21,
-          hz: 0.14,
+          hx: 0.17,
+          hz: 0.11,
           yaw: tempEuler.y,
         });
       } else {
@@ -1847,7 +1864,7 @@ function buildCatObstacles(includePickups = false) {
           kind: "circle",
           x: p.mesh.position.x,
           z: p.mesh.position.z,
-          r: pickupRadius(p) + CAT_COLLISION.pickupRadiusBoost * 0.8,
+          r: pickupRadius(p) + CAT_COLLISION.pickupRadiusBoost * 0.35,
         });
       }
     }
@@ -1914,6 +1931,13 @@ function smoothCatPath(path, obstacles) {
     i = j;
   }
   return out;
+}
+
+function catPathDistance(path) {
+  if (!path || path.length < 2) return 0;
+  let d = 0;
+  for (let i = 1; i < path.length; i++) d += path[i - 1].distanceTo(path[i]);
+  return d;
 }
 
 function computeCatPath(start, goal, obstacles) {
@@ -2069,11 +2093,11 @@ function canReachGroundTarget(start, goal, obstacles) {
   return isPathTraversable(path, obstacles);
 }
 
-function ensureCatPath(target, force = false) {
+function ensureCatPath(target, force = false, useDynamic = false) {
   if (cat.group.position.y > 0.02) return;
   const goalDelta = cat.nav.goal.distanceToSquared(target);
   if (!force && cat.nav.path.length > 1 && goalDelta < 0.05 * 0.05) return;
-  const obstacles = buildCatObstacles(true);
+  const obstacles = buildCatObstacles(useDynamic);
   cat.nav.path = computeCatPath(cat.pos, target, obstacles);
   cat.nav.index = cat.nav.path.length > 1 ? 1 : 0;
   cat.nav.goal.copy(target);
@@ -2081,7 +2105,7 @@ function ensureCatPath(target, force = false) {
 }
 
 function nearestDeskJumpAnchor(from) {
-  const staticObstacles = buildCatObstacles(true);
+  const staticObstacles = buildCatObstacles(false);
   let best = null;
   let bestD = Infinity;
   for (let i = 0; i < DESK_JUMP_ANCHORS.length; i++) {
@@ -2094,6 +2118,29 @@ function nearestDeskJumpAnchor(from) {
     }
   }
   return best || DESK_JUMP_ANCHORS[0];
+}
+
+function bestDeskJumpAnchor(from) {
+  const staticObstacles = buildCatObstacles(false);
+  const dynamicObstacles = buildCatObstacles(true);
+  let best = null;
+  let bestScore = Infinity;
+
+  for (let i = 0; i < DESK_JUMP_ANCHORS.length; i++) {
+    const a = DESK_JUMP_ANCHORS[i];
+    if (isCatPointBlocked(a.x, a.z, staticObstacles, CAT_NAV.clearance * 0.85)) continue;
+
+    const path = computeCatPath(from, a, staticObstacles);
+    if (!isPathTraversable(path, staticObstacles)) continue;
+    const dynamicClear = isPathTraversable(path, dynamicObstacles);
+    const score = catPathDistance(path) + (dynamicClear ? 0 : 2.2);
+    if (score < bestScore) {
+      bestScore = score;
+      best = a;
+    }
+  }
+
+  return best || nearestDeskJumpAnchor(from);
 }
 
 function computeDeskJumpTargets(anchor) {
@@ -2137,18 +2184,86 @@ function rotateCatToward(yaw, dt) {
   return delta;
 }
 
+const GROUND_STEER_OFFSETS = [0, 0.2, -0.2, 0.42, -0.42, 0.66, -0.66, 0.92, -0.92, 1.22, -1.22, 1.48, -1.48];
+
+function chooseGroundSteer(target, step, staticObstacles, dynamicObstacles, ignoreDynamic = false) {
+  const toGoalX = target.x - cat.pos.x;
+  const toGoalZ = target.z - cat.pos.z;
+  const goalLen = Math.max(0.001, Math.hypot(toGoalX, toGoalZ));
+  const goalYaw = Math.atan2(toGoalX, toGoalZ);
+  const prevYaw = Number.isFinite(cat.nav.steerYaw) ? cat.nav.steerYaw : goalYaw;
+  const dynamicClearance = CAT_NAV.clearance + CAT_COLLISION.pickupClearance;
+  const lookAhead = Math.max(step, Math.min(CAT_NAV.localLookAhead, step * 2.2));
+
+  let best = null;
+  let bestScore = Infinity;
+
+  const evaluate = (offset, allowBacktrack) => {
+    const yaw = goalYaw + offset;
+    const sx = Math.sin(yaw);
+    const sz = Math.cos(yaw);
+    const faceDelta = Math.abs(
+      Math.atan2(Math.sin(yaw - cat.group.rotation.y), Math.cos(yaw - cat.group.rotation.y))
+    );
+    if (cat.nav.stuckT < 0.26 && faceDelta > 0.95) return;
+
+    const tx = cat.pos.x + sx * step;
+    const tz = cat.pos.z + sz * step;
+    if (isCatPointBlocked(tx, tz, staticObstacles, CAT_NAV.clearance * 0.9)) return;
+    if (!ignoreDynamic && isCatPointBlocked(tx, tz, dynamicObstacles, dynamicClearance)) return;
+
+    const progress = (toGoalX * sx + toGoalZ * sz) / goalLen;
+    if (!allowBacktrack && progress < -0.08) return;
+
+    const lx = cat.pos.x + sx * lookAhead;
+    const lz = cat.pos.z + sz * lookAhead;
+    const dynamicAhead = !ignoreDynamic && isCatPointBlocked(lx, lz, dynamicObstacles, dynamicClearance * 0.9);
+    const staticAhead = isCatPointBlocked(lx, lz, staticObstacles, CAT_NAV.clearance * 0.9);
+    if (staticAhead) return;
+
+    const remainingD2 = (target.x - tx) * (target.x - tx) + (target.z - tz) * (target.z - tz);
+    let score = Math.abs(offset) * 0.52 + (1 - progress) * 1.4 + remainingD2 * 0.015;
+    const steerDelta = Math.atan2(Math.sin(yaw - prevYaw), Math.cos(yaw - prevYaw));
+    score += Math.abs(steerDelta) * CAT_NAV.steerSwitchPenalty;
+    score += faceDelta * CAT_NAV.steerFacingPenalty;
+    if (dynamicAhead) score += 0.95;
+
+    if (score < bestScore) {
+      bestScore = score;
+      best = { sx, sz, yaw };
+    }
+  };
+
+  for (const offset of GROUND_STEER_OFFSETS) evaluate(offset, false);
+  if (!best) {
+    for (const offset of GROUND_STEER_OFFSETS) evaluate(offset, true);
+  }
+  return best;
+}
+
 function moveCatToward(target, dt, speed, yLevel, opts = {}) {
-  const direct = !!opts.direct;
-  const ignoreDynamic = !!opts.ignoreDynamic;
+  let direct = !!opts.direct;
+  let ignoreDynamic = !!opts.ignoreDynamic;
   let chase = target;
   if (yLevel <= 0.02) {
+    if (direct) {
+      const staticObstacles = buildCatObstacles(false);
+      if (
+        isCatPointBlocked(target.x, target.z, staticObstacles, CAT_NAV.clearance * 0.9) ||
+        !hasClearTravelLine(cat.pos, target, staticObstacles)
+      ) {
+        direct = false;
+        ignoreDynamic = false;
+      }
+    }
     tempTo.set(target.x, 0, target.z);
     if (!direct) {
       const goalChanged = cat.nav.goal.distanceToSquared(tempTo) > 0.1 * 0.1;
       const needsPath = cat.nav.path.length <= 1 && clockTime >= cat.nav.repathAt;
       const stalePath = clockTime >= cat.nav.repathAt;
       const force = goalChanged || needsPath || stalePath;
-      ensureCatPath(tempTo, force);
+      const useDynamicPlan = !ignoreDynamic && cat.nav.stuckT > 0.28;
+      ensureCatPath(tempTo, force, useDynamicPlan);
       if (cat.nav.path.length > 1) {
         let index = THREE.MathUtils.clamp(cat.nav.index, 1, cat.nav.path.length - 1);
         while (index < cat.nav.path.length - 1 && cat.pos.distanceToSquared(cat.nav.path[index]) < 0.15 * 0.15) {
@@ -2156,9 +2271,9 @@ function moveCatToward(target, dt, speed, yLevel, opts = {}) {
         }
         cat.nav.index = index;
         chase = cat.nav.path[index];
-        const dynamicObstacles = buildCatObstacles(true);
-        if (!hasClearTravelLine(cat.pos, chase, dynamicObstacles)) {
-          ensureCatPath(tempTo, true);
+        const segmentObstacles = ignoreDynamic ? buildCatObstacles(false) : buildCatObstacles(true);
+        if (!hasClearTravelLine(cat.pos, chase, segmentObstacles)) {
+          ensureCatPath(tempTo, true, !ignoreDynamic);
           if (cat.nav.path.length > 1) {
             const nIndex = THREE.MathUtils.clamp(cat.nav.index, 1, cat.nav.path.length - 1);
             chase = cat.nav.path[nIndex];
@@ -2187,9 +2302,10 @@ function moveCatToward(target, dt, speed, yLevel, opts = {}) {
   if (yLevel <= 0.02 && Math.abs(dy) > CAT_NAV.turnStopThreshold) {
     cat.group.position.set(cat.pos.x, yLevel, cat.pos.z);
     cat.nav.lastSpeed = 0;
-    cat.nav.stuckT += dt * 0.65;
-    if (cat.nav.stuckT > 0.42) {
-      tryStartGroundHop(target);
+    cat.nav.stuckT += dt * 0.4;
+    if (cat.nav.stuckT > 0.4 && clockTime >= cat.nav.repathAt) {
+      ensureCatPath(target, true, !ignoreDynamic);
+      cat.nav.repathAt = clockTime + CAT_NAV.repathInterval;
     }
     return false;
   }
@@ -2197,64 +2313,49 @@ function moveCatToward(target, dt, speed, yLevel, opts = {}) {
   if (yLevel <= 0.02) {
     const staticObstacles = buildCatObstacles(false);
     const dynamicObstacles = ignoreDynamic ? staticObstacles : buildCatObstacles(true);
-    const nextX = cat.pos.x + nx * step;
-    const nextZ = cat.pos.z + nz * step;
-    const blockedByStatic = isCatPointBlocked(nextX, nextZ, staticObstacles, CAT_NAV.clearance * 0.9);
-    const shouldUseDynamic = !ignoreDynamic;
-    const dynamicClearance = CAT_NAV.clearance + CAT_COLLISION.pickupClearance;
-    const blockedByDynamic =
-      shouldUseDynamic && !blockedByStatic && isCatPointBlocked(nextX, nextZ, dynamicObstacles, dynamicClearance);
-
-    if (blockedByDynamic) {
-      const leftX = -nz;
-      const leftZ = nx;
-      const tryDirs = [
-        [nx + leftX * 0.65, nz + leftZ * 0.65],
-        [nx - leftX * 0.65, nz - leftZ * 0.65],
-      ];
-      let slid = false;
-      for (const [sx, sz] of tryDirs) {
-        const sn = Math.hypot(sx, sz) || 1;
-        const tx = cat.pos.x + (sx / sn) * step;
-        const tz = cat.pos.z + (sz / sn) * step;
-        if (isCatPointBlocked(tx, tz, staticObstacles, CAT_NAV.clearance * 0.9)) continue;
-        if (isCatPointBlocked(tx, tz, dynamicObstacles, dynamicClearance * 0.9)) continue;
-        cat.pos.x = tx;
-        cat.pos.z = tz;
-        cat.group.position.set(cat.pos.x, yLevel, cat.pos.z);
-        const slideYaw = Math.atan2(sx / sn, sz / sn);
-        rotateCatToward(slideYaw, dt);
-        cat.nav.lastSpeed = step / Math.max(dt, 1e-5);
-        cat.nav.stuckT = Math.max(0, cat.nav.stuckT - dt * 0.9);
-        slid = true;
-        break;
-      }
-      if (slid) return cat.pos.distanceToSquared(target) < 0.14 * 0.14;
+    const steerTarget = chase;
+    const steer = chooseGroundSteer(steerTarget, step, staticObstacles, dynamicObstacles, ignoreDynamic);
+    if (!steer) {
       cat.nav.stuckT += dt;
-      if (cat.nav.stuckT > 0.28) {
+      if (cat.nav.stuckT > 0.55) {
         nudgeBlockingPickupAwayFromCat();
       }
-      if (cat.nav.stuckT > 0.34 && tryStartGroundHop(target)) {
-        cat.status = "Hopping over clutter";
-        return false;
+      if (cat.nav.stuckT > 0.3 && clockTime >= cat.nav.repathAt) {
+        ensureCatPath(target, true, !ignoreDynamic);
+        cat.nav.repathAt = clockTime + CAT_NAV.repathInterval;
       }
-      if (cat.nav.stuckT > 0.42 && clockTime >= cat.nav.repathAt) {
-        ensureCatPath(target, true);
-        cat.nav.repathAt = clockTime + 0.65;
-        cat.nav.stuckT = Math.max(0.2, cat.nav.stuckT * 0.5);
+      if (cat.nav.stuckT > 1.15) {
+        cat.nav.path.length = 0;
+        cat.nav.index = 0;
       }
       return false;
     }
 
-    if (blockedByStatic) {
+    tempFrom.copy(cat.pos);
+    const facingDelta = Math.abs(
+      Math.atan2(Math.sin(steer.yaw - cat.group.rotation.y), Math.cos(steer.yaw - cat.group.rotation.y))
+    );
+    const forwardScale = THREE.MathUtils.clamp(1 - facingDelta / 1.7, 0.26, 1);
+    const steerStep = step * forwardScale;
+    cat.pos.x += steer.sx * steerStep;
+    cat.pos.z += steer.sz * steerStep;
+    cat.group.position.set(cat.pos.x, yLevel, cat.pos.z);
+    cat.nav.steerYaw = steer.yaw;
+    rotateCatToward(steer.yaw, dt);
+
+    const moved = cat.pos.distanceTo(tempFrom);
+    if (moved < CAT_NAV.stuckSpeed * dt && d > 0.18) {
       cat.nav.stuckT += dt;
-      if (cat.nav.stuckT > 0.25 && clockTime >= cat.nav.repathAt) {
-        ensureCatPath(target, true);
-        cat.nav.repathAt = clockTime + 0.8;
-        cat.nav.stuckT = 0;
+      if (cat.nav.stuckT > 0.36 && clockTime >= cat.nav.repathAt) {
+        ensureCatPath(target, true, !ignoreDynamic);
+        cat.nav.repathAt = clockTime + CAT_NAV.repathInterval;
       }
-      return false;
+    } else {
+      cat.nav.stuckT = Math.max(0, cat.nav.stuckT - dt * 0.9);
     }
+    cat.nav.lastPos.copy(cat.pos);
+    cat.nav.lastSpeed = moved / Math.max(dt, 1e-5);
+    return cat.pos.distanceToSquared(target) < 0.14 * 0.14;
   }
 
   tempFrom.copy(cat.pos);
@@ -2262,24 +2363,9 @@ function moveCatToward(target, dt, speed, yLevel, opts = {}) {
   cat.pos.z += nz * step;
   cat.group.position.set(cat.pos.x, yLevel, cat.pos.z);
 
-  if (yLevel <= 0.02) {
-    const moved = cat.pos.distanceTo(tempFrom);
-    if (moved < CAT_NAV.stuckSpeed * dt && d > 0.18) {
-      cat.nav.stuckT += dt;
-      if (cat.nav.stuckT > 0.45 && tryStartGroundHop(target)) {
-        cat.status = "Hopping over clutter";
-        return false;
-      }
-      if (cat.nav.stuckT > 0.5) {
-        ensureCatPath(target, true);
-        cat.nav.stuckT = 0;
-      }
-    } else {
-      cat.nav.stuckT = Math.max(0, cat.nav.stuckT - dt * 0.8);
-    }
-    cat.nav.lastPos.copy(cat.pos);
-    cat.nav.lastSpeed = moved / Math.max(dt, 1e-5);
-  }
+  const moved = cat.pos.distanceTo(tempFrom);
+  cat.nav.lastPos.copy(cat.pos);
+  cat.nav.lastSpeed = moved / Math.max(dt, 1e-5);
 
   return cat.pos.distanceToSquared(target) < 0.14 * 0.14;
 }
@@ -2357,13 +2443,229 @@ function sampleSwipePose(t) {
   return pose;
 }
 
+function getCatPickupOverlap() {
+  let count = 0;
+  let maxPenetration = 0;
+  const catRadius = CAT_COLLISION.catBodyRadius + 0.04;
+  for (const p of pickups) {
+    if (!p.body) continue;
+    if (dragState && dragState.pickup === p) continue;
+    if (p.body.position.y > 1.25) continue;
+    const itemRadius = pickupRadius(p) * 0.98;
+    const minDist = catRadius + itemRadius;
+    const dx = p.body.position.x - cat.pos.x;
+    const dz = p.body.position.z - cat.pos.z;
+    const dist = Math.hypot(dx, dz);
+    const penetration = minDist - dist;
+    if (penetration > 0) {
+      count++;
+      if (penetration > maxPenetration) maxPenetration = penetration;
+    }
+  }
+  return { count, maxPenetration };
+}
+
+function getCatObstacleIntrusion() {
+  const catRadius = CAT_COLLISION.catBodyRadius;
+  const nearPadding = 0.08;
+  const obstacles = buildCatObstacles(true, true);
+  let intersectCount = 0;
+  let nearCount = 0;
+  let maxPenetration = 0;
+  let maxNearness = 0;
+
+  for (const obs of obstacles) {
+    const dx = cat.pos.x - obs.x;
+    const dz = cat.pos.z - obs.z;
+    let penetration = 0;
+    let nearness = 0;
+
+    if (obs.kind === "circle") {
+      const signed = Math.hypot(dx, dz) - (obs.r + catRadius);
+      penetration = -Math.min(0, signed);
+      if (signed > 0 && signed < nearPadding) nearness = nearPadding - signed;
+    } else if (obs.kind === "box") {
+      const ox = Math.abs(dx) - (obs.hx + catRadius);
+      const oz = Math.abs(dz) - (obs.hz + catRadius);
+      if (ox <= 0 && oz <= 0) {
+        penetration = Math.min(-ox, -oz);
+      } else {
+        const outX = Math.max(0, ox);
+        const outZ = Math.max(0, oz);
+        const gap = Math.hypot(outX, outZ);
+        if (gap < nearPadding) nearness = nearPadding - gap;
+      }
+    } else if (obs.kind === "obb") {
+      const c = Math.cos(obs.yaw);
+      const s = Math.sin(obs.yaw);
+      const lx = c * dx + s * dz;
+      const lz = -s * dx + c * dz;
+      const ox = Math.abs(lx) - (obs.hx + catRadius);
+      const oz = Math.abs(lz) - (obs.hz + catRadius);
+      if (ox <= 0 && oz <= 0) {
+        penetration = Math.min(-ox, -oz);
+      } else {
+        const outX = Math.max(0, ox);
+        const outZ = Math.max(0, oz);
+        const gap = Math.hypot(outX, outZ);
+        if (gap < nearPadding) nearness = nearPadding - gap;
+      }
+    }
+
+    if (penetration > 0) {
+      intersectCount++;
+      if (penetration > maxPenetration) maxPenetration = penetration;
+    } else if (nearness > 0) {
+      nearCount++;
+      if (nearness > maxNearness) maxNearness = nearness;
+    }
+  }
+
+  return { intersectCount, nearCount, maxPenetration, maxNearness };
+}
+
+function isCatCagedByPickups() {
+  const staticObstacles = buildCatObstacles(false);
+  const dynamicObstacles = buildCatObstacles(true, true);
+  const clearance = CAT_NAV.clearance * 0.9;
+  const radii = [0.28, 0.42];
+  const dirs = 16;
+  let staticFree = 0;
+  let dynamicFree = 0;
+
+  for (const r of radii) {
+    for (let i = 0; i < dirs; i++) {
+      const t = (i / dirs) * Math.PI * 2;
+      const x = cat.pos.x + Math.cos(t) * r;
+      const z = cat.pos.z + Math.sin(t) * r;
+      const sFree = !isCatPointBlocked(x, z, staticObstacles, clearance);
+      if (sFree) {
+        staticFree++;
+        if (!isCatPointBlocked(x, z, dynamicObstacles, clearance)) dynamicFree++;
+      }
+    }
+  }
+
+  return staticFree >= 3 && dynamicFree === 0;
+}
+
+function findNearestCatRecoveryPoint(preferred, includePickups = true) {
+  const obstacles = buildCatObstacles(includePickups, includePickups);
+  const clearance = CAT_NAV.clearance * 0.9;
+  const isFree = (x, z) => !isCatPointBlocked(x, z, obstacles, clearance);
+  const isNavigable = (x, z) => {
+    if (!isFree(x, z)) return false;
+    let exits = 0;
+    const exitR = 0.26;
+    for (let i = 0; i < 8; i++) {
+      const t = (i / 8) * Math.PI * 2;
+      const ex = x + Math.cos(t) * exitR;
+      const ez = z + Math.sin(t) * exitR;
+      if (isFree(ex, ez)) exits++;
+      if (exits >= 2) return true;
+    }
+    return false;
+  };
+
+  if (isNavigable(preferred.x, preferred.z)) return preferred.clone();
+
+  let best = null;
+  let bestD2 = Infinity;
+  for (let r = 0.16; r <= 2.8; r += 0.12) {
+    const steps = Math.max(12, Math.floor(r * 34));
+    for (let i = 0; i < steps; i++) {
+      const t = (i / steps) * Math.PI * 2;
+      const x = preferred.x + Math.cos(t) * r;
+      const z = preferred.z + Math.sin(t) * r;
+      if (!isNavigable(x, z)) continue;
+      const d2 = (x - preferred.x) * (x - preferred.x) + (z - preferred.z) * (z - preferred.z);
+      if (d2 < bestD2) {
+        bestD2 = d2;
+        if (!best) best = new THREE.Vector3();
+        best.set(x, 0, z);
+      }
+    }
+    if (best) break;
+  }
+  return best;
+}
+
+function recoverCatFromPickupTrap(dt) {
+  if (cat.jump || cat.onTable || cat.group.position.y > 0.04) {
+    cat.nav.pickupTrapT = 0;
+    cat.nav.unstuckCheckAt = clockTime;
+    cat.nav.unstuckCheckPos.copy(cat.pos);
+    return false;
+  }
+
+  const since = clockTime - cat.nav.unstuckCheckAt;
+  if (since < CAT_NAV.unstuckCheckInterval) return false;
+
+  const moved = cat.pos.distanceTo(cat.nav.unstuckCheckPos);
+  const sampleDt = since;
+  cat.nav.unstuckCheckAt = clockTime;
+  cat.nav.unstuckCheckPos.copy(cat.pos);
+
+  const overlap = getCatPickupOverlap();
+  const intrusion = getCatObstacleIntrusion();
+  const caged = isCatCagedByPickups();
+  const goal = getCurrentGroundGoal();
+  const hasGoal = !!goal;
+  const goalDist2 = hasGoal ? cat.pos.distanceToSquared(goal) : 0;
+  const nearGoal = hasGoal && goalDist2 < 0.18 * 0.18;
+  const movementStalled = hasGoal && !nearGoal && moved < CAT_NAV.unstuckMinMove && cat.nav.stuckT > 0.16;
+  const nearIntrusion = intrusion.nearCount > 0 && moved < CAT_NAV.unstuckMinMove * 1.25;
+  const trapDetected = intrusion.intersectCount > 0 || nearIntrusion || overlap.count > 0 || caged || movementStalled;
+
+  if (!trapDetected) {
+    cat.nav.pickupTrapT = Math.max(0, cat.nav.pickupTrapT - sampleDt * 2.2);
+    return false;
+  }
+
+  const overlapPressure = overlap.count > 0 ? 1 + overlap.maxPenetration * 3.2 : 1.0;
+  const intrusionPressure =
+    intrusion.intersectCount > 0
+      ? 1 + intrusion.maxPenetration * 4.0
+      : intrusion.nearCount > 0
+        ? 1 + intrusion.maxNearness * 3.0
+        : 1.0;
+  const cageBoost = caged ? 1.9 : 1.0;
+  cat.nav.pickupTrapT += sampleDt * Math.max(overlapPressure, intrusionPressure) * cageBoost;
+  if (cat.nav.pickupTrapT < 0.1) return false;
+
+  let recovery = findNearestCatRecoveryPoint(cat.pos, true);
+  if (!recovery) recovery = findNearestCatRecoveryPoint(cat.pos, false);
+  if (!recovery || recovery.distanceToSquared(cat.pos) < 0.01) {
+    nudgeBlockingPickupAwayFromCat();
+    cat.nav.pickupTrapT = 0.12;
+    return false;
+  }
+
+  cat.pos.copy(recovery);
+  cat.group.position.set(cat.pos.x, 0, cat.pos.z);
+  cat.nav.goal.set(cat.pos.x, 0, cat.pos.z);
+  cat.nav.path.length = 0;
+  cat.nav.index = 0;
+  cat.nav.repathAt = 0;
+  cat.nav.steerYaw = NaN;
+  cat.nav.stuckT = 0;
+  cat.nav.pickupTrapT = 0;
+  cat.nav.unstuckCheckAt = clockTime;
+  cat.nav.unstuckCheckPos.copy(cat.pos);
+  cat.status = "Recovering";
+  nudgeBlockingPickupAwayFromCat();
+
+  if (goal) ensureCatPath(goal, true, true);
+  return true;
+}
+
 function nudgeBlockingPickupAwayFromCat() {
   let best = null;
   let bestD2 = Infinity;
   for (const p of pickups) {
     if (!p.body) continue;
     if (dragState && dragState.pickup === p) continue;
-    if (p.body.position.y > 0.34) continue;
+    if (p.body.position.y > 1.2) continue;
     const dx = p.body.position.x - cat.pos.x;
     const dz = p.body.position.z - cat.pos.z;
     const d2 = dx * dx + dz * dz;
@@ -2396,55 +2698,9 @@ function nudgeBlockingPickupAwayFromCat() {
   return true;
 }
 
-function tryStartGroundHop(target) {
-  if (cat.jump || cat.onTable) return false;
-  if (clockTime < cat.nextHopAt) return false;
-  if (cat.group.position.y > 0.05) return false;
-
-  const staticObstacles = buildCatObstacles(false);
-  const dynamicObstacles = buildCatObstacles(true);
-  const baseDir = new THREE.Vector2(target.x - cat.pos.x, target.z - cat.pos.z);
-  if (baseDir.lengthSq() < 1e-4) {
-    baseDir.set(Math.sin(cat.group.rotation.y), Math.cos(cat.group.rotation.y));
-  }
-  baseDir.normalize();
-
-  const distances = [0.62, 0.78, 0.92];
-  const yawOffsets = [0, 0.42, -0.42, 0.78, -0.78];
-  for (const dist of distances) {
-    for (const yawOff of yawOffsets) {
-      const c = Math.cos(yawOff);
-      const s = Math.sin(yawOff);
-      const dx = baseDir.x * c - baseDir.y * s;
-      const dz = baseDir.x * s + baseDir.y * c;
-      const landX = cat.pos.x + dx * dist;
-      const landZ = cat.pos.z + dz * dist;
-
-      if (isCatPointBlocked(landX, landZ, staticObstacles, CAT_NAV.clearance * 0.9)) continue;
-      if (isCatPointBlocked(landX, landZ, dynamicObstacles, CAT_NAV.clearance * 0.55)) continue;
-      tempFrom.set(cat.pos.x, 0, cat.pos.z);
-      tempTo.set(landX, 0, landZ);
-      if (!hasClearTravelLine(tempFrom, tempTo, staticObstacles)) continue;
-
-      cat.nextHopAt = clockTime + CAT_NAV.hopCooldown;
-      cat.nav.path.length = 0;
-      cat.nav.index = 0;
-      cat.nav.repathAt = clockTime + 0.2;
-      cat.nav.stuckT = 0;
-      startJump(new THREE.Vector3(landX, 0, landZ), 0, CAT_NAV.hopDur, CAT_NAV.hopArc, cat.state, {
-        easePos: true,
-        easeY: true,
-        avoidDeskClip: false,
-      });
-      return true;
-    }
-  }
-  return false;
-}
-
 function getCurrentGroundGoal() {
   if (cat.state === "patrol") return cat.waypoints[cat.wpIndex];
-  if (cat.state === "toDesk") return cat.jumpAnchor || nearestDeskJumpAnchor(cat.pos);
+  if (cat.state === "toDesk") return cat.jumpAnchor || bestDeskJumpAnchor(cat.pos);
   if (cat.state === "toCatnip" && game.catnip) return game.catnip.pos;
   if (cat.state === "toCup") return new THREE.Vector3(desk.cup.x - 0.36, 0, desk.cup.z + 0.02);
   return null;
@@ -2594,8 +2850,17 @@ function updateCat(dt) {
     cat.lastState = cat.state;
     cat.stateT = 0;
     cat.phaseT = 0;
+    cat.nav.steerYaw = NaN;
+    cat.nav.pickupTrapT = 0;
+    cat.nav.unstuckCheckAt = clockTime;
+    cat.nav.unstuckCheckPos.copy(cat.pos);
   } else {
     cat.stateT += dt;
+  }
+
+  if (!cat.jump && recoverCatFromPickupTrap(dt)) {
+    animateCatPose(dt, false);
+    return;
   }
 
   if (!cat.jump && cat.group.position.y <= 0.03 && cat.nav.stuckT > CAT_NAV.stuckReset) {
@@ -2606,16 +2871,19 @@ function updateCat(dt) {
     cat.nav.path.length = 0;
     cat.nav.index = 0;
     cat.nav.repathAt = 0;
+    cat.nav.steerYaw = NaN;
+    cat.nav.pickupTrapT = 0;
+    cat.nav.unstuckCheckAt = clockTime;
+    cat.nav.unstuckCheckPos.copy(cat.pos);
     cat.nav.stuckT = 0;
     cat.wpIndex = (cat.wpIndex + 1) % cat.waypoints.length;
   }
 
   if (!cat.jump && cat.group.position.y <= 0.03 && cat.nav.stuckT > 0.7) {
     const rescueGoal = getCurrentGroundGoal();
-    if (rescueGoal && tryStartGroundHop(rescueGoal)) {
-      cat.status = "Hopping over clutter";
-      animateCatPose(dt, false);
-      return;
+    if (rescueGoal) {
+      ensureCatPath(rescueGoal, true, true);
+      cat.nav.repathAt = clockTime + CAT_NAV.repathInterval;
     }
     if (cat.nav.stuckT > 1.1 && nudgeBlockingPickupAwayFromCat()) {
       cat.nav.repathAt = 0;
@@ -2680,22 +2948,32 @@ function updateCat(dt) {
   }
 
   if (cat.state === "toDesk") {
-    if (cat.stateT > 8.0) {
-      cat.jumpAnchor = nearestDeskJumpAnchor(cat.pos);
+    const shouldReplanAnchor =
+      cat.stateT > 8.0 ||
+      !cat.jumpAnchor ||
+      (cat.nav.stuckT > 0.46 && clockTime >= cat.nav.anchorReplanAt);
+    if (shouldReplanAnchor) {
+      cat.jumpAnchor = bestDeskJumpAnchor(cat.pos);
       cat.jumpTargets = null;
       cat.jumpApproachLock = false;
       cat.nav.path.length = 0;
       cat.nav.index = 0;
       cat.nav.repathAt = 0;
-      cat.stateT = 0;
+      cat.nav.anchorReplanAt = clockTime + 0.55;
+      if (cat.stateT > 8.0) cat.stateT = 0;
     }
-    if (!cat.jumpAnchor) cat.jumpAnchor = nearestDeskJumpAnchor(cat.pos);
-    if (!cat.jumpApproachLock && cat.pos.distanceToSquared(cat.jumpAnchor) < 0.62 * 0.62) {
-      cat.jumpApproachLock = true;
+    if (!cat.jumpApproachLock && cat.pos.distanceToSquared(cat.jumpAnchor) < 0.4 * 0.4) {
+      const staticObstacles = buildCatObstacles(false);
+      if (hasClearTravelLine(cat.pos, cat.jumpAnchor, staticObstacles)) {
+        cat.jumpApproachLock = true;
+      }
+    }
+    if (cat.jumpApproachLock && cat.pos.distanceToSquared(cat.jumpAnchor) > 0.56 * 0.56) {
+      cat.jumpApproachLock = false;
     }
     const reachedDesk = moveCatToward(cat.jumpAnchor, dt, 0.92, 0, {
       direct: cat.jumpApproachLock,
-      ignoreDynamic: cat.jumpApproachLock,
+      ignoreDynamic: false,
     });
     cat.status = "Approaching jump point";
     animateCatPose(dt, true);
