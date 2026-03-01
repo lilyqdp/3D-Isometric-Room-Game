@@ -67,6 +67,46 @@ const ROOM = {
   floorY: 0.0,
 };
 
+function buildDeskJumpAnchors(desk, options = {}) {
+  const offsetX = options.offsetX ?? 0.72;
+  const offsetZ = options.offsetZ ?? 0.68;
+  const step = options.step ?? 0.5;
+  const cornerPadX = options.cornerPadX ?? 0.28;
+  const cornerPadZ = options.cornerPadZ ?? 0.24;
+
+  const minX = desk.pos.x - desk.sizeX * 0.5 + cornerPadX;
+  const maxX = desk.pos.x + desk.sizeX * 0.5 - cornerPadX;
+  const minZ = desk.pos.z - desk.sizeZ * 0.5 + cornerPadZ;
+  const maxZ = desk.pos.z + desk.sizeZ * 0.5 - cornerPadZ;
+  const anchors = [];
+
+  const addEdgeAlongX = (z) => {
+    const span = Math.max(0.001, maxX - minX);
+    const samples = Math.max(2, Math.ceil(span / step) + 1);
+    for (let i = 0; i < samples; i++) {
+      const t = samples <= 1 ? 0 : i / (samples - 1);
+      anchors.push(new THREE.Vector3(THREE.MathUtils.lerp(minX, maxX, t), 0, z));
+    }
+  };
+
+  const addEdgeAlongZ = (x) => {
+    const span = Math.max(0.001, maxZ - minZ);
+    const samples = Math.max(2, Math.ceil(span / step) + 1);
+    for (let i = 0; i < samples; i++) {
+      const t = samples <= 1 ? 0 : i / (samples - 1);
+      anchors.push(new THREE.Vector3(x, 0, THREE.MathUtils.lerp(minZ, maxZ, t)));
+    }
+  };
+
+  // Full perimeter at stable offsets from each desk edge.
+  addEdgeAlongX(desk.pos.z + desk.sizeZ * 0.5 + offsetZ);
+  addEdgeAlongX(desk.pos.z - desk.sizeZ * 0.5 - offsetZ);
+  addEdgeAlongZ(desk.pos.x + desk.sizeX * 0.5 + offsetX);
+  addEdgeAlongZ(desk.pos.x - desk.sizeX * 0.5 - offsetX);
+
+  return anchors;
+}
+
 const desk = {
   pos: new THREE.Vector3(-2.4, 0, -2.6),
   sizeX: 3.1,
@@ -77,12 +117,7 @@ const desk = {
   // Keep cup near edge so a swipe reliably sends it off the desk.
   cup: new THREE.Vector3(-0.98, 0, -2.22),
 };
-const DESK_JUMP_ANCHORS = [
-  new THREE.Vector3(desk.pos.x + desk.sizeX * 0.5 + 0.72, 0, desk.pos.z - 0.1),
-  new THREE.Vector3(desk.pos.x + desk.sizeX * 0.5 + 0.72, 0, desk.pos.z + 0.55),
-  new THREE.Vector3(desk.pos.x - 0.25, 0, desk.pos.z + desk.sizeZ * 0.5 + 0.68),
-  new THREE.Vector3(desk.pos.x + 0.55, 0, desk.pos.z + desk.sizeZ * 0.5 + 0.68),
-];
+const DESK_JUMP_ANCHORS = buildDeskJumpAnchors(desk);
 
 const hamper = {
   pos: new THREE.Vector3(-5.8, 0, 2.4),
@@ -363,6 +398,7 @@ const catnipRuntime = createCatnipRuntime({
   CAT_NAV,
   game,
   cat,
+  cup,
   desk,
   pickups,
   pickupRadius: (pickup) => pickupsRuntime.pickupRadius(pickup),
@@ -370,6 +406,7 @@ const catnipRuntime = createCatnipRuntime({
   isCatPointBlocked: (...args) => navRuntime.isCatPointBlocked(...args),
   canReachGroundTarget: (...args) => navRuntime.canReachGroundTarget(...args),
   findSafeGroundPoint: (...args) => navRuntime.findSafeGroundPoint(...args),
+  bestDeskJumpAnchor: (...args) => navRuntime.bestDeskJumpAnchor(...args),
   getClockTime: () => clockTime,
 });
 

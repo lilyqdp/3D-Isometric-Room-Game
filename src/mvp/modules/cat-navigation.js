@@ -83,12 +83,120 @@ function ensureCatPath(target, force = false, useDynamic = false) {
   return pathRuntime.ensureCatPath(target, force, useDynamic);
 }
 
+const deskJumpPerimeter = (() => {
+  if (Array.isArray(DESK_JUMP_ANCHORS) && DESK_JUMP_ANCHORS.length > 0) {
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minZ = Infinity;
+    let maxZ = -Infinity;
+    for (let i = 0; i < DESK_JUMP_ANCHORS.length; i++) {
+      const a = DESK_JUMP_ANCHORS[i];
+      if (!a) continue;
+      minX = Math.min(minX, a.x);
+      maxX = Math.max(maxX, a.x);
+      minZ = Math.min(minZ, a.z);
+      maxZ = Math.max(maxZ, a.z);
+    }
+    if (Number.isFinite(minX) && Number.isFinite(maxX) && Number.isFinite(minZ) && Number.isFinite(maxZ)) {
+      return { minX, maxX, minZ, maxZ };
+    }
+  }
+  return {
+    minX: desk.pos.x - desk.sizeX * 0.5 - 0.72,
+    maxX: desk.pos.x + desk.sizeX * 0.5 + 0.72,
+    minZ: desk.pos.z - desk.sizeZ * 0.5 - 0.68,
+    maxZ: desk.pos.z + desk.sizeZ * 0.5 + 0.68,
+  };
+})();
+
+function sampleDeskJumpPerimeter(step = 0.24) {
+  const points = [];
+  const { minX, maxX, minZ, maxZ } = deskJumpPerimeter;
+  const spanX = Math.max(0.001, maxX - minX);
+  const spanZ = Math.max(0.001, maxZ - minZ);
+  const nx = Math.max(2, Math.ceil(spanX / step) + 1);
+  const nz = Math.max(2, Math.ceil(spanZ / step) + 1);
+  for (let i = 0; i < nx; i++) {
+    const t = nx <= 1 ? 0 : i / (nx - 1);
+    const x = THREE.MathUtils.lerp(minX, maxX, t);
+    points.push(new THREE.Vector3(x, 0, minZ));
+    points.push(new THREE.Vector3(x, 0, maxZ));
+  }
+  for (let i = 1; i < nz - 1; i++) {
+    const t = nz <= 1 ? 0 : i / (nz - 1);
+    const z = THREE.MathUtils.lerp(minZ, maxZ, t);
+    points.push(new THREE.Vector3(minX, 0, z));
+    points.push(new THREE.Vector3(maxX, 0, z));
+  }
+  return points;
+}
+
+const deskJumpPerimeterSamples = sampleDeskJumpPerimeter(Math.max(0.2, CAT_NAV.step * 0.8));
+
+function closestPointOnDeskJumpPerimeter(from) {
+  const { minX, maxX, minZ, maxZ } = deskJumpPerimeter;
+  const x = THREE.MathUtils.clamp(from.x, minX, maxX);
+  const z = THREE.MathUtils.clamp(from.z, minZ, maxZ);
+
+  const outX = from.x < minX || from.x > maxX;
+  const outZ = from.z < minZ || from.z > maxZ;
+  if (outX || outZ) {
+    return new THREE.Vector3(x, 0, z);
+  }
+
+  const dxL = Math.abs(from.x - minX);
+  const dxR = Math.abs(maxX - from.x);
+  const dzB = Math.abs(from.z - minZ);
+  const dzT = Math.abs(maxZ - from.z);
+  let side = "left";
+  let best = dxL;
+  if (dxR < best) {
+    best = dxR;
+    side = "right";
+  }
+  if (dzB < best) {
+    best = dzB;
+    side = "bottom";
+  }
+  if (dzT < best) {
+    side = "top";
+  }
+
+  if (side === "left") return new THREE.Vector3(minX, 0, z);
+  if (side === "right") return new THREE.Vector3(maxX, 0, z);
+  if (side === "bottom") return new THREE.Vector3(x, 0, minZ);
+  return new THREE.Vector3(x, 0, maxZ);
+}
+
+function getDeskJumpCandidates(from) {
+  const candidates = [closestPointOnDeskJumpPerimeter(from)];
+  const seen = new Set();
+  const add = (v) => {
+    const key = `${v.x.toFixed(3)}:${v.z.toFixed(3)}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    candidates.push(v);
+  };
+  for (let i = 0; i < deskJumpPerimeterSamples.length; i++) {
+    add(deskJumpPerimeterSamples[i]);
+  }
+  if (Array.isArray(DESK_JUMP_ANCHORS)) {
+    for (let i = 0; i < DESK_JUMP_ANCHORS.length; i++) {
+      const a = DESK_JUMP_ANCHORS[i];
+      if (a) add(a);
+    }
+  }
+  candidates.sort((a, b) => from.distanceToSquared(a) - from.distanceToSquared(b));
+  return candidates;
+}
+
 function nearestDeskJumpAnchor(from) {
   const staticObstacles = buildCatObstacles(false);
+  const candidates = getDeskJumpCandidates(from);
   let best = null;
   let bestD = Infinity;
-  for (let i = 0; i < DESK_JUMP_ANCHORS.length; i++) {
-    const a = DESK_JUMP_ANCHORS[i];
+  for (let i = 0; i < candidates.length; i++) {
+    const a = candidates[i];
     if (isCatPointBlocked(a.x, a.z, staticObstacles, CAT_NAV.clearance * 0.85)) continue;
     const d = from.distanceToSquared(a);
     if (d < bestD) {
@@ -96,31 +204,28 @@ function nearestDeskJumpAnchor(from) {
       best = a;
     }
   }
-  return best || DESK_JUMP_ANCHORS[0];
+  return best || candidates[0] || new THREE.Vector3(desk.pos.x, 0, desk.pos.z);
 }
 
 
 function bestDeskJumpAnchor(from) {
   const staticObstacles = buildCatObstacles(false);
   const dynamicObstacles = buildCatObstacles(true);
-  let best = null;
-  let bestScore = Infinity;
+  const candidates = getDeskJumpCandidates(from);
+  let fallback = null;
+  const maxChecks = Math.min(candidates.length, 32);
 
-  for (let i = 0; i < DESK_JUMP_ANCHORS.length; i++) {
-    const a = DESK_JUMP_ANCHORS[i];
+  for (let i = 0; i < maxChecks; i++) {
+    const a = candidates[i];
     if (isCatPointBlocked(a.x, a.z, staticObstacles, CAT_NAV.clearance * 0.85)) continue;
 
     const path = computeCatPath(from, a, staticObstacles);
     if (!isPathTraversable(path, staticObstacles)) continue;
-    const dynamicClear = isPathTraversable(path, dynamicObstacles);
-    const score = catPathDistance(path) + (dynamicClear ? 0 : 2.2);
-    if (score < bestScore) {
-      bestScore = score;
-      best = a;
-    }
+    if (isPathTraversable(path, dynamicObstacles)) return a;
+    if (!fallback) fallback = a;
   }
 
-  return best || nearestDeskJumpAnchor(from);
+  return fallback || nearestDeskJumpAnchor(from);
 }
 
 

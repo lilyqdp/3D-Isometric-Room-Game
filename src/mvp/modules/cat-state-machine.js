@@ -89,7 +89,25 @@ export function updateCatStateMachineRuntime(ctx, dt) {
       scene.remove(game.catnip.mesh);
       game.catnip = null;
       if (cat.state === "toCatnip" || cat.state === "distracted") {
-        cat.state = "patrol";
+        if (cat.onTable) {
+          if (!cup.broken && !cup.falling) {
+            // Stay on the desk and resume normal desk behavior.
+            cat.state = "toCup";
+            cat.phaseT = 0;
+          } else {
+            // No cup target available; jump down instead of snapping through the desk.
+            cat.onTable = false;
+            const downPoint = findSafeGroundPoint(desk.approach);
+            startJump(downPoint, 0, 0.62, 0.34, "patrol", {
+              easePos: true,
+              easeY: true,
+              avoidDeskClip: true,
+            });
+            return;
+          }
+        } else {
+          cat.state = "patrol";
+        }
       }
     }
 
@@ -105,22 +123,50 @@ export function updateCatStateMachineRuntime(ctx, dt) {
 
     // Catnip overrides knock behavior.
     if (game.catnip) {
-      if (cat.onTable) {
-        cat.onTable = false;
-        const downPoint = findSafeGroundPoint(desk.approach);
-        startJump(downPoint, 0, 0.62, 0.34, "toCatnip", {
-          easePos: true,
-          easeY: true,
-          avoidDeskClip: true,
-        });
+      const catnipOnDesk = game.catnip.surface === "desk";
+      if (catnipOnDesk) {
+        if (cat.onTable) {
+          clearCatJumpTargets();
+          cat.state = "toCatnip";
+          const atCatnip = moveCatToward(game.catnip.pos, stepDt, 0.95, desk.topY + 0.02, {
+            direct: true,
+            ignoreDynamic: true,
+          });
+          cat.status = atCatnip ? "Distracted" : "Going to catnip";
+          animateCatPose(stepDt, !atCatnip);
+          return;
+        }
+        const inDeskJumpFlow =
+          cat.state === "toDesk" ||
+          cat.state === "prepareJump" ||
+          cat.state === "launchUp" ||
+          cat.state === "forepawHook" ||
+          cat.state === "pullUp" ||
+          cat.state === "jumpSettle";
+        if (!inDeskJumpFlow) {
+          clearCatJumpTargets();
+          cat.jumpAnchor = bestDeskJumpAnchor(cat.pos);
+          cat.state = "toDesk";
+          cat.stateT = 0;
+        }
+      } else {
+        if (cat.onTable) {
+          cat.onTable = false;
+          const downPoint = findSafeGroundPoint(desk.approach);
+          startJump(downPoint, 0, 0.62, 0.34, "toCatnip", {
+            easePos: true,
+            easeY: true,
+            avoidDeskClip: true,
+          });
+          return;
+        }
+        clearCatJumpTargets();
+        cat.state = "toCatnip";
+        const atCatnip = moveCatToward(game.catnip.pos, stepDt, 1.0, 0);
+        cat.status = atCatnip ? "Distracted" : "Going to catnip";
+        animateCatPose(stepDt, !atCatnip);
         return;
       }
-      clearCatJumpTargets();
-      cat.state = "toCatnip";
-      const atCatnip = moveCatToward(game.catnip.pos, stepDt, 1.0, 0);
-      cat.status = atCatnip ? "Distracted" : "Going to catnip";
-      animateCatPose(stepDt, !atCatnip);
-      return;
     }
 
     if (cat.state === "patrol") {
@@ -253,7 +299,7 @@ export function updateCatStateMachineRuntime(ctx, dt) {
       cat.status = "Settling on desk";
       animateCatPose(stepDt, false);
       if (cat.phaseT >= JUMP_UP_TIMING.settle) {
-        cat.state = "toCup";
+        cat.state = game.catnip && game.catnip.surface === "desk" ? "toCatnip" : "toCup";
         cat.phaseT = 0;
       }
       return;
