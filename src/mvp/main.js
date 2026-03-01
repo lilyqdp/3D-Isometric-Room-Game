@@ -74,7 +74,8 @@ const desk = {
   topY: 1.08,
   approach: new THREE.Vector3(-0.8, 0, -1.8),
   perch: new THREE.Vector3(-1.9, 0, -2.3),
-  cup: new THREE.Vector3(-1.85, 0, -2.4),
+  // Keep cup near edge so a swipe reliably sends it off the desk.
+  cup: new THREE.Vector3(-0.98, 0, -2.22),
 };
 const DESK_JUMP_ANCHORS = [
   new THREE.Vector3(desk.pos.x + desk.sizeX * 0.5 + 0.72, 0, desk.pos.z - 0.1),
@@ -336,9 +337,10 @@ const navRuntime = createCatNavigationRuntime({
 
 const cupRuntime = createCupRuntime({
   THREE,
+  CANNON,
   scene,
+  physics,
   desk,
-  DESK_LEGS,
   CUP_COLLISION,
   cup,
   cat,
@@ -839,12 +841,7 @@ function resetGame() {
   game.invalidCatnipUntil = 0;
   catnipRuntime.clearCatnip();
 
-  cup.group.visible = true;
-  cup.group.position.set(desk.cup.x, desk.topY + 0.01, desk.cup.z);
-  cup.group.rotation.set(0, 0, 0);
-  cup.falling = false;
-  cup.broken = false;
-  cup.vel.set(0, 0, 0);
+  cupRuntime.resetCup();
 
   cupRuntime.clearShatter();
   pickupsRuntime.resetInteraction();

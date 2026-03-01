@@ -42,15 +42,28 @@ export function makeCup({ THREE, desk, CUP_COLLISION }) {
 
   return {
     group,
-    vel: new THREE.Vector3(),
     falling: false,
     broken: false,
+    body: null,
+    bodyInWorld: false,
+    knockedAt: -1,
   };
 }
 
 export function createCupRuntime(ctx) {
-  const { THREE, scene, desk, DESK_LEGS, CUP_COLLISION, cup, cat, game, shatterBits, getClockTime } = ctx;
+  const { THREE, CANNON, scene, physics, desk, CUP_COLLISION, cup, cat, game, shatterBits, getClockTime } = ctx;
   const tempV3 = new THREE.Vector3();
+  const CUP_PHYSICS = {
+    mass: 0.22,
+    halfR: CUP_COLLISION.radius,
+    halfH: 0.21,
+    tableY: desk.topY + 0.01,
+    breakFloorY: 0.06,
+    edgePushDelay: 0.55,
+    edgePushStrength: 0.52,
+    minKnockSpeed2: 1.8 * 1.8,
+  };
+  const cupMat = physics.materials.rimMat || physics.materials.shellMat;
 
   function spawnCupShatter(x, z) {
     const glassMat = new THREE.MeshStandardMaterial({
@@ -74,70 +87,99 @@ export function createCupRuntime(ctx) {
     }
   }
 
-  function resolveCupDeskCollision() {
-    if (cup.broken) return;
-    const p = cup.group.position;
-    const v = cup.vel;
-    const r = CUP_COLLISION.radius;
+  function ensureCupBody() {
+    if (cup.body) return cup.body;
 
-    const topHalfX = desk.sizeX * 0.5 - 0.06;
-    const topHalfZ = desk.sizeZ * 0.5 - 0.06;
-    const inTopX = Math.abs(p.x - desk.pos.x) <= topHalfX;
-    const inTopZ = Math.abs(p.z - desk.pos.z) <= topHalfZ;
-    if (inTopX && inTopZ && p.y < CUP_COLLISION.topY && v.y < 0) {
-      p.y = CUP_COLLISION.topY;
-      v.y = Math.max(0, -v.y * 0.14);
-      v.x *= 0.92;
-      v.z *= 0.92;
-    }
+    const body = new CANNON.Body({
+      mass: 0,
+      type: CANNON.Body.STATIC,
+      material: cupMat,
+      linearDamping: 0.16,
+      angularDamping: 0.18,
+    });
+    body.addShape(new CANNON.Box(new CANNON.Vec3(CUP_PHYSICS.halfR, CUP_PHYSICS.halfH, CUP_PHYSICS.halfR)));
+    cup.body = body;
+    return body;
+  }
 
-    for (const leg of DESK_LEGS) {
-      if (p.y > leg.topY + 0.16 || p.y < 0.02) continue;
-      const dx = p.x - leg.x;
-      const dz = p.z - leg.z;
-      const limX = leg.halfX + r;
-      const limZ = leg.halfZ + r;
-      if (Math.abs(dx) >= limX || Math.abs(dz) >= limZ) continue;
-      const penX = limX - Math.abs(dx);
-      const penZ = limZ - Math.abs(dz);
-      if (penX < penZ) {
-        const sx = Math.sign(dx || 1);
-        p.x = leg.x + sx * limX;
-        v.x = Math.abs(v.x) * sx * 0.55;
-        v.z *= 0.84;
-      } else {
-        const sz = Math.sign(dz || 1);
-        p.z = leg.z + sz * limZ;
-        v.z = Math.abs(v.z) * sz * 0.55;
-        v.x *= 0.84;
-      }
-      v.y = Math.max(v.y, 0.12);
+  function setCupBodyFromMeshStatic() {
+    const body = ensureCupBody();
+    body.type = CANNON.Body.STATIC;
+    body.mass = 0;
+    body.updateMassProperties();
+    body.position.set(cup.group.position.x, cup.group.position.y + CUP_PHYSICS.halfH, cup.group.position.z);
+    body.quaternion.setFromEuler(0, cup.group.rotation.y, 0);
+    body.velocity.setZero();
+    body.angularVelocity.setZero();
+    if (!cup.bodyInWorld) {
+      physics.world.addBody(body);
+      cup.bodyInWorld = true;
     }
   }
 
+  function syncCupMeshFromBody() {
+    if (!cup.body) return;
+    cup.group.position.set(
+      cup.body.position.x,
+      cup.body.position.y - CUP_PHYSICS.halfH,
+      cup.body.position.z
+    );
+    cup.group.quaternion.set(cup.body.quaternion.x, cup.body.quaternion.y, cup.body.quaternion.z, cup.body.quaternion.w);
+  }
+
+  function ensureCupBreaksAfterStrongKnock() {
+    if (!cup.falling || cup.broken || !cup.body) return;
+    const elapsed = getClockTime() - cup.knockedAt;
+    if (elapsed < CUP_PHYSICS.edgePushDelay) return;
+    const speed2 =
+      cup.body.velocity.x * cup.body.velocity.x +
+      cup.body.velocity.y * cup.body.velocity.y +
+      cup.body.velocity.z * cup.body.velocity.z;
+    if (speed2 >= CUP_PHYSICS.minKnockSpeed2) return;
+
+    const edgeX = desk.pos.x + desk.sizeX * 0.5 - 0.05;
+    const edgeZ = desk.pos.z + desk.sizeZ * 0.5 - 0.05;
+    const dirX = Math.sign(edgeX - cup.body.position.x) || 1;
+    const dirZ = Math.sign(edgeZ - cup.body.position.z) || 1;
+    cup.body.applyImpulse(
+      new CANNON.Vec3(dirX * CUP_PHYSICS.edgePushStrength, 0.12, dirZ * CUP_PHYSICS.edgePushStrength),
+      cup.body.position
+    );
+  }
+
   function knockCup() {
-    if (cup.falling || cup.broken) return;
+    if (cup.falling || cup.broken || !cup.body) return;
     cup.falling = true;
+    cup.knockedAt = getClockTime();
+    cup.body.type = CANNON.Body.DYNAMIC;
+    cup.body.mass = CUP_PHYSICS.mass;
+    cup.body.updateMassProperties();
+    cup.body.wakeUp();
     tempV3.copy(cup.group.position).sub(cat.group.position);
     tempV3.y = 0;
     if (tempV3.lengthSq() < 0.0001) tempV3.set(1, 0, 0);
     tempV3.normalize();
-    cup.vel.set(tempV3.x * 2.2, 1.55, tempV3.z * 2.1);
+    cup.body.velocity.set(tempV3.x * 0.68, 0.5, tempV3.z * 0.65);
+    cup.body.angularVelocity.set(-tempV3.z * 2.1, 0.35, tempV3.x * 2.1);
+    cup.body.applyImpulse(new CANNON.Vec3(tempV3.x * 0.225, 0.105, tempV3.z * 0.225), cup.body.position);
   }
 
   function updateCup(dt) {
+    if (!cup.body) return;
     if (!cup.falling || cup.broken) return;
-    cup.vel.y -= 9.4 * dt;
-    cup.group.position.addScaledVector(cup.vel, dt);
-    cup.group.rotation.x += dt * 6.2;
-    cup.group.rotation.z += dt * 5.2;
-    resolveCupDeskCollision();
 
-    if (cup.group.position.y <= 0.06) {
-      cup.group.position.y = 0.06;
+    ensureCupBreaksAfterStrongKnock();
+    syncCupMeshFromBody();
+
+    if (cup.group.position.y <= CUP_PHYSICS.breakFloorY) {
+      cup.group.position.y = CUP_PHYSICS.breakFloorY;
       cup.falling = false;
       cup.broken = true;
       cup.group.visible = false;
+      if (cup.bodyInWorld) {
+        physics.world.removeBody(cup.body);
+        cup.bodyInWorld = false;
+      }
       spawnCupShatter(cup.group.position.x, cup.group.position.z);
       if (game.pendingLoseAt == null) {
         game.pendingLoseAt = getClockTime() + 1.0;
@@ -174,10 +216,24 @@ export function createCupRuntime(ctx) {
     shatterBits.length = 0;
   }
 
+  function resetCup() {
+    cup.falling = false;
+    cup.broken = false;
+    cup.knockedAt = -1;
+    cup.group.visible = true;
+    cup.group.position.set(desk.cup.x, CUP_PHYSICS.tableY, desk.cup.z);
+    cup.group.rotation.set(0, 0, 0);
+    setCupBodyFromMeshStatic();
+  }
+
+  // Ensure a collider exists from the first frame.
+  resetCup();
+
   return {
     knockCup,
     updateCup,
     updateShatter,
     clearShatter,
+    resetCup,
   };
 }
