@@ -9,6 +9,7 @@ You can verify installation with:
 
 node -v
 npm -v
+
 🛠 Install Dependencies
 
 From the project root directory (isometric-room/), run:
