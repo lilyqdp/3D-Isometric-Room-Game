@@ -60,8 +60,9 @@ export function createCupRuntime(ctx) {
     tableY: desk.topY + 0.01,
     breakFloorY: 0.06,
     edgePushDelay: 0.55,
-    edgePushStrength: 0.52,
+    edgePushStrength: 0.22,
     minKnockSpeed2: 1.8 * 1.8,
+    dynamicAngularDamping: 0.99,
   };
   const cupMat = physics.materials.rimMat || physics.materials.shellMat;
 
@@ -97,7 +98,9 @@ export function createCupRuntime(ctx) {
       linearDamping: 0.16,
       angularDamping: 0.18,
     });
-    body.addShape(new CANNON.Box(new CANNON.Vec3(CUP_PHYSICS.halfR, CUP_PHYSICS.halfH, CUP_PHYSICS.halfR)));
+    // Keep cylinder upright (Cannon cylinders are Y-up by default).
+    const cyl = new CANNON.Cylinder(CUP_PHYSICS.halfR, CUP_PHYSICS.halfR, CUP_PHYSICS.halfH * 2, 14);
+    body.addShape(cyl);
     cup.body = body;
     return body;
   }
@@ -106,6 +109,7 @@ export function createCupRuntime(ctx) {
     const body = ensureCupBody();
     body.type = CANNON.Body.STATIC;
     body.mass = 0;
+    body.angularFactor.set(1, 1, 1);
     body.updateMassProperties();
     body.position.set(cup.group.position.x, cup.group.position.y + CUP_PHYSICS.halfH, cup.group.position.z);
     body.quaternion.setFromEuler(0, cup.group.rotation.y, 0);
@@ -142,7 +146,7 @@ export function createCupRuntime(ctx) {
     const dirX = Math.sign(edgeX - cup.body.position.x) || 1;
     const dirZ = Math.sign(edgeZ - cup.body.position.z) || 1;
     cup.body.applyImpulse(
-      new CANNON.Vec3(dirX * CUP_PHYSICS.edgePushStrength, 0.12, dirZ * CUP_PHYSICS.edgePushStrength),
+      new CANNON.Vec3(dirX * CUP_PHYSICS.edgePushStrength, 0.02, dirZ * CUP_PHYSICS.edgePushStrength),
       cup.body.position
     );
   }
@@ -153,15 +157,17 @@ export function createCupRuntime(ctx) {
     cup.knockedAt = getClockTime();
     cup.body.type = CANNON.Body.DYNAMIC;
     cup.body.mass = CUP_PHYSICS.mass;
+    cup.body.angularDamping = CUP_PHYSICS.dynamicAngularDamping;
+    cup.body.angularFactor.set(0.2, 0.2, 0.2);
     cup.body.updateMassProperties();
     cup.body.wakeUp();
     tempV3.copy(cup.group.position).sub(cat.group.position);
     tempV3.y = 0;
     if (tempV3.lengthSq() < 0.0001) tempV3.set(1, 0, 0);
     tempV3.normalize();
-    cup.body.velocity.set(tempV3.x * 0.68, 0.5, tempV3.z * 0.65);
-    cup.body.angularVelocity.set(-tempV3.z * 2.1, 0.35, tempV3.x * 2.1);
-    cup.body.applyImpulse(new CANNON.Vec3(tempV3.x * 0.225, 0.105, tempV3.z * 0.225), cup.body.position);
+    cup.body.velocity.set(tempV3.x * 0.17, 0.125, tempV3.z * 0.1625);
+    cup.body.angularVelocity.set(0, 0, 0);
+    cup.body.applyImpulse(new CANNON.Vec3(tempV3.x * 0.05625, 0.02625, tempV3.z * 0.05625), cup.body.position);
   }
 
   function updateCup(dt) {
