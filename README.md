@@ -18,6 +18,12 @@ npm install
 
 This will install all required packages, including Three.js and Vite.
 
+If you get an invalid permission error with npm install, try
+
+rm -rf node_modules package-lock.json
+
+Then 'run npm install' again.
+
 ▶️ Run the Development Server
 
 Start the local development server with:
