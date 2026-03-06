@@ -541,9 +541,12 @@ function buildCat() {
     rig: null,
     clipMixer: null,
     clipActions: new Map(),
+    stateClipActions: {},
     walkAction: null,
     idleAction: null,
     activeClipAction: null,
+    clipSpecialAction: null,
+    clipSpecialState: "",
     useClipLocomotion: false,
     pos: new THREE.Vector3(1.5, 0, 1.7),
     state: "patrol", // patrol|toDesk|prepareJump|launchUp|forepawHook|pullUp|jumpSettle|toCup|swipe|jumpDown|sit|toCatnip|distracted
@@ -730,19 +733,49 @@ function pickAnimationClip(clips, patterns) {
   return null;
 }
 
+function inferCatModelYawOffset(clips) {
+  // IndieCat clips are authored facing forward in this project's frame.
+  const looksLikeIndieCat = clips?.some((c) => /walk_f|trot_f|run_f|sit_idle/i.test(c.name));
+  return looksLikeIndieCat ? 0 : CAT_MODEL_YAW_OFFSET;
+}
+
+function isRootMotionTrack(trackName) {
+  const dot = trackName.lastIndexOf(".");
+  if (dot === -1) return false;
+  const node = trackName.slice(0, dot).toLowerCase();
+  const prop = trackName.slice(dot + 1).toLowerCase();
+  if (prop !== "position" && prop !== "quaternion") return false;
+
+  // Remove global/root transforms so clips play in-place and follow nav movement.
+  const normalized = node.replace(/[^a-z0-9]+/g, " ").trim();
+  if (/\b(armature|j root|rootjoint|root 00|root|hip|hips|j hips|cat)\b/.test(normalized)) return true;
+  return false;
+}
+
+function makeInPlaceClip(THREERef, clip) {
+  const tracks = clip.tracks.filter((track) => !isRootMotionTrack(track.name));
+  if (tracks.length === clip.tracks.length) return clip;
+  return new THREERef.AnimationClip(clip.name, clip.duration, tracks);
+}
+
 function setupCatClipAnimations(catObject, model, clips) {
   catObject.clipMixer = null;
   catObject.clipActions.clear();
+  catObject.stateClipActions = {};
   catObject.walkAction = null;
   catObject.idleAction = null;
   catObject.activeClipAction = null;
+  catObject.clipSpecialAction = null;
+  catObject.clipSpecialState = "";
   catObject.useClipLocomotion = false;
 
   if (!clips || clips.length === 0) return;
 
+  const inPlaceClips = clips.map((clip) => makeInPlaceClip(THREE, clip));
+
   const mixer = new THREE.AnimationMixer(model);
   catObject.clipMixer = mixer;
-  for (const clip of clips) {
+  for (const clip of inPlaceClips) {
     const action = mixer.clipAction(clip);
     action.enabled = true;
     action.setLoop(THREE.LoopRepeat, Infinity);
@@ -750,9 +783,9 @@ function setupCatClipAnimations(catObject, model, clips) {
   }
 
   const walkClip =
-    pickAnimationClip(clips, [/walk/i, /locomot/i, /trot/i, /run/i, /move/i]) || clips[0];
+    pickAnimationClip(inPlaceClips, [/walk/i, /locomot/i, /trot/i, /run/i, /move/i]) || inPlaceClips[0];
   const idleClip =
-    pickAnimationClip(clips, [/idle/i, /rest/i, /stand/i, /wait/i]) || walkClip || clips[0];
+    pickAnimationClip(inPlaceClips, [/idle/i, /rest/i, /stand/i, /wait/i]) || walkClip || inPlaceClips[0];
 
   const walkAction = mixer.clipAction(walkClip);
   const idleAction = mixer.clipAction(idleClip);
@@ -767,22 +800,89 @@ function setupCatClipAnimations(catObject, model, clips) {
   catObject.idleAction = idleAction;
   catObject.activeClipAction = idleAction;
   catObject.useClipLocomotion = true;
+
+  const clipStates = {
+    jumpUp: {
+      // Prefer upright jump clips; Edge_from tends to pitch the whole cat down for this rig.
+      clip: pickAnimationClip(inPlaceClips, [/inplace/i, /jump/i, /crouch_f/i]),
+      loop: false,
+      speed: 1.0,
+    },
+    jumpSettle: {
+      clip: pickAnimationClip(inPlaceClips, [/land_stop/i, /^idle$/i, /base/i]),
+      loop: false,
+      speed: 1.0,
+    },
+    jumpDown: {
+      clip: pickAnimationClip(inPlaceClips, [/fall_low/i, /fall_high/i, /land_stop/i]),
+      loop: false,
+      speed: 1.0,
+    },
+    swipe: {
+      clip: pickAnimationClip(inPlaceClips, [/paw_r/i, /^paw_/i, /bite_r/i, /bite_l/i]),
+      loop: false,
+      speed: 1.0,
+    },
+    sit: {
+      clip: pickAnimationClip(inPlaceClips, [/sit_idle/i, /sit/i, /pet_sit/i]),
+      loop: true,
+      speed: 1.0,
+    },
+  };
+  for (const [stateKey, def] of Object.entries(clipStates)) {
+    if (!def.clip) continue;
+    clipStates[stateKey] = {
+      action: mixer.clipAction(def.clip),
+      loop: def.loop,
+      speed: def.speed,
+    };
+  }
+  catObject.stateClipActions = clipStates;
 }
 
-function setCatClipSpecialPose(catObject, special) {
-  if (!catObject.useClipLocomotion || !catObject.walkAction || !catObject.idleAction) return;
+function setCatClipSpecialPose(catObject, specialState, dt = 0) {
+  if (!catObject.useClipLocomotion || !catObject.walkAction || !catObject.idleAction) return false;
+  const def = specialState ? catObject.stateClipActions?.[specialState] : null;
+  if (!def || !def.action || !catObject.clipMixer) return false;
+
+  const action = def.action;
+  action.enabled = true;
+  action.clampWhenFinished = true;
+  action.setLoop(def.loop ? THREE.LoopRepeat : THREE.LoopOnce, def.loop ? Infinity : 1);
+  action.setEffectiveTimeScale(def.speed ?? 1);
+
   catObject.walkAction.enabled = true;
   catObject.idleAction.enabled = true;
-  if (special) {
-    catObject.walkAction.play();
-    catObject.idleAction.play();
-    catObject.walkAction.setEffectiveWeight(0);
-    catObject.idleAction.setEffectiveWeight(0);
+  catObject.walkAction.play();
+  catObject.idleAction.play();
+  catObject.walkAction.setEffectiveWeight(0);
+  catObject.idleAction.setEffectiveWeight(0);
+
+  if (catObject.clipSpecialAction !== action) {
+    action.reset().play();
+    action.setEffectiveWeight(1);
+    if (catObject.clipSpecialAction && catObject.clipSpecialAction !== action) {
+      catObject.clipSpecialAction.crossFadeTo(action, 0.12, false);
+    }
+    catObject.clipSpecialAction = action;
+    catObject.clipSpecialState = specialState;
+  } else {
+    action.setEffectiveWeight(1);
   }
+
+  catObject.activeClipAction = action;
+  catObject.clipMixer.update(dt);
+  return true;
 }
 
 function updateCatClipLocomotion(catObject, dt, moving, speedNorm) {
   if (!catObject.useClipLocomotion || !catObject.clipMixer || !catObject.walkAction || !catObject.idleAction) return;
+  if (catObject.clipSpecialAction) {
+    catObject.clipSpecialAction.setEffectiveWeight(0);
+    catObject.clipSpecialAction.stop();
+    catObject.clipSpecialAction = null;
+    catObject.clipSpecialState = "";
+  }
 
   const walkAction = catObject.walkAction;
   const idleAction = catObject.idleAction;
@@ -845,7 +945,7 @@ function loadCatModel(catObject) {
           }
         });
 
-        model.rotation.y = CAT_MODEL_YAW_OFFSET;
+        model.rotation.y = inferCatModelYawOffset(gltf.animations || []);
         normalizeCatModel(model);
         catObject.modelAnchor.clear();
         catObject.modelAnchor.add(model);
