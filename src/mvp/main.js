@@ -590,9 +590,10 @@ function buildCat() {
     activeClipAction: null,
     clipSpecialAction: null,
     clipSpecialState: "",
+    clipSpecialPhase: "",
     useClipLocomotion: false,
     pos: new THREE.Vector3(1.5, 0, 1.7),
-    state: "patrol", // patrol|toDesk|prepareJump|launchUp|forepawHook|pullUp|jumpSettle|toCup|swipe|jumpDown|sit|toCatnip|distracted
+    state: "patrol", // patrol|toDesk|prepareJump|launchUp|forepawHook|pullUp|jumpSettle|toCup|swipe|jumpDown|landStop|sit|toCatnip|distracted
     lastState: "patrol",
     stateT: 0,
     status: "Patrolling",
@@ -606,6 +607,7 @@ function buildCat() {
     phaseT: 0,
     swipeHitDone: false,
     jump: null, // {from,to,fromY,toY,dur,t,arc,next}
+    landStopNextState: "patrol",
     jumpAnchor: null,
     jumpTargets: null, // {hook, top}
     jumpApproachLock: false,
@@ -801,6 +803,19 @@ function makeInPlaceClip(THREERef, clip) {
   return new THREERef.AnimationClip(clip.name, clip.duration, tracks);
 }
 
+function makeFrameRangeClip(THREERef, clip, name, startFrame, endFrame, fps = 30) {
+  if (!clip) return null;
+  const safeStart = Math.max(0, Math.floor(startFrame));
+  const safeEnd = Math.max(safeStart + 1, Math.floor(endFrame));
+  try {
+    const sub = THREERef.AnimationUtils.subclip(clip, name, safeStart, safeEnd, fps);
+    if (!sub || !sub.tracks || sub.tracks.length === 0 || sub.duration <= 0) return null;
+    return sub;
+  } catch (err) {
+    return null;
+  }
+}
+
 function setupCatClipAnimations(catObject, model, clips) {
   catObject.clipMixer = null;
   catObject.clipActions.clear();
@@ -810,6 +825,7 @@ function setupCatClipAnimations(catObject, model, clips) {
   catObject.activeClipAction = null;
   catObject.clipSpecialAction = null;
   catObject.clipSpecialState = "";
+  catObject.clipSpecialPhase = "";
   catObject.useClipLocomotion = false;
 
   if (!clips || clips.length === 0) return;
@@ -844,6 +860,14 @@ function setupCatClipAnimations(catObject, model, clips) {
   catObject.activeClipAction = idleAction;
   catObject.useClipLocomotion = true;
 
+  const lookDownClip = pickAnimationClip(inPlaceClips, [/lookdown/i]);
+  const eatIntroClip =
+    makeFrameRangeClip(THREE, lookDownClip, "LookDown__eatIntro", 1, 28, 30) ||
+    pickAnimationClip(inPlaceClips, [/eat_/i, /look/i, /licking_sit/i, /drink_/i, /sit_idle/i]);
+  const eatLoopClip =
+    makeFrameRangeClip(THREE, lookDownClip, "LookDown__eatLoop", 29, 32, 30) ||
+    pickAnimationClip(inPlaceClips, [/licking_sit/i, /eat_/i, /drink_/i, /sit_idle/i, /look/i]);
+
   const clipStates = {
     jumpUp: {
       // Prefer upright jump clips; Edge_from tends to pitch the whole cat down for this rig.
@@ -857,7 +881,12 @@ function setupCatClipAnimations(catObject, model, clips) {
       speed: 1.0,
     },
     jumpDown: {
-      clip: pickAnimationClip(inPlaceClips, [/fall_low/i, /fall_high/i, /land_stop/i]),
+      clip: pickAnimationClip(inPlaceClips, [/fall_low/i, /fall_high/i, /jump/i]),
+      loop: false,
+      speed: 1.0,
+    },
+    landStop: {
+      clip: pickAnimationClip(inPlaceClips, [/land_stop/i, /land_run/i, /sit_to/i]),
       loop: false,
       speed: 1.0,
     },
@@ -871,8 +900,26 @@ function setupCatClipAnimations(catObject, model, clips) {
       loop: true,
       speed: 1.0,
     },
+    eat: {
+      introClip: eatIntroClip,
+      loopClip: eatLoopClip,
+      introSpeed: 1.0,
+      loopSpeed: 1.0,
+    },
   };
   for (const [stateKey, def] of Object.entries(clipStates)) {
+    if (def.introClip || def.loopClip) {
+      const introAction = def.introClip ? mixer.clipAction(def.introClip) : null;
+      const loopAction = def.loopClip ? mixer.clipAction(def.loopClip) : null;
+      if (!introAction && !loopAction) continue;
+      clipStates[stateKey] = {
+        introAction,
+        loopAction,
+        introSpeed: def.introSpeed ?? 1.0,
+        loopSpeed: def.loopSpeed ?? 1.0,
+      };
+      continue;
+    }
     if (!def.clip) continue;
     clipStates[stateKey] = {
       action: mixer.clipAction(def.clip),
@@ -886,13 +933,42 @@ function setupCatClipAnimations(catObject, model, clips) {
 function setCatClipSpecialPose(catObject, specialState, dt = 0) {
   if (!catObject.useClipLocomotion || !catObject.walkAction || !catObject.idleAction) return false;
   const def = specialState ? catObject.stateClipActions?.[specialState] : null;
-  if (!def || !def.action || !catObject.clipMixer) return false;
+  if (!def || !catObject.clipMixer) return false;
+  const hasSequence = !!(def.introAction || def.loopAction);
+  if (!hasSequence && !def.action) return false;
+  const mixer = catObject.clipMixer;
 
-  const action = def.action;
-  action.enabled = true;
-  action.clampWhenFinished = true;
-  action.setLoop(def.loop ? THREE.LoopRepeat : THREE.LoopOnce, def.loop ? Infinity : 1);
-  action.setEffectiveTimeScale(def.speed ?? 1);
+  const startAction = (action, loop, speed, crossFade = true) => {
+    action.enabled = true;
+    action.clampWhenFinished = true;
+    action.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, loop ? Infinity : 1);
+    action.setEffectiveTimeScale(speed ?? 1);
+    if (catObject.clipSpecialAction !== action) {
+      action.reset().play();
+      action.setEffectiveWeight(1);
+      if (crossFade && catObject.clipSpecialAction && catObject.clipSpecialAction !== action) {
+        catObject.clipSpecialAction.crossFadeTo(action, 0.1, false);
+      }
+      catObject.clipSpecialAction = action;
+    } else {
+      action.play();
+      action.setEffectiveWeight(1);
+    }
+  };
+
+  if (hasSequence) {
+    if (catObject.clipSpecialState !== specialState) {
+      const firstAction = def.introAction || def.loopAction;
+      const firstIsLoop = !def.introAction;
+      startAction(firstAction, firstIsLoop, firstIsLoop ? def.loopSpeed : def.introSpeed, true);
+      catObject.clipSpecialState = specialState;
+      catObject.clipSpecialPhase = firstIsLoop ? "loop" : "intro";
+    }
+  } else if (catObject.clipSpecialState !== specialState) {
+    startAction(def.action, def.loop, def.speed, true);
+    catObject.clipSpecialState = specialState;
+    catObject.clipSpecialPhase = def.loop ? "loop" : "single";
+  }
 
   catObject.walkAction.enabled = true;
   catObject.idleAction.enabled = true;
@@ -901,20 +977,30 @@ function setCatClipSpecialPose(catObject, specialState, dt = 0) {
   catObject.walkAction.setEffectiveWeight(0);
   catObject.idleAction.setEffectiveWeight(0);
 
-  if (catObject.clipSpecialAction !== action) {
-    action.reset().play();
-    action.setEffectiveWeight(1);
-    if (catObject.clipSpecialAction && catObject.clipSpecialAction !== action) {
-      catObject.clipSpecialAction.crossFadeTo(action, 0.12, false);
+  if (hasSequence) {
+    if (catObject.clipSpecialPhase === "intro" && def.introAction && def.loopAction) {
+      const introAction = def.introAction;
+      if (catObject.clipSpecialAction !== introAction) {
+        startAction(introAction, false, def.introSpeed, false);
+      }
+      const introDur = Math.max(introAction.getClip().duration, 0.001);
+      if (introAction.time >= introDur - 1 / 60) {
+        startAction(def.loopAction, true, def.loopSpeed, true);
+        catObject.clipSpecialPhase = "loop";
+      }
+    } else if (def.loopAction) {
+      if (catObject.clipSpecialAction !== def.loopAction) {
+        startAction(def.loopAction, true, def.loopSpeed, false);
+      } else {
+        catObject.clipSpecialAction.setEffectiveWeight(1);
+      }
     }
-    catObject.clipSpecialAction = action;
-    catObject.clipSpecialState = specialState;
-  } else {
-    action.setEffectiveWeight(1);
+  } else if (catObject.clipSpecialAction) {
+    catObject.clipSpecialAction.setEffectiveWeight(1);
   }
 
-  catObject.activeClipAction = action;
-  catObject.clipMixer.update(dt);
+  catObject.activeClipAction = catObject.clipSpecialAction;
+  mixer.update(dt);
   return true;
 }
 
@@ -925,6 +1011,7 @@ function updateCatClipLocomotion(catObject, dt, moving, speedNorm) {
     catObject.clipSpecialAction.stop();
     catObject.clipSpecialAction = null;
     catObject.clipSpecialState = "";
+    catObject.clipSpecialPhase = "";
   }
 
   const walkAction = catObject.walkAction;
@@ -1066,6 +1153,13 @@ function resetGame() {
   cat.phaseT = 0;
   cat.swipeHitDone = false;
   cat.jump = null;
+  cat.landStopNextState = "patrol";
+  cat.clipSpecialState = "";
+  cat.clipSpecialPhase = "";
+  if (cat.clipSpecialAction) {
+    cat.clipSpecialAction.stop();
+    cat.clipSpecialAction = null;
+  }
   clearCatJumpTargets();
   cat.nav.goal.set(cat.pos.x, 0, cat.pos.z);
   cat.nav.debugDestination.set(cat.pos.x, 0, cat.pos.z);
