@@ -50,6 +50,8 @@ replayBtn.addEventListener("click", () => {
 });
 
 const sortedStatEl = document.getElementById("sortedStat");
+const endMenuEl = document.getElementById("endMenu");
+const endTitleEl = document.getElementById("endTitle");
 const catStateStatEl = document.getElementById("catStateStat");
 const cupStatEl = document.getElementById("cupStat");
 const catnipStatEl = document.getElementById("catnipStat");
@@ -478,6 +480,8 @@ const uiRuntime = createUIRuntime({
   game,
   cat,
   cup,
+  endMenuEl,
+  endTitleEl,
   getClockTime: () => clockTime,
 });
 

@@ -9,6 +9,8 @@ export function createUIRuntime(ctx) {
     cat,
     cup,
     getClockTime,
+    endMenuEl,
+    endTitleEl,
   } = ctx;
 
   function updateUI() {
@@ -31,16 +33,17 @@ export function createUIRuntime(ctx) {
     }
 
     if (game.state === "lost") {
-      resultEl.textContent = `You Lost - ${game.reason}`;
-      resultEl.style.color = "#ffb3b3";
+      endMenuEl.classList.remove("hidden");
+      endTitleEl.textContent = `You Lost - ${game.reason}`;
+      document.getElementById("hud").style.display = "none";
     } else if (game.state === "won") {
-      resultEl.textContent = "You Won - all items sorted before the knock loss.";
-      resultEl.style.color = "#b8f5be";
+      endMenuEl.classList.remove("hidden");
+      endTitleEl.textContent = "You Won!";
+      document.getElementById("hud").style.display = "none";
     } else {
-      resultEl.textContent = "";
+      endMenuEl.classList.add("hidden");
     }
   }
-
   return {
     updateUI,
   };
