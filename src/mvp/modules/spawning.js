@@ -44,6 +44,114 @@ function isPickupSpawnValid({
   return canReachGroundTarget(catSpawn, tempTarget, staticObstacles);
 }
 
+function findPickupSpawnCandidate({
+  type,
+  staticObstacles,
+  placed,
+  catSpawn,
+  camera,
+  ROOM,
+  CAT_NAV,
+  CAT_COLLISION,
+  isCatPointBlocked,
+  canReachGroundTarget,
+  tempTarget,
+}) {
+  const minX = ROOM.minX + CAT_NAV.margin + 0.2;
+  const maxX = ROOM.maxX - CAT_NAV.margin - 0.2;
+  const minZ = ROOM.minZ + CAT_NAV.margin + 0.2;
+  const maxZ = ROOM.maxZ - CAT_NAV.margin - 0.2;
+
+  let placedItem = null;
+  for (let i = 0; i < 420; i++) {
+    const x = THREE.MathUtils.lerp(minX, maxX, Math.random());
+    const z = THREE.MathUtils.lerp(minZ, maxZ, Math.random());
+    if (
+      !isPickupSpawnValid({
+        type,
+        x,
+        z,
+        staticObstacles,
+        placed,
+        catSpawn,
+        camera,
+        CAT_COLLISION,
+        isCatPointBlocked,
+        canReachGroundTarget,
+        tempTarget,
+      })
+    ) {
+      continue;
+    }
+    placedItem = { type, x, z, radius: type === "laundry" ? 0.2 : 0.16 };
+    break;
+  }
+
+  if (!placedItem) {
+    const fallback = [
+      [-2.8, 0.6],
+      [-1.5, 1.3],
+      [-0.2, 0.3],
+      [1.0, 0.9],
+      [0.5, -0.5],
+      [-3.3, -0.3],
+    ];
+    for (const [fx, fz] of fallback) {
+      if (
+        !isPickupSpawnValid({
+          type,
+          x: fx,
+          z: fz,
+          staticObstacles,
+          placed,
+          catSpawn,
+          camera,
+          CAT_COLLISION,
+          isCatPointBlocked,
+          canReachGroundTarget,
+          tempTarget,
+        })
+      ) {
+        continue;
+      }
+      placedItem = { type, x: fx, z: fz, radius: type === "laundry" ? 0.2 : 0.16 };
+      break;
+    }
+  }
+
+  if (!placedItem) {
+    for (let r = 0.7; r <= 5.0 && !placedItem; r += 0.28) {
+      const steps = Math.max(12, Math.floor(r * 18));
+      for (let i = 0; i < steps; i++) {
+        const t = (i / steps) * Math.PI * 2;
+        const x = catSpawn.x + Math.cos(t) * r;
+        const z = catSpawn.z + Math.sin(t) * r;
+        if (
+          !isPickupSpawnValid({
+            type,
+            x,
+            z,
+            staticObstacles,
+            placed,
+            catSpawn,
+            camera,
+            CAT_COLLISION,
+            isCatPointBlocked,
+            canReachGroundTarget,
+            tempTarget,
+          })
+        ) {
+          continue;
+        }
+        placedItem = { type, x, z, radius: type === "laundry" ? 0.2 : 0.16 };
+        break;
+      }
+    }
+  }
+
+  return placedItem;
+}
+
 export function pickRandomCatSpawnPoint({
   camera,
   ROOM,
@@ -88,10 +196,6 @@ export function addRandomPickups({
   addPickup,
 }) {
   const staticObstacles = buildCatObstacles(false);
-  const minX = ROOM.minX + CAT_NAV.margin + 0.2;
-  const maxX = ROOM.maxX - CAT_NAV.margin - 0.2;
-  const minZ = ROOM.minZ + CAT_NAV.margin + 0.2;
-  const maxZ = ROOM.maxZ - CAT_NAV.margin - 0.2;
   const placed = [];
   const spawnOrder = [
     ...Array.from({ length: SPAWN_COUNTS.laundry }, () => "laundry"),
@@ -100,92 +204,62 @@ export function addRandomPickups({
   const tempTarget = new THREE.Vector3();
 
   for (const type of spawnOrder) {
-    let placedItem = null;
-    for (let i = 0; i < 420; i++) {
-      const x = THREE.MathUtils.lerp(minX, maxX, Math.random());
-      const z = THREE.MathUtils.lerp(minZ, maxZ, Math.random());
-      if (
-        !isPickupSpawnValid({
-          type,
-          x,
-          z,
-          staticObstacles,
-          placed,
-          catSpawn,
-          camera,
-          CAT_COLLISION,
-          isCatPointBlocked,
-          canReachGroundTarget,
-          tempTarget,
-        })
-      ) {
-        continue;
-      }
-      placedItem = { type, x, z, radius: type === "laundry" ? 0.2 : 0.16 };
-      break;
-    }
-    if (!placedItem) {
-      const fallback = [
-        [-2.8, 0.6],
-        [-1.5, 1.3],
-        [-0.2, 0.3],
-        [1.0, 0.9],
-        [0.5, -0.5],
-        [-3.3, -0.3],
-      ];
-      for (const [fx, fz] of fallback) {
-        if (
-          !isPickupSpawnValid({
-            type,
-            x: fx,
-            z: fz,
-            staticObstacles,
-            placed,
-            catSpawn,
-            camera,
-            CAT_COLLISION,
-            isCatPointBlocked,
-            canReachGroundTarget,
-            tempTarget,
-          })
-        ) {
-          continue;
-        }
-        placedItem = { type, x: fx, z: fz, radius: type === "laundry" ? 0.2 : 0.16 };
-        break;
-      }
-    }
-    if (!placedItem) {
-      for (let r = 0.7; r <= 5.0 && !placedItem; r += 0.28) {
-        const steps = Math.max(12, Math.floor(r * 18));
-        for (let i = 0; i < steps; i++) {
-          const t = (i / steps) * Math.PI * 2;
-          const x = catSpawn.x + Math.cos(t) * r;
-          const z = catSpawn.z + Math.sin(t) * r;
-          if (
-            !isPickupSpawnValid({
-              type,
-              x,
-              z,
-              staticObstacles,
-              placed,
-              catSpawn,
-              camera,
-              CAT_COLLISION,
-              isCatPointBlocked,
-              canReachGroundTarget,
-              tempTarget,
-            })
-          ) {
-            continue;
-          }
-          placedItem = { type, x, z, radius: type === "laundry" ? 0.2 : 0.16 };
-          break;
-        }
-      }
-    }
+    const placedItem = findPickupSpawnCandidate({
+      type,
+      staticObstacles,
+      placed,
+      catSpawn,
+      camera,
+      ROOM,
+      CAT_NAV,
+      CAT_COLLISION,
+      isCatPointBlocked,
+      canReachGroundTarget,
+      tempTarget,
+    });
     if (placedItem) placed.push(placedItem);
   }
 
   for (const p of placed) addPickup(p.type, p.x, p.z);
+}
+
+export function spawnRandomPickup({
+  type,
+  catSpawn,
+  camera,
+  ROOM,
+  CAT_NAV,
+  CAT_COLLISION,
+  pickups,
+  pickupRadius,
+  buildCatObstacles,
+  isCatPointBlocked,
+  canReachGroundTarget,
+  addPickup,
+}) {
+  const staticObstacles = buildCatObstacles(false);
+  const placed = pickups.map((p) => ({
+    x: p.mesh.position.x,
+    z: p.mesh.position.z,
+    radius: pickupRadius(p),
+  }));
+  const tempTarget = new THREE.Vector3();
+
+  const spawn = findPickupSpawnCandidate({
+    type,
+    staticObstacles,
+    placed,
+    catSpawn,
+    camera,
+    ROOM,
+    CAT_NAV,
+    CAT_COLLISION,
+    isCatPointBlocked,
+    canReachGroundTarget,
+    tempTarget,
+  });
+
+  if (!spawn) return false;
+  addPickup(type, spawn.x, spawn.z);
+  return true;
 }

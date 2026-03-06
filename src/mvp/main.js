@@ -4,7 +4,7 @@ import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import * as CANNON from "./vendor/cannon-es.js";
 import { makeBins, makeDesk, makeRoomCorner } from "./modules/room.js";
 import { setupPhysicsWorld } from "./modules/physics.js";
-import { addRandomPickups, pickRandomCatSpawnPoint } from "./modules/spawning.js";
+import { addRandomPickups, pickRandomCatSpawnPoint, spawnRandomPickup } from "./modules/spawning.js";
 import { updateCatStateMachineRuntime } from "./modules/cat-state-machine.js";
 import { createPickupsRuntime } from "./modules/pickups.js";
 import { createCatNavigationRuntime } from "./modules/cat-navigation.js";
@@ -28,6 +28,8 @@ hud.style.display = "none";
 
 // Play button
 playBtn.addEventListener("click", () => {
+  game.endlessMode = true;
+  resetGame();
   startMenu.classList.add("hidden");
   hud.style.display = "block";
 });
@@ -58,9 +60,11 @@ const catnipStatEl = document.getElementById("catnipStat");
 const resultEl = document.getElementById("result");
 const catnipBtn = document.getElementById("catnipBtn");
 const restartBtn = document.getElementById("restartBtn");
+const modeBtnEl = document.getElementById("modeBtn");
 const debugBtnEl = document.getElementById("debugBtn");
 const messFillEl = document.getElementById("messFill");
 const messValueEl = document.getElementById("messValue");
+const modeStatEl = document.getElementById("modeStat");
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
@@ -183,10 +187,14 @@ const trashCan = {
 
 const game = {
   state: "playing", // playing | lost | won
+  endlessMode: false,
   reason: "",
   sorted: 0,
   total: 0,
   mess: 0,
+  elapsed: 0,
+  laundrySpawnBudget: 0,
+  trashSpawnBudget: 0,
   pendingLoseAt: null,
   catnip: null, // {mesh,pos,expiresAt}
   catnipCooldownUntil: 0,
@@ -281,7 +289,17 @@ const CAT_PATH_CLEARANCE_EPSILON = 0.001;
 
 const SPAWN_COUNTS = {
   laundry: 2,
-  trash: 3,
+  trash: 2,
+};
+
+const ENDLESS_SPAWN = {
+  laundryRateStart: 1 / 20, // once every 20s
+  trashRateStart: 1 / 12, // once every 12s
+  laundryRateRamp: 1 / 400, // +0.0025 per second
+  trashRateRamp: 1 / 240, // +0.0042 per second
+  messPerItem: 10,
+  loseThreshold: 100,
+  maxSpawnAttemptsPerFrame: 6,
 };
 
 const CUP_COLLISION = {
@@ -334,6 +352,12 @@ catnipBtn.addEventListener("click", () => {
 restartBtn.addEventListener("click", () => {
   resetGame();
 });
+if (modeBtnEl) {
+  modeBtnEl.addEventListener("click", () => {
+    game.endlessMode = !game.endlessMode;
+    resetGame();
+  });
+}
 if (debugBtnEl) {
   debugBtnEl.addEventListener("click", () => toggleDebugView());
 }
@@ -516,7 +540,51 @@ function toggleDebugView() {
   debugRuntime.toggleDebugView(clockTime);
 }
 function addMess(amount) {
-  game.mess = Math.max(0, Math.min(100, game.mess + amount));
+  game.mess = Math.max(0, game.mess + amount);
+}
+
+function spawnPickupOfType(type) {
+  const reachStart = cat.onTable ? findSafeGroundPoint(desk.approach) : cat.pos;
+  const spawned = spawnRandomPickup({
+    type,
+    catSpawn: reachStart,
+    camera,
+    ROOM,
+    CAT_NAV,
+    CAT_COLLISION,
+    pickups,
+    pickupRadius,
+    buildCatObstacles,
+    isCatPointBlocked,
+    canReachGroundTarget,
+    addPickup: pickupsRuntime.addPickup,
+  });
+  if (!spawned) return false;
+  game.total += 1;
+  addMess(ENDLESS_SPAWN.messPerItem);
+  return true;
+}
+
+function updateEndlessSpawning(dt) {
+  if (!game.endlessMode || game.state !== "playing") return;
+
+  game.elapsed += dt;
+  const laundryRate = ENDLESS_SPAWN.laundryRateStart + game.elapsed * ENDLESS_SPAWN.laundryRateRamp;
+  const trashRate = ENDLESS_SPAWN.trashRateStart + game.elapsed * ENDLESS_SPAWN.trashRateRamp;
+  game.laundrySpawnBudget += laundryRate * dt;
+  game.trashSpawnBudget += trashRate * dt;
+
+  let attempts = 0;
+  while (game.laundrySpawnBudget >= 1 && attempts < ENDLESS_SPAWN.maxSpawnAttemptsPerFrame) {
+    game.laundrySpawnBudget -= 1;
+    spawnPickupOfType("laundry");
+    attempts++;
+  }
+  while (game.trashSpawnBudget >= 1 && attempts < ENDLESS_SPAWN.maxSpawnAttemptsPerFrame) {
+    game.trashSpawnBudget -= 1;
+    spawnPickupOfType("trash");
+    attempts++;
+  }
 }
 
 function buildCat() {
@@ -1106,7 +1174,10 @@ function resetGame() {
   game.state = "playing";
   game.reason = "";
   game.sorted = 0;
-  game.mess = 40;
+  game.mess = 0;
+  game.elapsed = 0;
+  game.laundrySpawnBudget = 0;
+  game.trashSpawnBudget = 0;
   game.pendingLoseAt = null;
   game.placeCatnipMode = false;
   game.catnipCooldownUntil = 0;
@@ -1141,6 +1212,7 @@ function resetGame() {
     addPickup: pickupsRuntime.addPickup,
   });
   game.total = pickups.length;
+  game.mess = pickups.length * ENDLESS_SPAWN.messPerItem;
 
   cat.pos.copy(catSpawn);
   cat.group.position.set(cat.pos.x, 0, cat.pos.z);
@@ -1426,6 +1498,8 @@ function win() {
 
 function updateUI() {
   uiRuntime.updateUI();
+  if (modeStatEl) modeStatEl.textContent = game.endlessMode ? "Endless" : "Casual";
+  if (modeBtnEl) modeBtnEl.textContent = game.endlessMode ? "Switch To Casual" : "Switch To Endless";
   updateMessMeter();
 }
 
@@ -1455,12 +1529,16 @@ function animate() {
   if (game.state === "playing") {
     physics.world.step(physics.fixedStep, dt, 10);
     updatePickups(dt);
+    updateEndlessSpawning(dt);
     updateCat(dt);
     updateCup(dt);
     updateShatter(dt);
     if (game.pendingLoseAt != null && clockTime >= game.pendingLoseAt) {
       lose(game.reason || "A desk item hit the floor.");
       game.pendingLoseAt = null;
+    }
+    if (game.endlessMode && game.mess > ENDLESS_SPAWN.loseThreshold) {
+      lose("Mess meter overflowed.");
     }
   }
 

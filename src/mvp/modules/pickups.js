@@ -424,7 +424,7 @@ export function createPickupsRuntime(ctx) {
     if (idx !== -1) pickups.splice(idx, 1);
     game.sorted++;
     addMess(-10);
-    if (game.sorted >= game.total) onAllSorted();
+    if (!game.endlessMode && game.sorted >= game.total) onAllSorted();
   }
 
   function onPointerDown(event) {
