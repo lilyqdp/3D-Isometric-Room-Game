@@ -57,6 +57,8 @@ const resultEl = document.getElementById("result");
 const catnipBtn = document.getElementById("catnipBtn");
 const restartBtn = document.getElementById("restartBtn");
 const debugBtnEl = document.getElementById("debugBtn");
+const messFillEl = document.getElementById("messFill");
+const messValueEl = document.getElementById("messValue");
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
@@ -182,6 +184,7 @@ const game = {
   reason: "",
   sorted: 0,
   total: 0,
+  mess: 0,
   pendingLoseAt: null,
   catnip: null, // {mesh,pos,expiresAt}
   catnipCooldownUntil: 0,
@@ -1320,6 +1323,22 @@ function win() {
 
 function updateUI() {
   uiRuntime.updateUI();
+  updateMessMeter();
+}
+
+function updateMessMeter() {
+  const percent = Math.max(0, Math.min(100, game.mess));
+
+  messFillEl.style.width = percent + "%";
+  messValueEl.textContent = percent + "%";
+
+  if (percent < 40) {
+    messFillEl.style.background = "#5fd36a";
+  } else if (percent < 75) {
+    messFillEl.style.background = "#f0b861";
+  } else {
+    messFillEl.style.background = "#d9534f";
+  }
 }
 
 function animate() {
@@ -1348,3 +1367,8 @@ function animate() {
   renderer.render(scene, camera);
   requestAnimationFrame(animate);
 }
+window.addEventListener("keydown", (e) => {
+  if (e.key === "m") {
+    game.mess += 10;
+  }
+});
