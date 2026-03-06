@@ -379,6 +379,7 @@ const pickupsRuntime = createPickupsRuntime({
   pickups,
   game,
   controls,
+  addMess,
   binVisuals,
   getClockTime: () => clockTime,
   onAllSorted: win,
@@ -509,6 +510,9 @@ function updateDebugView() {
 
 function toggleDebugView() {
   debugRuntime.toggleDebugView(clockTime);
+}
+function addMess(amount) {
+  game.mess = Math.max(0, Math.min(100, game.mess + amount));
 }
 
 function buildCat() {
@@ -1011,6 +1015,7 @@ function resetGame() {
   game.state = "playing";
   game.reason = "";
   game.sorted = 0;
+  game.mess = 40;
   game.pendingLoseAt = null;
   game.placeCatnipMode = false;
   game.catnipCooldownUntil = 0;

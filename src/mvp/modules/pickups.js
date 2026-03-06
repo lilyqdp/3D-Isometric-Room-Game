@@ -23,6 +23,7 @@ export function createPickupsRuntime(ctx) {
     binVisuals,
     getClockTime,
     onAllSorted,
+    addMess,
   } = ctx;
 
   let dragState = null;
@@ -422,6 +423,7 @@ export function createPickupsRuntime(ctx) {
     const idx = pickups.indexOf(pickup);
     if (idx !== -1) pickups.splice(idx, 1);
     game.sorted++;
+    addMess(-10);
     if (game.sorted >= game.total) onAllSorted();
   }
 
