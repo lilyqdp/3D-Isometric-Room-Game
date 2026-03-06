@@ -28,6 +28,10 @@ export function createCatnipRuntime(ctx) {
   const tempFloorHit = new THREE.Vector3();
   const tempDeskHit = new THREE.Vector3();
   const tempFrom = new THREE.Vector3();
+  const CATNIP_SCALE = 0.5;
+  const CATNIP_RADIUS = 0.22 * CATNIP_SCALE;
+  const CATNIP_HEIGHT = 0.04 * CATNIP_SCALE;
+  const CATNIP_HALF_HEIGHT = CATNIP_HEIGHT * 0.5;
 
   function setMouseFromEvent(event) {
     const rect = renderer.domElement.getBoundingClientRect();
@@ -104,7 +108,7 @@ export function createCatnipRuntime(ctx) {
         surface: "desk",
         x: THREE.MathUtils.clamp(deskHit.x, desk.pos.x - desk.sizeX * 0.5 + 0.16, desk.pos.x + desk.sizeX * 0.5 - 0.16),
         z: THREE.MathUtils.clamp(deskHit.z, desk.pos.z - desk.sizeZ * 0.5 + 0.16, desk.pos.z + desk.sizeZ * 0.5 - 0.16),
-        y: desk.topY + 0.02,
+        y: desk.topY + CATNIP_HALF_HEIGHT,
       };
     }
 
@@ -113,7 +117,7 @@ export function createCatnipRuntime(ctx) {
       surface: "floor",
       x: THREE.MathUtils.clamp(floorHit.x, ROOM.minX + 0.6, ROOM.maxX - 0.6),
       z: THREE.MathUtils.clamp(floorHit.z, ROOM.minZ + 0.6, ROOM.maxZ - 0.6),
-      y: 0.02,
+      y: CATNIP_HALF_HEIGHT,
     };
   }
 
@@ -130,7 +134,7 @@ export function createCatnipRuntime(ctx) {
 
     if (game.catnip) scene.remove(game.catnip.mesh);
     const marker = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.22, 0.22, 0.04, 18),
+      new THREE.CylinderGeometry(CATNIP_RADIUS, CATNIP_RADIUS, CATNIP_HEIGHT, 18),
       new THREE.MeshStandardMaterial({ color: 0x71bf62, roughness: 0.8 })
     );
     marker.position.set(placement.x, placement.y, placement.z);

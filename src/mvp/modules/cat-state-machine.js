@@ -37,6 +37,46 @@ export function updateCatStateMachineRuntime(ctx, dt) {
   } = ctx;
 
   const animateCatPose = (stepDt, moving) => animateCatPoseRuntime(ctx, stepDt, moving);
+  const CATNIP_MOUTH_OFFSET = 0.34;
+  const catnipApproachTarget = new THREE.Vector3();
+
+  function getCatnipApproachTarget() {
+    if (!game.catnip) return null;
+
+    let dx = game.catnip.pos.x - cat.pos.x;
+    let dz = game.catnip.pos.z - cat.pos.z;
+    let len = Math.hypot(dx, dz);
+    if (len < 1e-4) {
+      // If we are already very close, reuse facing direction for a stable mouth offset.
+      dx = Math.sin(cat.group.rotation.y);
+      dz = Math.cos(cat.group.rotation.y);
+      len = 1;
+    }
+
+    const ux = dx / len;
+    const uz = dz / len;
+    let tx = game.catnip.pos.x - ux * CATNIP_MOUTH_OFFSET;
+    let tz = game.catnip.pos.z - uz * CATNIP_MOUTH_OFFSET;
+
+    if (game.catnip.surface === "desk") {
+      const edgePad = 0.14;
+      tx = THREE.MathUtils.clamp(tx, desk.pos.x - desk.sizeX * 0.5 + edgePad, desk.pos.x + desk.sizeX * 0.5 - edgePad);
+      tz = THREE.MathUtils.clamp(tz, desk.pos.z - desk.sizeZ * 0.5 + edgePad, desk.pos.z + desk.sizeZ * 0.5 - edgePad);
+    }
+
+    catnipApproachTarget.set(tx, 0, tz);
+    return catnipApproachTarget;
+  }
+
+  function faceCatnip(stepDt) {
+    if (!game.catnip) return;
+    const dx = game.catnip.pos.x - cat.pos.x;
+    const dz = game.catnip.pos.z - cat.pos.z;
+    if (dx * dx + dz * dz < 1e-6) return;
+    const yaw = Math.atan2(dx, dz);
+    const dy = Math.atan2(Math.sin(yaw - cat.group.rotation.y), Math.cos(yaw - cat.group.rotation.y));
+    cat.group.rotation.y += dy * Math.min(1, stepDt * 7.2);
+  }
 
   function updateCatImpl(stepDt) {
     if (game.state !== "playing") return;
@@ -98,7 +138,8 @@ export function updateCatStateMachineRuntime(ctx, dt) {
             // No cup target available; jump down instead of snapping through the desk.
             cat.onTable = false;
             const downPoint = findSafeGroundPoint(desk.approach);
-            startJump(downPoint, 0, 0.62, 0.34, "patrol", {
+            cat.landStopNextState = "patrol";
+            startJump(downPoint, 0, 0.62, 0.34, "landStop", {
               easePos: true,
               easeY: true,
               avoidDeskClip: true,
@@ -127,12 +168,14 @@ export function updateCatStateMachineRuntime(ctx, dt) {
       if (catnipOnDesk) {
         if (cat.onTable) {
           clearCatJumpTargets();
-          cat.state = "toCatnip";
-          const atCatnip = moveCatToward(game.catnip.pos, stepDt, 0.95, desk.topY + 0.02, {
+          const catnipTarget = getCatnipApproachTarget() || game.catnip.pos;
+          const atCatnip = moveCatToward(catnipTarget, stepDt, 0.95, desk.topY + 0.02, {
             direct: true,
             ignoreDynamic: true,
           });
-          cat.status = atCatnip ? "Distracted" : "Going to catnip";
+          faceCatnip(stepDt);
+          cat.state = atCatnip ? "distracted" : "toCatnip";
+          cat.status = atCatnip ? "Eating catnip" : "Going to catnip";
           animateCatPose(stepDt, !atCatnip);
           return;
         }
@@ -153,7 +196,8 @@ export function updateCatStateMachineRuntime(ctx, dt) {
         if (cat.onTable) {
           cat.onTable = false;
           const downPoint = findSafeGroundPoint(desk.approach);
-          startJump(downPoint, 0, 0.62, 0.34, "toCatnip", {
+          cat.landStopNextState = "toCatnip";
+          startJump(downPoint, 0, 0.62, 0.34, "landStop", {
             easePos: true,
             easeY: true,
             avoidDeskClip: true,
@@ -161,9 +205,11 @@ export function updateCatStateMachineRuntime(ctx, dt) {
           return;
         }
         clearCatJumpTargets();
-        cat.state = "toCatnip";
-        const atCatnip = moveCatToward(game.catnip.pos, stepDt, 1.0, 0);
-        cat.status = atCatnip ? "Distracted" : "Going to catnip";
+        const catnipTarget = getCatnipApproachTarget() || game.catnip.pos;
+        const atCatnip = moveCatToward(catnipTarget, stepDt, 1.0, 0);
+        faceCatnip(stepDt);
+        cat.state = atCatnip ? "distracted" : "toCatnip";
+        cat.status = atCatnip ? "Eating catnip" : "Going to catnip";
         animateCatPose(stepDt, !atCatnip);
         return;
       }
@@ -339,7 +385,8 @@ export function updateCatStateMachineRuntime(ctx, dt) {
         clearCatJumpTargets();
         clearCatNavPath(false);
         const downPoint = findSafeGroundPoint(desk.approach);
-        startJump(downPoint, 0, 0.64, 0.34, "sit", {
+        cat.landStopNextState = "sit";
+        startJump(downPoint, 0, 0.64, 0.34, "landStop", {
           easePos: true,
           easeY: true,
           avoidDeskClip: true,
@@ -352,6 +399,18 @@ export function updateCatStateMachineRuntime(ctx, dt) {
     if (cat.state === "jumpDown") {
       cat.status = "Jumping down";
       animateCatPose(stepDt, false);
+      return;
+    }
+
+    if (cat.state === "landStop") {
+      cat.phaseT += stepDt;
+      cat.status = "Landing";
+      animateCatPose(stepDt, false);
+      if (cat.phaseT >= 0.22) {
+        cat.state = cat.landStopNextState || "patrol";
+        cat.phaseT = 0;
+        cat.landStopNextState = "patrol";
+      }
       return;
     }
 

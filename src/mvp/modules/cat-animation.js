@@ -35,6 +35,7 @@ function animateCatPose(dt, moving) {
 
   if (cat.usingRealisticModel) {
     const isSit = cat.state === "sit";
+    const isEatingCatnip = cat.state === "distracted";
     const usesSpecialPose =
       cat.state === "swipe" ||
       isPrepareJump ||
@@ -42,13 +43,17 @@ function animateCatPose(dt, moving) {
       isForepawHook ||
       isPullUp ||
       isJumpSettle ||
+      cat.state === "landStop" ||
+      isEatingCatnip ||
       isSit ||
       !!cat.jump;
     if (cat.useClipLocomotion && cat.clipMixer) {
       let clipSpecialState = "";
       if (cat.state === "swipe") clipSpecialState = "swipe";
       else if (cat.state === "sit") clipSpecialState = "sit";
+      else if (cat.state === "distracted") clipSpecialState = "eat";
       else if (cat.state === "jumpDown") clipSpecialState = "jumpDown";
+      else if (cat.state === "landStop") clipSpecialState = "landStop";
       else if (cat.state === "jumpSettle") clipSpecialState = "jumpSettle";
       else if (isPrepareJump || isLaunchUp || isForepawHook || isPullUp) clipSpecialState = "jumpUp";
 
