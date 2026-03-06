@@ -13,6 +13,42 @@ import { makeCup, createCupRuntime } from "./modules/cup-system.js";
 import { createCatnipRuntime } from "./modules/catnip-system.js";
 import { createUIRuntime } from "./modules/ui-system.js";
 
+// --- UI screens ---
+const startMenu = document.getElementById("startMenu");
+const endMenu = document.getElementById("endMenu");
+
+const playBtn = document.getElementById("playBtn");
+const quitBtn = document.getElementById("quitBtn");
+const replayBtn = document.getElementById("replayBtn");
+
+const hud = document.getElementById("hud");
+
+// Hide HUD until game starts
+hud.style.display = "none";
+
+// Play button
+playBtn.addEventListener("click", () => {
+  startMenu.classList.add("hidden");
+  hud.style.display = "block";
+});
+
+// Quit button
+quitBtn.addEventListener("click", () => {
+  window.close();
+
+  // fallback if browser blocks closing
+  alert("Thanks for playing!");
+});
+
+// Replay button
+replayBtn.addEventListener("click", () => {
+  endMenu.classList.add("hidden");
+  hud.style.display = "block";
+
+  // reload scene for now (simple reset)
+  location.reload();
+});
+
 const sortedStatEl = document.getElementById("sortedStat");
 const catStateStatEl = document.getElementById("catStateStat");
 const cupStatEl = document.getElementById("cupStat");

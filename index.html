@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>3D Isometric Room - MVP Slice</title>
+
     <style>
       html,
       body {
@@ -14,6 +15,8 @@
         background: #d9dce2;
         font-family: "Segoe UI", Arial, sans-serif;
       }
+
+      /* START + END MENU OVERLAY */
 
       .overlay {
         position: fixed;
@@ -31,6 +34,8 @@
       .hidden {
         display: none;
       }
+
+      /* HUD PANEL */
 
       #hud {
         position: fixed;
@@ -66,6 +71,30 @@
       .value {
         font-weight: 700;
       }
+
+      /* MESS METER */
+
+      #messMeterWrap {
+        margin-top: 6px;
+      }
+
+      #messMeter {
+        width: 100%;
+        height: 12px;
+        background: #2e3137;
+        border-radius: 6px;
+        overflow: hidden;
+        margin-top: 4px;
+      }
+
+      #messFill {
+        height: 100%;
+        width: 0%;
+        background: #5fd36a;
+        transition: width 0.2s ease;
+      }
+
+      /* BUTTONS */
 
       #hudButtons {
         margin-top: 8px;
@@ -103,29 +132,69 @@
       }
     </style>
   </head>
+
   <body>
+    <!-- START MENU -->
+
     <div id="startMenu" class="overlay">
       <h1>Cat Cleanup</h1>
       <button id="playBtn" type="button">Play</button>
       <button id="quitBtn" type="button">Quit</button>
     </div>
 
+    <!-- END MENU -->
+
     <div id="endMenu" class="overlay hidden">
       <h2 id="endTitle">Game Over</h2>
       <button id="replayBtn" type="button">Replay</button>
     </div>
 
+    <!-- HUD -->
+
     <div id="hud">
       <b class="title">MVP Room Slice</b>
-      <div class="row"><span class="label">Items sorted</span><span class="value" id="sortedStat">0 / 0</span></div>
-      <div class="row"><span class="label">Cat state</span><span class="value" id="catStateStat">Patrolling</span></div>
-      <div class="row"><span class="label">Cup status</span><span class="value" id="cupStat">On desk</span></div>
-      <div class="row"><span class="label">Catnip</span><span class="value" id="catnipStat">Ready</span></div>
+
+      <div class="row">
+        <span class="label">Items sorted</span>
+        <span class="value" id="sortedStat">0 / 0</span>
+      </div>
+
+      <div class="row">
+        <span class="label">Cat state</span>
+        <span class="value" id="catStateStat">Patrolling</span>
+      </div>
+
+      <div class="row">
+        <span class="label">Cup status</span>
+        <span class="value" id="cupStat">On desk</span>
+      </div>
+
+      <div class="row">
+        <span class="label">Catnip</span>
+        <span class="value" id="catnipStat">Ready</span>
+      </div>
+
+      <!-- MESS METER -->
+
+      <div id="messMeterWrap">
+        <div class="row">
+          <span class="label">Mess Level</span>
+          <span class="value" id="messValue">0%</span>
+        </div>
+
+        <div id="messMeter">
+          <div id="messFill"></div>
+        </div>
+      </div>
+
+      <!-- BUTTONS -->
+
       <div id="hudButtons">
         <button id="catnipBtn" type="button">Place Catnip</button>
         <button id="restartBtn" type="button">Restart</button>
         <button id="debugBtn" type="button">Debug: Off (B)</button>
       </div>
+
       <div id="result"></div>
     </div>
 
