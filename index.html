@@ -14,6 +14,24 @@
         background: #d9dce2;
         font-family: "Segoe UI", Arial, sans-serif;
       }
+
+      .overlay {
+        position: fixed;
+        inset: 0;
+        z-index: 20;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 12px;
+        background: rgba(18, 20, 24, 0.72);
+        color: #f5f7fa;
+      }
+
+      .hidden {
+        display: none;
+      }
+
       #hud {
         position: fixed;
         top: 12px;
@@ -27,28 +45,34 @@
         font-size: 13px;
         line-height: 1.4;
       }
+
       #hud b.title {
         display: block;
         margin-bottom: 6px;
         font-size: 14px;
       }
+
       .row {
         display: flex;
         justify-content: space-between;
         gap: 12px;
         margin: 4px 0;
       }
+
       .label {
         opacity: 0.82;
       }
+
       .value {
         font-weight: 700;
       }
+
       #hudButtons {
         margin-top: 8px;
         display: flex;
         gap: 8px;
       }
+
       button {
         border: 0;
         border-radius: 8px;
@@ -56,18 +80,22 @@
         font-weight: 700;
         cursor: pointer;
       }
+
       #catnipBtn {
         background: #79b87f;
         color: #102312;
       }
+
       #restartBtn {
         background: #d28888;
         color: #251010;
       }
+
       #debugBtn {
         background: #f0b861;
         color: #2a1a07;
       }
+
       #result {
         margin-top: 8px;
         font-weight: 800;
@@ -76,6 +104,17 @@
     </style>
   </head>
   <body>
+    <div id="startMenu" class="overlay">
+      <h1>Cat Cleanup</h1>
+      <button id="playBtn" type="button">Play</button>
+      <button id="quitBtn" type="button">Quit</button>
+    </div>
+
+    <div id="endMenu" class="overlay hidden">
+      <h2 id="endTitle">Game Over</h2>
+      <button id="replayBtn" type="button">Replay</button>
+    </div>
+
     <div id="hud">
       <b class="title">MVP Room Slice</b>
       <div class="row"><span class="label">Items sorted</span><span class="value" id="sortedStat">0 / 0</span></div>
@@ -89,6 +128,7 @@
       </div>
       <div id="result"></div>
     </div>
+
     <script type="module" src="/src/mvp/main.js"></script>
   </body>
 </html>
