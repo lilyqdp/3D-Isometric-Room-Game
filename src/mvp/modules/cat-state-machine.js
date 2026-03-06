@@ -265,27 +265,25 @@ export function updateCatStateMachineRuntime(ctx, dt) {
       if (cat.phaseT >= JUMP_UP_TIMING.prepare && cat.jumpTargets) {
         cat.jumpApproachLock = false;
         cat.state = "launchUp";
-        startJump(cat.jumpTargets.hook, desk.topY - 0.18, JUMP_UP_TIMING.launch, 0.4, "forepawHook", {
+        startJump(
+          cat.jumpTargets.top,
+          desk.topY + 0.02,
+          (JUMP_UP_TIMING.launch + JUMP_UP_TIMING.hook + JUMP_UP_TIMING.pull) / 3,
+          0.46,
+          "jumpSettle",
+          {
           easePos: true,
           easeY: true,
           avoidDeskClip: true,
-        });
+          }
+        );
       }
       return;
     }
 
     if (cat.state === "forepawHook") {
-      cat.phaseT += stepDt;
-      cat.status = "Grabbing edge";
-      animateCatPose(stepDt, false);
-      if (cat.phaseT >= JUMP_UP_TIMING.hook && cat.jumpTargets) {
-        cat.state = "pullUp";
-        startJump(cat.jumpTargets.top, desk.topY + 0.02, JUMP_UP_TIMING.pull, 0.26, "jumpSettle", {
-          easePos: true,
-          easeY: true,
-          avoidDeskClip: true,
-        });
-      }
+      // Legacy state: collapse into a single jump path.
+      cat.state = "jumpSettle";
       return;
     }
 

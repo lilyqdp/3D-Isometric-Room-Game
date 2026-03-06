@@ -45,7 +45,20 @@ function animateCatPose(dt, moving) {
       isSit ||
       !!cat.jump;
     if (cat.useClipLocomotion && cat.clipMixer) {
-      setCatClipSpecialPose(cat, usesSpecialPose);
+      let clipSpecialState = "";
+      if (cat.state === "swipe") clipSpecialState = "swipe";
+      else if (cat.state === "sit") clipSpecialState = "sit";
+      else if (cat.state === "jumpDown") clipSpecialState = "jumpDown";
+      else if (cat.state === "jumpSettle") clipSpecialState = "jumpSettle";
+      else if (isPrepareJump || isLaunchUp || isForepawHook || isPullUp) clipSpecialState = "jumpUp";
+
+      const handledByClip = setCatClipSpecialPose(cat, clipSpecialState, dt);
+      if (handledByClip) {
+        cat.modelAnchor.position.y = THREE.MathUtils.damp(cat.modelAnchor.position.y, 0, 10, dt);
+        cat.modelAnchor.rotation.x = THREE.MathUtils.damp(cat.modelAnchor.rotation.x, 0, 10, dt);
+        cat.modelAnchor.rotation.z = THREE.MathUtils.damp(cat.modelAnchor.rotation.z, 0, 10, dt);
+        return;
+      }
       if (!usesSpecialPose) {
         const speedNorm = THREE.MathUtils.clamp(cat.nav.lastSpeed / Math.max(cat.speed, 0.001), 0, 1.5);
         updateCatClipLocomotion(cat, dt, movingAmt > 0.08, speedNorm);
