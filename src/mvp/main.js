@@ -20,6 +20,7 @@ const endMenu = document.getElementById("endMenu");
 const playBtn = document.getElementById("playBtn");
 const quitBtn = document.getElementById("quitBtn");
 const replayBtn = document.getElementById("replayBtn");
+const startModeBtn = document.getElementById("startModeBtn");
 
 const hud = document.getElementById("hud");
 
@@ -28,10 +29,23 @@ hud.style.display = "none";
 
 // Play button
 playBtn.addEventListener("click", () => {
-  game.endlessMode = true;
   resetGame();
   startMenu.classList.add("hidden");
   hud.style.display = "block";
+});
+//Connect Button
+startModeBtn.addEventListener("click", () => {
+
+  // trigger the same logic as the in-game mode button
+  modeBtn.click();
+
+  // update the start menu label
+  if (game.endlessMode) {
+    startModeBtn.textContent = "Mode: Endless";
+  } else {
+    startModeBtn.textContent = "Mode: Casual";
+  }
+
 });
 
 // Quit button
