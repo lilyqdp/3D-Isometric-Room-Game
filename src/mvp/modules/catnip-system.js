@@ -123,6 +123,8 @@ export function createCatnipRuntime(ctx) {
 
   function placeCatnipFromMouse() {
     const clockTime = getClockTime();
+    // Block new catnip placement while cat is mid-air / mid-jump.
+    if (cat.jump || (!cat.onTable && cat.group.position.y > 0.08)) return;
     if (clockTime < game.catnipCooldownUntil) return;
     const placement = getPlacementFromMouse();
     if (!placement) return;

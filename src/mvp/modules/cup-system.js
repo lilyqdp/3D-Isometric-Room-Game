@@ -51,7 +51,22 @@ export function makeCup({ THREE, desk, CUP_COLLISION }) {
 }
 
 export function createCupRuntime(ctx) {
-  const { THREE, CANNON, scene, physics, desk, CUP_COLLISION, cup, cat, game, shatterBits, getClockTime } = ctx;
+  const {
+    THREE,
+    CANNON,
+    scene,
+    physics,
+    desk,
+    CUP_COLLISION,
+    cup,
+    cat,
+    game,
+    shatterBits,
+    pickups,
+    pickupRadius,
+    isDraggingPickup,
+    getClockTime,
+  } = ctx;
   const tempV3 = new THREE.Vector3();
   const CUP_PHYSICS = {
     mass: 0.22,
@@ -59,9 +74,7 @@ export function createCupRuntime(ctx) {
     halfH: 0.21,
     tableY: desk.topY + 0.01,
     breakFloorY: 0.06,
-    edgePushDelay: 0.55,
-    edgePushStrength: 0.22,
-    minKnockSpeed2: 1.8 * 1.8,
+    contactGrace: 0.06,
     dynamicAngularDamping: 0.99,
   };
   const cupMat = physics.materials.rimMat || physics.materials.shellMat;
@@ -131,66 +144,122 @@ export function createCupRuntime(ctx) {
     cup.group.quaternion.set(cup.body.quaternion.x, cup.body.quaternion.y, cup.body.quaternion.z, cup.body.quaternion.w);
   }
 
-  function ensureCupBreaksAfterStrongKnock() {
-    if (!cup.falling || cup.broken || !cup.body) return;
-    const elapsed = getClockTime() - cup.knockedAt;
-    if (elapsed < CUP_PHYSICS.edgePushDelay) return;
-    const speed2 =
-      cup.body.velocity.x * cup.body.velocity.x +
-      cup.body.velocity.y * cup.body.velocity.y +
-      cup.body.velocity.z * cup.body.velocity.z;
-    if (speed2 >= CUP_PHYSICS.minKnockSpeed2) return;
-
-    const edgeX = desk.pos.x + desk.sizeX * 0.5 - 0.05;
-    const edgeZ = desk.pos.z + desk.sizeZ * 0.5 - 0.05;
-    const dirX = Math.sign(edgeX - cup.body.position.x) || 1;
-    const dirZ = Math.sign(edgeZ - cup.body.position.z) || 1;
-    cup.body.applyImpulse(
-      new CANNON.Vec3(dirX * CUP_PHYSICS.edgePushStrength, 0.02, dirZ * CUP_PHYSICS.edgePushStrength),
-      cup.body.position
-    );
+  function isCupTouchingStaticSurface() {
+    if (!cup.body) return false;
+    const contacts = physics.world.contacts || [];
+    for (let i = 0; i < contacts.length; i++) {
+      const c = contacts[i];
+      if (!c || c.enabled === false) continue;
+      if (c.bi === cup.body && c.bj?.type === CANNON.Body.STATIC) return true;
+      if (c.bj === cup.body && c.bi?.type === CANNON.Body.STATIC) return true;
+    }
+    return false;
   }
 
-  function knockCup() {
+  function shatterCupAtCurrentPosition() {
+    if (cup.broken) return;
+    cup.falling = false;
+    cup.broken = true;
+    cup.group.visible = false;
+    if (cup.bodyInWorld) {
+      physics.world.removeBody(cup.body);
+      cup.bodyInWorld = false;
+    }
+    spawnCupShatter(cup.group.position.x, cup.group.position.z);
+    if (game.pendingLoseAt == null) {
+      game.pendingLoseAt = getClockTime() + 1.0;
+      game.reason = "The glass cup hit a surface and shattered.";
+    }
+  }
+
+  function knockCup(impulse = null) {
     if (cup.falling || cup.broken || !cup.body) return;
     cup.falling = true;
     cup.knockedAt = getClockTime();
     cup.body.type = CANNON.Body.DYNAMIC;
     cup.body.mass = CUP_PHYSICS.mass;
     cup.body.angularDamping = CUP_PHYSICS.dynamicAngularDamping;
-    cup.body.angularFactor.set(0.2, 0.2, 0.2);
+    cup.body.angularFactor.set(0.16, 0.16, 0.16);
     cup.body.updateMassProperties();
     cup.body.wakeUp();
-    tempV3.copy(cup.group.position).sub(cat.group.position);
-    tempV3.y = 0;
+    if (impulse && Number.isFinite(impulse.dirX) && Number.isFinite(impulse.dirZ)) {
+      tempV3.set(impulse.dirX, 0, impulse.dirZ);
+    } else {
+      tempV3.copy(cup.group.position).sub(cat.group.position);
+      tempV3.y = 0;
+    }
     if (tempV3.lengthSq() < 0.0001) tempV3.set(1, 0, 0);
     tempV3.normalize();
-    cup.body.velocity.set(tempV3.x * 0.17, 0.125, tempV3.z * 0.1625);
+    const strength = THREE.MathUtils.clamp(impulse?.strength ?? 1.0, 0.4, 2.2);
+    cup.body.velocity.set(tempV3.x * 0.145 * strength, 0.075, tempV3.z * 0.14 * strength);
     cup.body.angularVelocity.set(0, 0, 0);
-    cup.body.applyImpulse(new CANNON.Vec3(tempV3.x * 0.05625, 0.02625, tempV3.z * 0.05625), cup.body.position);
+    cup.body.applyImpulse(
+      new CANNON.Vec3(tempV3.x * 0.05 * strength, 0.014, tempV3.z * 0.05 * strength),
+      cup.body.position
+    );
+  }
+
+  function maybeKnockCupFromPickupImpacts() {
+    if (cup.falling || cup.broken || !cup.body || !Array.isArray(pickups)) return;
+    const cupCenterY = cup.group.position.y + CUP_PHYSICS.halfH;
+    for (const p of pickups) {
+      if (!p?.body || !p?.mesh) continue;
+      if (typeof isDraggingPickup === "function" && isDraggingPickup(p)) continue;
+
+      const dx = p.body.position.x - cup.body.position.x;
+      const dz = p.body.position.z - cup.body.position.z;
+      const itemR =
+        typeof pickupRadius === "function"
+          ? Math.max(0.03, pickupRadius(p) * 0.86)
+          : (p.type === "laundry" ? 0.17 : 0.13);
+      const minDist = CUP_COLLISION.radius + itemR;
+      if (dx * dx + dz * dz > minDist * minDist) continue;
+
+      const dy = Math.abs(p.body.position.y - cupCenterY);
+      if (dy > 0.28) continue;
+
+      const speed = Math.hypot(p.body.velocity.x, p.body.velocity.z);
+      if (speed < 0.28) continue;
+
+      knockCup({
+        dirX: p.body.velocity.x,
+        dirZ: p.body.velocity.z,
+        strength: THREE.MathUtils.clamp(0.55 + speed * 0.42, 0.6, 1.45),
+      });
+      break;
+    }
+  }
+
+  function maybeKnockCupFromCatBump() {
+    if (cup.falling || cup.broken || !cup.body) return;
+    const dx = cup.group.position.x - cat.pos.x;
+    const dz = cup.group.position.z - cat.pos.z;
+    const minDist = CUP_COLLISION.radius + 0.24;
+    if (dx * dx + dz * dz > minDist * minDist) return;
+    if (Math.abs(cat.group.position.y - desk.topY) > 0.26) return;
+    const catSpeed = Number.isFinite(cat.nav?.lastSpeed) ? cat.nav.lastSpeed : 0;
+    if (catSpeed < 0.16) return;
+    knockCup({ dirX: dx, dirZ: dz, strength: THREE.MathUtils.clamp(0.7 + catSpeed * 0.5, 0.7, 1.5) });
   }
 
   function updateCup(dt) {
     if (!cup.body) return;
-    if (!cup.falling || cup.broken) return;
+    if (!cup.falling || cup.broken) {
+      maybeKnockCupFromPickupImpacts();
+      maybeKnockCupFromCatBump();
+      return;
+    }
 
-    ensureCupBreaksAfterStrongKnock();
     syncCupMeshFromBody();
+    const elapsed = getClockTime() - cup.knockedAt;
+    if (elapsed >= CUP_PHYSICS.contactGrace && isCupTouchingStaticSurface()) {
+      shatterCupAtCurrentPosition();
+      return;
+    }
 
     if (cup.group.position.y <= CUP_PHYSICS.breakFloorY) {
       cup.group.position.y = CUP_PHYSICS.breakFloorY;
-      cup.falling = false;
-      cup.broken = true;
-      cup.group.visible = false;
-      if (cup.bodyInWorld) {
-        physics.world.removeBody(cup.body);
-        cup.bodyInWorld = false;
-      }
-      spawnCupShatter(cup.group.position.x, cup.group.position.z);
-      if (game.pendingLoseAt == null) {
-        game.pendingLoseAt = getClockTime() + 1.0;
-        game.reason = "The glass cup hit the floor.";
-      }
+      shatterCupAtCurrentPosition();
     }
   }
 

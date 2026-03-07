@@ -33,6 +33,13 @@ export function makeDesk(scene, desk) {
 
   const top = new THREE.Mesh(new THREE.BoxGeometry(desk.sizeX, 0.12, desk.sizeZ), topMat);
   top.position.set(desk.pos.x, 1.02, desk.pos.z);
+  top.userData.catSurface = {
+    y: desk.topY + 0.02,
+    minX: desk.pos.x - desk.sizeX * 0.5 + 0.2,
+    maxX: desk.pos.x + desk.sizeX * 0.5 - 0.2,
+    minZ: desk.pos.z - desk.sizeZ * 0.5 + 0.16,
+    maxZ: desk.pos.z + desk.sizeZ * 0.5 - 0.16,
+  };
   scene.add(top);
 
   const legGeo = new THREE.BoxGeometry(0.12, 1.0, 0.12);

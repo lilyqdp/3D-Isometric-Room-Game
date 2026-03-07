@@ -16,6 +16,8 @@ function animateCatPose(dt, moving) {
   const isForepawHook = cat.state === "forepawHook";
   const isPullUp = cat.state === "pullUp";
   const isJumpSettle = cat.state === "jumpSettle";
+  const isJumpDown = cat.state === "jumpDown";
+  const isJumpState = isPrepareJump || isLaunchUp || isForepawHook || isPullUp || isJumpSettle || isJumpDown || !!cat.jump;
   const forceStill =
     cat.state === "swipe" ||
     cat.state === "sit" ||
@@ -56,13 +58,15 @@ function animateCatPose(dt, moving) {
       else if (cat.state === "landStop") clipSpecialState = "landStop";
       else if (cat.state === "jumpSettle") clipSpecialState = "jumpSettle";
       else if (isPrepareJump || isLaunchUp || isForepawHook || isPullUp) clipSpecialState = "jumpUp";
+      else if (cat.jump) clipSpecialState = cat.jump.toY > cat.jump.fromY + 0.03 ? "jumpUp" : "jumpDown";
 
       const handledByClip = setCatClipSpecialPose(cat, clipSpecialState, dt);
       if (handledByClip) {
         cat.modelAnchor.position.y = THREE.MathUtils.damp(cat.modelAnchor.position.y, 0, 10, dt);
         cat.modelAnchor.rotation.x = THREE.MathUtils.damp(cat.modelAnchor.rotation.x, 0, 10, dt);
         cat.modelAnchor.rotation.z = THREE.MathUtils.damp(cat.modelAnchor.rotation.z, 0, 10, dt);
-        return;
+        // Blend procedural jump posing on top of clip animation for a cleaner jump silhouette.
+        if (!isJumpState) return;
       }
       if (!usesSpecialPose) {
         const speedNorm = THREE.MathUtils.clamp(cat.nav.lastSpeed / Math.max(cat.speed, 0.001), 0, 1.5);
@@ -109,10 +113,10 @@ function animateCatPose(dt, moving) {
     const crouch = crouchBase + (isJumping ? (1 - jumpU) * 0.26 : 0);
     const baseAlpha = THREE.MathUtils.clamp(dt * 12, 0.08, 0.55);
 
-    cat.modelAnchor.position.y = Math.max(0, gaitL) * 0.02 + jumpArc * 0.015;
+    cat.modelAnchor.position.y = Math.max(0, gaitL) * 0.02 + jumpArc * 0.048 + jumpPush * 0.016;
     cat.modelAnchor.position.z = THREE.MathUtils.damp(cat.modelAnchor.position.z, 0, 10, dt);
     cat.modelAnchor.rotation.z = gaitL * 0.028;
-    const targetPitch = -swipeLean * 0.42 - jumpArc * 0.12;
+    const targetPitch = -swipeLean * 0.42 - jumpArc * 0.08;
     cat.modelAnchor.rotation.x = THREE.MathUtils.damp(cat.modelAnchor.rotation.x, targetPitch, 10, dt);
 
     setBonePose(rig, rig.spine1, -0.11 - crouch * 0.09 + breathe * 0.2 + swipeLean * 0.11 - jumpArc * 0.1, 0, 0, baseAlpha);
@@ -199,8 +203,8 @@ function animateCatPose(dt, moving) {
       setBonePose(rig, rig.backR.ankle, 0.12 * u, 0, 0, baseAlpha);
 
       // Make the rear-up clearly visible from gameplay camera.
-      cat.modelAnchor.position.y += 0.16 * u;
-      cat.modelAnchor.rotation.x = THREE.MathUtils.damp(cat.modelAnchor.rotation.x, 0.44 * u, 12, dt);
+      cat.modelAnchor.position.y += 0.13 * u;
+      cat.modelAnchor.rotation.x = THREE.MathUtils.damp(cat.modelAnchor.rotation.x, 0.34 * u, 12, dt);
     }
 
     if (isLaunchUp) {

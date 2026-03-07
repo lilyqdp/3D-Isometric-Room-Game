@@ -532,7 +532,15 @@ export function createPickupsRuntime(ctx) {
       const angSpeed = b.angularVelocity.length();
       if (angSpeed > maxAngular) b.angularVelocity.scale(maxAngular / angSpeed, b.angularVelocity);
 
-      if (cat.group.position.y <= 0.24 && b.position.y <= 1.2) {
+      const catBaseY = cat.group.position.y;
+      const catMinY = catBaseY - 0.02;
+      const catMaxY = catBaseY + 0.34;
+      const pickupHalfY = p.type === "laundry" ? 0.05 : 0.04;
+      const pickupMinY = b.position.y - pickupHalfY;
+      const pickupMaxY = b.position.y + pickupHalfY;
+      const overlapsCatHeight = pickupMaxY >= catMinY && pickupMinY <= catMaxY;
+
+      if (overlapsCatHeight) {
         const catRadius = CAT_COLLISION.catBodyRadius;
         const itemRadius = pickupRadius(p) * 0.86;
         const minDist = catRadius + itemRadius;
@@ -548,6 +556,7 @@ export function createPickupsRuntime(ctx) {
           const nxCat = dxCat / dist;
           const nzCat = dzCat / dist;
           const push = minDist - dist + 0.05;
+          b.wakeUp();
           b.position.x += nxCat * push;
           b.position.z += nzCat * push;
           const impact = Math.max(0, -b.velocity.y);
