@@ -61,11 +61,11 @@ quitBtn.addEventListener("click", () => {
 
 // Replay button
 replayBtn.addEventListener("click", () => {
+  resetGame();
+  game.state = "menu";
   endMenu.classList.add("hidden");
-  hud.style.display = "block";
-
-  // reload scene for now (simple reset)
-  location.reload();
+  startMenu.classList.remove("hidden");
+  hud.style.display = "none";
 });
 
 const sortedStatEl = document.getElementById("sortedStat");
@@ -644,7 +644,7 @@ function updateEndlessSpawning(dt) {
 }
 
 function resetGame() {
-  game.state = "playing";
+  game.state = "menu";
   game.reason = "";
   game.sorted = 0;
   game.mess = 0;
