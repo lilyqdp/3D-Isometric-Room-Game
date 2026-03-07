@@ -30,15 +30,56 @@ export function updateCatStateMachineRuntime(ctx, dt) {
     canReachGroundTarget,
     hasClearTravelLine,
     computeDeskJumpTargets,
-    keepCatAwayFromCup,
     knockCup,
-    sampleSwipePose,
     resetCatUnstuckTracking,
   } = ctx;
 
   const animateCatPose = (stepDt, moving) => animateCatPoseRuntime(ctx, stepDt, moving);
   const CATNIP_MOUTH_OFFSET = 0.34;
   const catnipApproachTarget = new THREE.Vector3();
+  const tableRoamTarget = new THREE.Vector3();
+
+  function pickTableRoamTarget(nearCup = false) {
+    const minX = desk.pos.x - desk.sizeX * 0.5 + 0.32;
+    const maxX = desk.pos.x + desk.sizeX * 0.5 - 0.32;
+    const minZ = desk.pos.z - desk.sizeZ * 0.5 + 0.28;
+    const maxZ = desk.pos.z + desk.sizeZ * 0.5 - 0.28;
+
+    if (nearCup && !cup.broken && !cup.falling) {
+      const angle = Math.random() * Math.PI * 2;
+      const radius = THREE.MathUtils.lerp(0.22, 0.46, Math.random());
+      tableRoamTarget.set(
+        cup.group.position.x + Math.cos(angle) * radius,
+        0,
+        cup.group.position.z + Math.sin(angle) * radius
+      );
+    } else {
+      tableRoamTarget.set(
+        THREE.MathUtils.lerp(minX, maxX, Math.random()),
+        0,
+        THREE.MathUtils.lerp(minZ, maxZ, Math.random())
+      );
+    }
+
+    tableRoamTarget.x = THREE.MathUtils.clamp(tableRoamTarget.x, minX, maxX);
+    tableRoamTarget.z = THREE.MathUtils.clamp(tableRoamTarget.z, minZ, maxZ);
+    cat.tableRoamTarget.copy(tableRoamTarget);
+  }
+
+  function startJumpDownFromDesk(nextState = "patrol") {
+    cat.state = "jumpDown";
+    cat.onTable = false;
+    cat.phaseT = 0;
+    clearCatJumpTargets();
+    clearCatNavPath(false);
+    const downPoint = findSafeGroundPoint(desk.approach);
+    cat.landStopNextState = nextState;
+    startJump(downPoint, 0, 0.64, 0.34, "landStop", {
+      easePos: true,
+      easeY: true,
+      avoidDeskClip: true,
+    });
+  }
 
   function getCatnipApproachTarget() {
     if (!game.catnip) return null;
@@ -343,6 +384,8 @@ export function updateCatStateMachineRuntime(ctx, dt) {
       cat.status = "Settling on desk";
       animateCatPose(stepDt, false);
       if (cat.phaseT >= JUMP_UP_TIMING.settle) {
+        pickTableRoamTarget(false);
+        cat.nextTableRoamAt = clockTime + 0.35;
         cat.state = game.catnip && game.catnip.surface === "desk" ? "toCatnip" : "toCup";
         cat.phaseT = 0;
       }
@@ -350,49 +393,45 @@ export function updateCatStateMachineRuntime(ctx, dt) {
     }
 
     if (cat.state === "toCup") {
-      const target = new THREE.Vector3(desk.cup.x - 0.36, 0, desk.cup.z + 0.02);
-      const reachedCup = moveCatToward(target, stepDt, 0.65, desk.topY + 0.02);
-      keepCatAwayFromCup(CUP_COLLISION.catAvoidRadius);
-      const closeEnough = cat.pos.distanceToSquared(target) < 0.18 * 0.18;
-      cat.status = "Stalking cup";
-      animateCatPose(stepDt, true);
-      if (reachedCup || closeEnough) {
-        cat.state = "swipe";
-        cat.phaseT = 0;
-        cat.swipeHitDone = false;
+      cat.phaseT += stepDt;
+      const cupActive = !cup.broken && !cup.falling;
+
+      if (
+        clockTime >= cat.nextTableRoamAt ||
+        cat.pos.distanceToSquared(cat.tableRoamTarget) < 0.18 * 0.18
+      ) {
+        pickTableRoamTarget(cupActive && Math.random() < 0.62);
+        cat.nextTableRoamAt = clockTime + THREE.MathUtils.lerp(0.55, 1.35, Math.random());
+      }
+
+      const reachedRoam = moveCatToward(cat.tableRoamTarget, stepDt, 0.62, desk.topY + 0.02, {
+        direct: true,
+        ignoreDynamic: true,
+      });
+      cat.status = cupActive ? "Roaming desk near cup" : "Roaming desk";
+      animateCatPose(stepDt, !reachedRoam);
+
+      if (cupActive) {
+        const dx = cat.pos.x - cup.group.position.x;
+        const dz = cat.pos.z - cup.group.position.z;
+        const bumpRadius = CUP_COLLISION.radius + 0.2;
+        if (dx * dx + dz * dz <= bumpRadius * bumpRadius && cat.nav.lastSpeed > 0.08) {
+          knockCup();
+          startJumpDownFromDesk("sit");
+          return;
+        }
+      }
+
+      if (cat.phaseT > 1.4 && Math.random() < stepDt * 0.1) {
+        startJumpDownFromDesk("patrol");
       }
       return;
     }
 
     if (cat.state === "swipe") {
-      cat.phaseT += stepDt;
-      cat.status = "Swiping";
-      cat.group.position.y = desk.topY + 0.02;
-      keepCatAwayFromCup(CUP_COLLISION.catAvoidRadius);
-      const swipePose = sampleSwipePose(cat.phaseT);
-      cat.paw.position.y = 0.25 + swipePose.lift * 0.24;
-      cat.paw.position.x = 0.21 + swipePose.reach * 0.32;
-      if (swipePose.hit && !cat.swipeHitDone) {
-        knockCup();
-        cat.swipeHitDone = true;
-      }
-      if (swipePose.done) {
-        cat.paw.position.y = 0.25;
-        cat.paw.position.x = 0.21;
-        cat.state = "jumpDown";
-        cat.onTable = false;
-        cat.phaseT = 0;
-        clearCatJumpTargets();
-        clearCatNavPath(false);
-        const downPoint = findSafeGroundPoint(desk.approach);
-        cat.landStopNextState = "sit";
-        startJump(downPoint, 0, 0.64, 0.34, "landStop", {
-          easePos: true,
-          easeY: true,
-          avoidDeskClip: true,
-        });
-      }
-      animateCatPose(stepDt, false);
+      // Swipe is no longer the primary knock interaction; bumping near the cup handles knockdown.
+      cat.state = "toCup";
+      cat.phaseT = 0;
       return;
     }
 

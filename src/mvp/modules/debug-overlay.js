@@ -153,27 +153,22 @@ export function createDebugOverlayRuntime(ctx) {
     }
 
     const points = [];
-    const minX = ROOM.minX + CAT_NAV.margin;
-    const maxX = ROOM.maxX - CAT_NAV.margin;
-    const minZ = ROOM.minZ + CAT_NAV.margin;
-    const maxZ = ROOM.maxZ - CAT_NAV.margin;
-    const y = 0.02;
-    const staticObstacles = ctx.buildCatObstacles(false);
+    const navMesh = ctx.getActiveNavMeshDebugData
+      ? ctx.getActiveNavMeshDebugData()
+      : (ctx.getNavMeshDebugData ? ctx.getNavMeshDebugData(false, false) : null);
+    if (!navMesh || !navMesh.vertices || !navMesh.triangles || navMesh.triangles.length === 0) return;
+    const y = 0.03;
 
-    for (let x = minX; x <= maxX + 1e-6; x += CAT_NAV.step) {
-      for (let z = minZ; z <= maxZ + 1e-6; z += CAT_NAV.step) {
-        const blocked = ctx.isCatPointBlocked(x, z, staticObstacles, ctx.getCatPathClearance());
-        if (blocked) continue;
-        const tx = x + CAT_NAV.step;
-        const tz = z + CAT_NAV.step;
-        if (tx <= maxX + 1e-6 && !ctx.isCatPointBlocked(tx, z, staticObstacles, ctx.getCatPathClearance())) {
-          points.push(x, y, z, tx, y, z);
-        }
-        if (tz <= maxZ + 1e-6 && !ctx.isCatPointBlocked(x, tz, staticObstacles, ctx.getCatPathClearance())) {
-          points.push(x, y, z, x, y, tz);
-        }
-      }
+    for (const tri of navMesh.triangles) {
+      const a = navMesh.vertices[tri.a];
+      const b = navMesh.vertices[tri.b];
+      const c = navMesh.vertices[tri.c];
+      if (!a || !b || !c) continue;
+      points.push(a.x, y, a.z, b.x, y, b.z);
+      points.push(b.x, y, b.z, c.x, y, c.z);
+      points.push(c.x, y, c.z, a.x, y, a.z);
     }
+    if (!points.length) return;
 
     const geo = new THREE.BufferGeometry();
     geo.setAttribute("position", new THREE.Float32BufferAttribute(points, 3));

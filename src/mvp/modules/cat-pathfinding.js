@@ -4,7 +4,6 @@ export function createCatPathfindingRuntime(ctx) {
     CAT_NAV,
     CAT_COLLISION,
     CAT_PATH_CLEARANCE_EPSILON,
-    ASTAR_NEIGHBOR_OFFSETS,
     ROOM,
     hamper,
     trashCan,
@@ -19,8 +18,10 @@ export function createCatPathfindingRuntime(ctx) {
 
   const tempQ = new THREE.Quaternion();
   const tempEuler = new THREE.Euler();
-  const tempTo = new THREE.Vector3();
-  const tempFrom = new THREE.Vector3();
+  const activeNavMeshMode = {
+    includePickups: false,
+    includeClosePickups: true,
+  };
 
   function buildCatObstacles(includePickups = false, includeClosePickups = false) {
     const obstacles = [
@@ -152,73 +153,167 @@ export function createCatPathfindingRuntime(ctx) {
     return d;
   }
 
+  function findNearestWalkablePoint(point, obstacles, clearance) {
+    if (!isCatPointBlocked(point.x, point.z, obstacles, clearance)) return point.clone();
+    const step = CAT_NAV.step;
+    const candidate = new THREE.Vector3();
+    for (let r = 1; r <= 10; r++) {
+      const ringDist = r * step;
+      const steps = Math.max(12, Math.floor(20 * r));
+      for (let i = 0; i < steps; i++) {
+        const t = (i / steps) * Math.PI * 2;
+        candidate.set(point.x + Math.cos(t) * ringDist, 0, point.z + Math.sin(t) * ringDist);
+        if (!isCatPointBlocked(candidate.x, candidate.z, obstacles, clearance)) return candidate.clone();
+      }
+    }
+    return point.clone();
+  }
+
+  function isPointInsideTriangleXZ(point, a, b, c) {
+    const cross = (p1, p2, p3) => (p2.x - p1.x) * (p3.z - p1.z) - (p2.z - p1.z) * (p3.x - p1.x);
+    const c1 = cross(a, b, point);
+    const c2 = cross(b, c, point);
+    const c3 = cross(c, a, point);
+    const hasNeg = c1 < 0 || c2 < 0 || c3 < 0;
+    const hasPos = c1 > 0 || c2 > 0 || c3 > 0;
+    return !(hasNeg && hasPos);
+  }
+
+  function buildTriangleNavMesh(obstacles, clearance) {
+    const step = CAT_NAV.step;
+    const minX = ROOM.minX + CAT_NAV.margin;
+    const maxX = ROOM.maxX - CAT_NAV.margin;
+    const minZ = ROOM.minZ + CAT_NAV.margin;
+    const maxZ = ROOM.maxZ - CAT_NAV.margin;
+    const vxCount = Math.floor((maxX - minX) / step) + 1;
+    const vzCount = Math.floor((maxZ - minZ) / step) + 1;
+    if (vxCount < 2 || vzCount < 2) return { vertices: [], triangles: [] };
+
+    const vertexId = (ix, iz) => iz * vxCount + ix;
+    const vertices = new Array(vxCount * vzCount);
+    const walkable = new Uint8Array(vertices.length);
+    for (let iz = 0; iz < vzCount; iz++) {
+      for (let ix = 0; ix < vxCount; ix++) {
+        const id = vertexId(ix, iz);
+        const v = new THREE.Vector3(minX + ix * step, 0, minZ + iz * step);
+        vertices[id] = v;
+        if (!isCatPointBlocked(v.x, v.z, obstacles, clearance)) walkable[id] = 1;
+      }
+    }
+
+    const triangles = [];
+    const edgeOwner = new Map();
+    const addAdjacencyEdge = (a, b, triIndex) => {
+      const key = a < b ? `${a}:${b}` : `${b}:${a}`;
+      const owner = edgeOwner.get(key);
+      if (owner == null) {
+        edgeOwner.set(key, triIndex);
+        return;
+      }
+      triangles[owner].neighbors.push(triIndex);
+      triangles[triIndex].neighbors.push(owner);
+    };
+
+    const addTriangle = (a, b, c) => {
+      if (!walkable[a] || !walkable[b] || !walkable[c]) return;
+      const va = vertices[a];
+      const vb = vertices[b];
+      const vc = vertices[c];
+      if (!hasClearTravelLine(va, vb, obstacles, clearance)) return;
+      if (!hasClearTravelLine(vb, vc, obstacles, clearance)) return;
+      if (!hasClearTravelLine(vc, va, obstacles, clearance)) return;
+      const triIndex = triangles.length;
+      triangles.push({
+        a,
+        b,
+        c,
+        centroid: new THREE.Vector3((va.x + vb.x + vc.x) / 3, 0, (va.z + vb.z + vc.z) / 3),
+        neighbors: [],
+      });
+      addAdjacencyEdge(a, b, triIndex);
+      addAdjacencyEdge(b, c, triIndex);
+      addAdjacencyEdge(c, a, triIndex);
+    };
+
+    for (let iz = 0; iz < vzCount - 1; iz++) {
+      for (let ix = 0; ix < vxCount - 1; ix++) {
+        const a = vertexId(ix, iz);
+        const b = vertexId(ix + 1, iz);
+        const c = vertexId(ix, iz + 1);
+        const d = vertexId(ix + 1, iz + 1);
+        addTriangle(a, b, c);
+        addTriangle(b, d, c);
+      }
+    }
+
+    return { vertices, triangles };
+  }
+
+  function getNavMeshDebugData(includePickups = false, includeClosePickups = false) {
+    const obstacles = buildCatObstacles(includePickups, includeClosePickups);
+    const clearance = getCatPathClearance();
+    const navMesh = buildTriangleNavMesh(obstacles, clearance);
+    return {
+      ...navMesh,
+      includePickups,
+      includeClosePickups,
+      clearance,
+    };
+  }
+
+  function getActiveNavMeshDebugData() {
+    return getNavMeshDebugData(activeNavMeshMode.includePickups, activeNavMeshMode.includeClosePickups);
+  }
+
+  function findTriangleForPoint(point, navMesh, obstacles, clearance) {
+    let best = -1;
+    let bestD2 = Infinity;
+    for (let i = 0; i < navMesh.triangles.length; i++) {
+      const tri = navMesh.triangles[i];
+      const va = navMesh.vertices[tri.a];
+      const vb = navMesh.vertices[tri.b];
+      const vc = navMesh.vertices[tri.c];
+      if (isPointInsideTriangleXZ(point, va, vb, vc)) return i;
+      const d2 = tri.centroid.distanceToSquared(point);
+      if (d2 >= bestD2) continue;
+      if (!hasClearTravelLine(point, tri.centroid, obstacles, clearance)) continue;
+      bestD2 = d2;
+      best = i;
+    }
+    return best;
+  }
+
   function computeCatPath(start, goal, obstacles) {
     const navClearance = getCatPathClearance();
     if (hasClearTravelLine(start, goal, obstacles, navClearance)) {
       return [start.clone(), goal.clone()];
     }
 
-    const step = CAT_NAV.step;
-    const minX = ROOM.minX + CAT_NAV.margin;
-    const maxX = ROOM.maxX - CAT_NAV.margin;
-    const minZ = ROOM.minZ + CAT_NAV.margin;
-    const maxZ = ROOM.maxZ - CAT_NAV.margin;
-    const w = Math.floor((maxX - minX) / step) + 1;
-    const h = Math.floor((maxZ - minZ) / step) + 1;
-    const size = w * h;
+    const freeStart = findNearestWalkablePoint(start, obstacles, navClearance);
+    const freeGoal = findNearestWalkablePoint(goal, obstacles, navClearance);
+    const navMesh = buildTriangleNavMesh(obstacles, navClearance);
+    if (!navMesh.triangles.length) return [];
 
-    const toIdx = (ix, iz) => iz * w + ix;
-    const toCell = (v, out) => {
-      out.x = THREE.MathUtils.clamp(Math.round((v.x - minX) / step), 0, w - 1);
-      out.y = THREE.MathUtils.clamp(Math.round((v.z - minZ) / step), 0, h - 1);
-    };
-    const cellPos = (ix, iz, out) => {
-      out.set(minX + ix * step, 0, minZ + iz * step);
-    };
-    const nearestFree = (sx, sz) => {
-      if (!isCatPointBlocked(sx, sz, obstacles, navClearance)) return new THREE.Vector2(sx, sz);
-      for (let r = 1; r <= 8; r++) {
-        for (let az = -r; az <= r; az++) {
-          for (let ax = -r; ax <= r; ax++) {
-            if (Math.abs(ax) !== r && Math.abs(az) !== r) continue;
-            const x = sx + ax * step;
-            const z = sz + az * step;
-            if (!isCatPointBlocked(x, z, obstacles, navClearance)) return new THREE.Vector2(x, z);
-          }
-        }
-      }
-      return new THREE.Vector2(sx, sz);
-    };
+    const startTri = findTriangleForPoint(freeStart, navMesh, obstacles, navClearance);
+    const goalTri = findTriangleForPoint(freeGoal, navMesh, obstacles, navClearance);
+    if (startTri < 0 || goalTri < 0) return [];
+    if (startTri === goalTri) return [start.clone(), goal.clone()];
 
-    const freeStart = nearestFree(start.x, start.z);
-    const freeGoal = nearestFree(goal.x, goal.z);
-    tempFrom.set(freeStart.x, 0, freeStart.y);
-    tempTo.set(freeGoal.x, 0, freeGoal.y);
-
-    const startCell = new THREE.Vector2();
-    const goalCell = new THREE.Vector2();
-    toCell(tempFrom, startCell);
-    toCell(tempTo, goalCell);
-
-    const g = new Float32Array(size);
-    const f = new Float32Array(size);
-    const came = new Int32Array(size);
-    const closed = new Uint8Array(size);
-    for (let i = 0; i < size; i++) {
+    const triCount = navMesh.triangles.length;
+    const g = new Float32Array(triCount);
+    const f = new Float32Array(triCount);
+    const came = new Int32Array(triCount);
+    const closed = new Uint8Array(triCount);
+    for (let i = 0; i < triCount; i++) {
       g[i] = Infinity;
       f[i] = Infinity;
       came[i] = -1;
     }
 
-    const open = [];
-    const startId = toIdx(startCell.x, startCell.y);
-    const goalId = toIdx(goalCell.x, goalCell.y);
-    g[startId] = 0;
-    f[startId] = tempFrom.distanceTo(tempTo);
-    open.push(startId);
+    const open = [startTri];
+    g[startTri] = 0;
+    f[startTri] = navMesh.triangles[startTri].centroid.distanceTo(navMesh.triangles[goalTri].centroid);
 
-    const currentPos = new THREE.Vector3();
-    const neighborPos = new THREE.Vector3();
     while (open.length) {
       let bestI = 0;
       let bestF = f[open[0]];
@@ -229,55 +324,44 @@ export function createCatPathfindingRuntime(ctx) {
           bestI = i;
         }
       }
+
       const current = open[bestI];
       open[bestI] = open[open.length - 1];
       open.pop();
-      if (current === goalId) break;
+      if (current === goalTri) break;
       if (closed[current]) continue;
       closed[current] = 1;
 
-      const cx = current % w;
-      const cz = Math.floor(current / w);
-      cellPos(cx, cz, currentPos);
-      for (const offset of ASTAR_NEIGHBOR_OFFSETS) {
-        const nx = cx + offset.ox;
-        const nz = cz + offset.oz;
-        if (nx < 0 || nx >= w || nz < 0 || nz >= h) continue;
-
-        const nid = toIdx(nx, nz);
-        if (closed[nid]) continue;
-
-        cellPos(nx, nz, neighborPos);
-        if (isCatPointBlocked(neighborPos.x, neighborPos.z, obstacles, navClearance)) continue;
-        if (!hasClearTravelLine(currentPos, neighborPos, obstacles, navClearance)) continue;
-
-        const candidate = g[current] + offset.cost;
-        if (candidate >= g[nid]) continue;
-        came[nid] = current;
-        g[nid] = candidate;
-        f[nid] = candidate + neighborPos.distanceTo(tempTo);
-        open.push(nid);
+      const currentCenter = navMesh.triangles[current].centroid;
+      for (const neighbor of navMesh.triangles[current].neighbors) {
+        if (closed[neighbor]) continue;
+        const neighborCenter = navMesh.triangles[neighbor].centroid;
+        if (!hasClearTravelLine(currentCenter, neighborCenter, obstacles, navClearance)) continue;
+        const candidate = g[current] + currentCenter.distanceTo(neighborCenter);
+        if (candidate >= g[neighbor]) continue;
+        came[neighbor] = current;
+        g[neighbor] = candidate;
+        f[neighbor] = candidate + neighborCenter.distanceTo(navMesh.triangles[goalTri].centroid);
+        open.push(neighbor);
       }
     }
 
-    if (came[goalId] === -1 && goalId !== startId) {
-      return [];
-    }
+    if (came[goalTri] === -1) return [];
 
-    const rev = [];
-    let cur = goalId;
+    const triPath = [];
+    let cur = goalTri;
     while (cur !== -1) {
-      const ix = cur % w;
-      const iz = Math.floor(cur / w);
-      cellPos(ix, iz, tempFrom);
-      rev.push(tempFrom.clone());
+      triPath.push(cur);
       cur = came[cur];
     }
-    rev.reverse();
-    if (!rev.length) return [];
-    rev[0].copy(start);
-    rev[rev.length - 1].copy(goal);
-    return smoothCatPath(rev, obstacles, navClearance);
+    triPath.reverse();
+
+    const waypoints = [start.clone()];
+    for (let i = 1; i < triPath.length - 1; i++) {
+      waypoints.push(navMesh.triangles[triPath[i]].centroid.clone());
+    }
+    waypoints.push(goal.clone());
+    return smoothCatPath(waypoints, obstacles, navClearance);
   }
 
   function isPathTraversable(path, obstacles, clearance = CAT_NAV.clearance) {
@@ -300,6 +384,8 @@ export function createCatPathfindingRuntime(ctx) {
     if (cat.group.position.y > 0.02) return;
     const goalDelta = cat.nav.goal.distanceToSquared(target);
     if (!force && cat.nav.path.length > 1 && goalDelta < 0.05 * 0.05) return;
+    activeNavMeshMode.includePickups = !!useDynamic;
+    activeNavMeshMode.includeClosePickups = true;
     const obstacles = buildCatObstacles(useDynamic, true);
     cat.nav.path = computeCatPath(cat.pos, target, obstacles);
     cat.nav.index = cat.nav.path.length > 1 ? 1 : 0;
@@ -313,6 +399,8 @@ export function createCatPathfindingRuntime(ctx) {
     getCatPathClearance,
     hasClearTravelLine,
     catPathDistance,
+    getNavMeshDebugData,
+    getActiveNavMeshDebugData,
     computeCatPath,
     isPathTraversable,
     canReachGroundTarget,

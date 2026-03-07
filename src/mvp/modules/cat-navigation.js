@@ -67,6 +67,14 @@ function catPathDistance(path) {
   return pathRuntime.catPathDistance(path);
 }
 
+function getNavMeshDebugData(includePickups = false, includeClosePickups = false) {
+  return pathRuntime.getNavMeshDebugData(includePickups, includeClosePickups);
+}
+
+function getActiveNavMeshDebugData() {
+  return pathRuntime.getActiveNavMeshDebugData();
+}
+
 function computeCatPath(start, goal, obstacles) {
   return pathRuntime.computeCatPath(start, goal, obstacles);
 }
@@ -212,7 +220,8 @@ function bestDeskJumpAnchor(from) {
   const staticObstacles = buildCatObstacles(false);
   const dynamicObstacles = buildCatObstacles(true);
   const candidates = getDeskJumpCandidates(from);
-  let fallback = null;
+  const staticValid = [];
+  const dynamicValid = [];
   const maxChecks = Math.min(candidates.length, 32);
 
   for (let i = 0; i < maxChecks; i++) {
@@ -221,11 +230,27 @@ function bestDeskJumpAnchor(from) {
 
     const path = computeCatPath(from, a, staticObstacles);
     if (!isPathTraversable(path, staticObstacles)) continue;
-    if (isPathTraversable(path, dynamicObstacles)) return a;
-    if (!fallback) fallback = a;
+    const score = catPathDistance(path) + from.distanceTo(a) * 0.2;
+    const entry = { anchor: a, score };
+    staticValid.push(entry);
+    if (isPathTraversable(path, dynamicObstacles)) dynamicValid.push(entry);
   }
 
-  return fallback || nearestDeskJumpAnchor(from);
+  const weightedPick = (list) => {
+    if (!list.length) return null;
+    list.sort((a, b) => a.score - b.score);
+    const topN = Math.min(6, list.length);
+    let total = 0;
+    for (let i = 0; i < topN; i++) total += 1 / (1 + i);
+    let pick = Math.random() * total;
+    for (let i = 0; i < topN; i++) {
+      pick -= 1 / (1 + i);
+      if (pick <= 0) return list[i].anchor;
+    }
+    return list[0].anchor;
+  };
+
+  return weightedPick(dynamicValid) || weightedPick(staticValid) || nearestDeskJumpAnchor(from);
 }
 
 
@@ -858,6 +883,8 @@ function keepCatAwayFromCup(minDist = CUP_COLLISION.catAvoidRadius) {
     isCatPointBlocked,
     getCatPathClearance,
     hasClearTravelLine,
+    getNavMeshDebugData,
+    getActiveNavMeshDebugData,
     computeCatPath,
     canReachGroundTarget,
     ensureCatPath,

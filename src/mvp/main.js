@@ -506,6 +506,8 @@ const debugRuntime = createDebugOverlayRuntime({
   buildCatObstacles: (...args) => navRuntime.buildCatObstacles(...args),
   isCatPointBlocked: (...args) => navRuntime.isCatPointBlocked(...args),
   getCatPathClearance: (...args) => navRuntime.getCatPathClearance(...args),
+  getNavMeshDebugData: (...args) => navRuntime.getNavMeshDebugData(...args),
+  getActiveNavMeshDebugData: (...args) => navRuntime.getActiveNavMeshDebugData(...args),
   computeCatPath: (...args) => navRuntime.computeCatPath(...args),
 });
 
@@ -684,6 +686,8 @@ function buildCat() {
     stateT: 0,
     status: "Patrolling",
     onTable: false,
+    tableRoamTarget: new THREE.Vector3(0, 0, 0),
+    nextTableRoamAt: 0,
     speed: 1.0,
     patrolTarget: new THREE.Vector3(1.5, 0, 1.7),
     nextTableRollAt: 0,
@@ -1236,6 +1240,8 @@ function resetGame() {
   cat.stateT = 0;
   cat.status = "Patrolling";
   cat.onTable = false;
+  cat.tableRoamTarget.set(desk.pos.x, 0, desk.pos.z);
+  cat.nextTableRoamAt = 0;
   cat.tableRollStartAt = clockTime + CAT_BEHAVIOR.initialRollDelay;
   cat.nextTableRollAt = cat.tableRollStartAt;
   cat.walkT = 0;
