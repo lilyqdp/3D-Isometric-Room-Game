@@ -32,6 +32,7 @@ hud.style.display = "none";
 // Play button
 playBtn.addEventListener("click", () => {
   resetGame();
+  game.state = "playing";
   startMenu.classList.add("hidden");
   hud.style.display = "block";
 });
@@ -202,7 +203,7 @@ const trashCan = {
 };
 
 const game = {
-  state: "playing", // playing | lost | won
+  state: "menu", // playing | lost | won
   endlessMode: false,
   reason: "",
   sorted: 0,
