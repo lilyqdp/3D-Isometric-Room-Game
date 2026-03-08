@@ -39,10 +39,10 @@ playBtn.addEventListener("click", () => {
 //Connect Button
 startModeBtn.addEventListener("click", () => {
 
-  // trigger the same logic as the in-game mode button
-  if (modeBtnEl) modeBtnEl.click();
+  // toggle the mode directly
+  game.endlessMode = !game.endlessMode;
 
-  // update the start menu label
+  // update start menu label
   if (game.endlessMode) {
     startModeBtn.textContent = "Mode: Endless";
   } else {
@@ -370,14 +370,28 @@ catnipBtn.addEventListener("click", () => {
 });
 
 restartBtn.addEventListener("click", () => {
-  resetGame();
+
+  game.state = "menu";
+
+  requestAnimationFrame(() => {
+    resetGame();
+    game.state = "playing";
+  });
+
 });
 if (modeBtnEl) {
-  modeBtnEl.addEventListener("click", () => {
+    modeBtnEl.addEventListener("click", () => {
+
+    game.state = "menu";
+
     game.endlessMode = !game.endlessMode;
-    resetGame();
-  });
-}
+
+    requestAnimationFrame(() => {
+      resetGame();
+      game.state = "playing";
+    });
+  }
+)};
 if (debugBtnEl) {
   debugBtnEl.addEventListener("click", () => toggleDebugView());
 }
