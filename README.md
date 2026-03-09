@@ -20,7 +20,7 @@ This will install all required packages, including Three.js and Vite.
 
 If you get an invalid permission error with npm install, try
 
-rm -rf node_modules package-lock.json
+rm -rf node_modules
 
 Then 'run npm install' again.
 
