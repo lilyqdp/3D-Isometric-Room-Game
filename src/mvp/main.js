@@ -204,6 +204,7 @@ const trashCan = {
 
 const game = {
   state: "menu", // playing | lost | won
+  timeScale: 1.0,
   endlessMode: false,
   reason: "",
   sorted: 0,
@@ -535,6 +536,11 @@ const debugRuntime = createDebugOverlayRuntime({
   computeCatPath: navRuntime.computeCatPath,
   computeDeskJumpTargets: navRuntime.computeDeskJumpTargets,
   getDeskDesiredTarget: () => getDeskDesiredTarget(),
+  getTimeScale: () => game.timeScale,
+  setTimeScale: (value) => {
+    const v = Number.isFinite(value) ? value : 1;
+    game.timeScale = THREE.MathUtils.clamp(v, 0, 2);
+  },
 });
 
 const debugControlsRuntime = createDebugControlsRuntime({
@@ -746,6 +752,9 @@ function resetGame() {
   resetCatUnstuckTracking();
   cat.nav.stuckT = 0;
   cat.nav.lastSpeed = 0;
+  cat.nav.commandedSpeed = 0;
+  cat.nav.speedNorm = 0;
+  cat.nav.smoothedSpeed = 0;
   cat.modelAnchor.position.set(0, 0, 0);
   cat.modelAnchor.rotation.set(0, 0, 0);
   refreshCatPatrolTarget();
@@ -989,7 +998,8 @@ function updateMessMeter() {
 }
 
 function animate() {
-  const dt = Math.min(clock.getDelta(), 0.05);
+  const rawDt = Math.min(clock.getDelta(), 0.05);
+  const dt = rawDt * THREE.MathUtils.clamp(game.timeScale, 0, 2);
   clockTime += dt;
 
   controls.target.x = THREE.MathUtils.clamp(controls.target.x, TARGET_BOUNDS.minX, TARGET_BOUNDS.maxX);
@@ -997,7 +1007,7 @@ function animate() {
   controls.target.y = THREE.MathUtils.clamp(controls.target.y, TARGET_BOUNDS.minY, TARGET_BOUNDS.maxY);
 
   if (game.state === "playing") {
-    physics.world.step(physics.fixedStep, dt, 10);
+    if (dt > 0) physics.world.step(physics.fixedStep, dt, 10);
     updatePickups(dt);
     updateEndlessSpawning(dt);
     updateCat(dt);

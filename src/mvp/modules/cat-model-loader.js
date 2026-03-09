@@ -120,6 +120,9 @@ export function createCatModelRuntime(ctx) {
         debugDestination: new THREE.Vector3(1.5, 0, 1.7),
         path: [],
         index: 0,
+        commandedSpeed: 0,
+        speedNorm: 0,
+        smoothedSpeed: 0,
         repathAt: 0,
         anchorReplanAt: 0,
         anchorLandingCheckAt: 0,
@@ -532,13 +535,15 @@ export function createCatModelRuntime(ctx) {
       catObject.activeClipAction = target;
     }
 
+    const walkTimeScale = THREE.MathUtils.clamp(0.6 + speedNorm * 0.95, 0.6, 1.85);
+
     if (walkAction === idleAction) {
       walkAction.setEffectiveWeight(1);
-      walkAction.setEffectiveTimeScale(moving ? THREE.MathUtils.clamp(0.75 + speedNorm * 0.7, 0.7, 1.65) : 0.45);
+      walkAction.setEffectiveTimeScale(moving ? walkTimeScale : 0.45);
     } else if (moving) {
       walkAction.setEffectiveWeight(1);
       idleAction.setEffectiveWeight(0);
-      walkAction.setEffectiveTimeScale(THREE.MathUtils.clamp(0.75 + speedNorm * 0.7, 0.7, 1.65));
+      walkAction.setEffectiveTimeScale(walkTimeScale);
       idleAction.setEffectiveTimeScale(1.0);
     } else {
       walkAction.setEffectiveWeight(0);

@@ -21,6 +21,26 @@ export function createCatSteeringRuntime(ctx) {
   const tempTo = new THREE.Vector3();
   const tempFrom = new THREE.Vector3();
 
+  function getSpeedRef(speed) {
+    return Math.max(0.05, Number.isFinite(speed) ? speed : (cat.speed || 1));
+  }
+
+  function clearNavMotionMetrics() {
+    cat.nav.lastSpeed = 0;
+    cat.nav.speedNorm = 0;
+    cat.nav.smoothedSpeed = 0;
+  }
+
+  function setNavMotionMetrics(moved, dt, speedRef) {
+    const measured = moved / Math.max(dt, 1e-5);
+    const prevSmooth = Number.isFinite(cat.nav.smoothedSpeed) ? cat.nav.smoothedSpeed : measured;
+    const alpha = 1 - Math.exp(-dt * 14);
+    const smooth = THREE.MathUtils.lerp(prevSmooth, measured, alpha);
+    cat.nav.smoothedSpeed = smooth;
+    cat.nav.lastSpeed = smooth;
+    cat.nav.speedNorm = THREE.MathUtils.clamp(smooth / Math.max(speedRef, 1e-5), 0, 1.75);
+  }
+
   function rotateCatToward(yaw, dt) {
     const delta = Math.atan2(Math.sin(yaw - cat.group.rotation.y), Math.cos(yaw - cat.group.rotation.y));
     const maxStep = CAT_NAV.maxTurnRate * dt;
@@ -133,6 +153,8 @@ export function createCatSteeringRuntime(ctx) {
     let direct = !!opts.direct;
     let ignoreDynamic = !!opts.ignoreDynamic;
     let chase = target;
+    const speedRef = getSpeedRef(speed);
+    cat.nav.commandedSpeed = speedRef;
     if (yLevel <= 0.02) {
       const staticClearance = getCatPathClearance();
       const dynamicClearance = staticClearance;
@@ -173,7 +195,7 @@ export function createCatSteeringRuntime(ctx) {
         }
         if (cat.nav.path.length <= 1) {
           cat.group.position.set(cat.pos.x, yLevel, cat.pos.z);
-          cat.nav.lastSpeed = 0;
+          clearNavMotionMetrics();
           return false;
         }
       }
@@ -186,6 +208,7 @@ export function createCatSteeringRuntime(ctx) {
     const d = Math.hypot(dx, dz);
     if (d < 0.06) {
       cat.group.position.set(cat.pos.x, yLevel, cat.pos.z);
+      clearNavMotionMetrics();
       return cat.pos.distanceTo(target) < 0.14;
     }
     const nx = dx / d;
@@ -199,7 +222,7 @@ export function createCatSteeringRuntime(ctx) {
     }
     if (yLevel <= 0.02 && Math.abs(dy) > CAT_NAV.turnStopThreshold) {
       cat.group.position.set(cat.pos.x, yLevel, cat.pos.z);
-      cat.nav.lastSpeed = 0;
+      clearNavMotionMetrics();
       cat.nav.stuckT += dt * 0.4;
       if (cat.nav.stuckT > 0.4 && getClockTime() >= cat.nav.repathAt) {
         ensureCatPath(target, true, !ignoreDynamic);
@@ -242,7 +265,7 @@ export function createCatSteeringRuntime(ctx) {
       if (isCatPointBlocked(cat.pos.x, cat.pos.z, collisionObstacles, collisionClearance * 0.98)) {
         cat.pos.copy(tempFrom);
         cat.group.position.set(cat.pos.x, yLevel, cat.pos.z);
-        cat.nav.lastSpeed = 0;
+        clearNavMotionMetrics();
         cat.nav.stuckT += dt;
         if (getClockTime() >= cat.nav.repathAt) {
           ensureCatPath(target, true, !ignoreDynamic);
@@ -265,7 +288,7 @@ export function createCatSteeringRuntime(ctx) {
       } else {
         cat.nav.stuckT = Math.max(0, cat.nav.stuckT - dt * 0.9);
       }
-      cat.nav.lastSpeed = moved / Math.max(dt, 1e-5);
+      setNavMotionMetrics(moved, dt, speedRef);
       return cat.pos.distanceToSquared(target) < 0.14 * 0.14;
     }
 
@@ -304,7 +327,7 @@ export function createCatSteeringRuntime(ctx) {
     if (!foundStep) {
       cat.pos.copy(tempFrom);
       cat.group.position.set(cat.pos.x, yLevel, cat.pos.z);
-      cat.nav.lastSpeed = 0;
+      clearNavMotionMetrics();
       cat.nav.stuckT += dt * 0.5;
       return false;
     }
@@ -313,7 +336,7 @@ export function createCatSteeringRuntime(ctx) {
     rotateCatToward(pickedYaw, dt);
 
     const moved = cat.pos.distanceTo(tempFrom);
-    cat.nav.lastSpeed = moved / Math.max(dt, 1e-5);
+    setNavMotionMetrics(moved, dt, speedRef);
 
     return cat.pos.distanceToSquared(target) < 0.14 * 0.14;
   }

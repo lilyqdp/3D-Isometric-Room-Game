@@ -1,7 +1,22 @@
 import { computeCupSwipePlan } from "./cat-plans.js";
 
 export function createDebugOverlayRuntime(ctx) {
-  const { THREE, scene, physics, pickups, cat, cup, desk, ROOM, CAT_NAV, CAT_COLLISION, CUP_COLLISION, debugBtnEl } = ctx;
+  const {
+    THREE,
+    scene,
+    physics,
+    pickups,
+    cat,
+    cup,
+    desk,
+    ROOM,
+    CAT_NAV,
+    CAT_COLLISION,
+    CUP_COLLISION,
+    debugBtnEl,
+    getTimeScale,
+    setTimeScale,
+  } = ctx;
 
   const DEBUG_VIEW = {
     enabled: true,
@@ -86,6 +101,73 @@ export function createDebugOverlayRuntime(ctx) {
     depthTest: false,
   });
   const PATH_LIFT = 0.08;
+  let debugTimeScaleWrap = null;
+  let debugTimeScaleInput = null;
+  let debugTimeScaleValue = null;
+
+  function clampTimeScale(value) {
+    const v = Number.isFinite(value) ? value : 1;
+    return THREE.MathUtils.clamp(v, 0, 2);
+  }
+
+  function getCurrentTimeScale() {
+    return typeof getTimeScale === "function" ? clampTimeScale(getTimeScale()) : 1;
+  }
+
+  function updateTimeScaleValueLabel() {
+    if (!debugTimeScaleValue) return;
+    debugTimeScaleValue.textContent = `${getCurrentTimeScale().toFixed(2)}x`;
+  }
+
+  function syncTimeScaleControlsFromState() {
+    if (debugTimeScaleInput) debugTimeScaleInput.value = String(getCurrentTimeScale());
+    updateTimeScaleValueLabel();
+  }
+
+  function setTimeScaleControlVisible() {
+    if (!debugTimeScaleWrap) return;
+    debugTimeScaleWrap.style.display = debugView.visible ? "flex" : "none";
+  }
+
+  function initTimeScaleControl() {
+    if (!debugBtnEl || debugTimeScaleWrap) return;
+    const buttonsRow = debugBtnEl.parentElement;
+    if (!buttonsRow || !buttonsRow.parentElement) return;
+
+    debugTimeScaleWrap = document.createElement("div");
+    debugTimeScaleWrap.style.display = "none";
+    debugTimeScaleWrap.style.marginTop = "8px";
+    debugTimeScaleWrap.style.alignItems = "center";
+    debugTimeScaleWrap.style.gap = "8px";
+    debugTimeScaleWrap.style.fontSize = "12px";
+
+    const label = document.createElement("span");
+    label.textContent = "Debug speed";
+    label.style.opacity = "0.9";
+
+    debugTimeScaleInput = document.createElement("input");
+    debugTimeScaleInput.type = "range";
+    debugTimeScaleInput.min = "0";
+    debugTimeScaleInput.max = "2";
+    debugTimeScaleInput.step = "0.05";
+    debugTimeScaleInput.style.flex = "1";
+    debugTimeScaleInput.style.minWidth = "140px";
+
+    debugTimeScaleValue = document.createElement("span");
+    debugTimeScaleValue.style.fontWeight = "700";
+    debugTimeScaleValue.style.minWidth = "46px";
+    debugTimeScaleValue.style.textAlign = "right";
+
+    debugTimeScaleInput.addEventListener("input", () => {
+      const next = clampTimeScale(Number(debugTimeScaleInput.value));
+      if (typeof setTimeScale === "function") setTimeScale(next);
+      syncTimeScaleControlsFromState();
+    });
+
+    debugTimeScaleWrap.append(label, debugTimeScaleInput, debugTimeScaleValue);
+    buttonsRow.insertAdjacentElement("afterend", debugTimeScaleWrap);
+    syncTimeScaleControlsFromState();
+  }
 
   function clearDebugChildren(group) {
     for (let i = group.children.length - 1; i >= 0; i--) {
@@ -514,6 +596,7 @@ export function createDebugOverlayRuntime(ctx) {
 
   function initDebugView(clockTime) {
     if (!DEBUG_VIEW.enabled) return;
+    initTimeScaleControl();
     if (!debugView.root.parent) scene.add(debugView.root);
     if (!debugView.staticCollisionGroup.parent) debugView.root.add(debugView.staticCollisionGroup);
     if (!debugView.dynamicCollisionGroup.parent) debugView.root.add(debugView.dynamicCollisionGroup);
@@ -528,11 +611,13 @@ export function createDebugOverlayRuntime(ctx) {
     rebuildTargetMarkerDebug();
     debugView.nextNavRefreshAt = clockTime + DEBUG_VIEW.navRefreshInterval;
     updateDebugButtonLabel();
+    setTimeScaleControlVisible();
   }
 
   function updateDebugView(clockTime) {
     if (!DEBUG_VIEW.enabled) return;
     if (!debugView.visible) return;
+    updateTimeScaleValueLabel();
     rebuildDynamicCollisionDebug();
     rebuildCurrentPathDebug(clockTime);
     rebuildTargetMarkerDebug();
@@ -554,8 +639,10 @@ export function createDebugOverlayRuntime(ctx) {
   function setDebugViewVisible(visible, clockTime) {
     debugView.visible = !!visible;
     debugView.root.visible = debugView.visible;
+    setTimeScaleControlVisible();
     if (debugView.visible) {
       debugView.nextNavRefreshAt = 0;
+      syncTimeScaleControlsFromState();
       updateDebugView(clockTime);
     }
     updateDebugButtonLabel();

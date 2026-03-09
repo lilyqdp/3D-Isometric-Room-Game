@@ -25,12 +25,18 @@ function animateCatPose(dt, moving) {
     isForepawHook ||
     isJumpSettle ||
     !!cat.jump;
-  const movingTarget = forceStill ? 0 : (moving || cat.nav.lastSpeed > 0.24 ? 1 : 0);
+  const speedRef = Math.max(0.05, Number.isFinite(cat.nav.commandedSpeed) ? cat.nav.commandedSpeed : (cat.speed || 1));
+  const navSpeedNorm = Number.isFinite(cat.nav.speedNorm)
+    ? cat.nav.speedNorm
+    : THREE.MathUtils.clamp((cat.nav.lastSpeed || 0) / speedRef, 0, 1.75);
+  // Drive locomotion primarily from measured world-space speed so clips do not "skate."
+  const speedDrivenMotion = THREE.MathUtils.clamp((navSpeedNorm - 0.06) / 0.9, 0, 1);
+  const movingTarget = forceStill ? 0 : speedDrivenMotion;
   cat.motionBlend = THREE.MathUtils.damp(cat.motionBlend, movingTarget, 8, dt);
   const movingAmt = cat.motionBlend;
 
   if (movingAmt > 0.02) {
-    cat.walkT += dt * 8.0;
+    cat.walkT += dt * (4.8 + navSpeedNorm * 4.2);
   } else {
     cat.walkT *= Math.max(0, 1 - dt * 8.0);
   }
@@ -69,8 +75,7 @@ function animateCatPose(dt, moving) {
         if (!isJumpState) return;
       }
       if (!usesSpecialPose) {
-        const speedNorm = THREE.MathUtils.clamp(cat.nav.lastSpeed / Math.max(cat.speed, 0.001), 0, 1.5);
-        updateCatClipLocomotion(cat, dt, movingAmt > 0.08, speedNorm);
+        updateCatClipLocomotion(cat, dt, movingAmt > 0.08, navSpeedNorm);
 
         cat.modelAnchor.position.y = THREE.MathUtils.damp(cat.modelAnchor.position.y, 0, 10, dt);
         cat.modelAnchor.rotation.x = THREE.MathUtils.damp(cat.modelAnchor.rotation.x, 0, 10, dt);
