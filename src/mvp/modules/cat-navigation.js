@@ -80,6 +80,10 @@ export function createCatNavigationRuntime(ctx) {
     return pathRuntime.getActiveNavMeshDebugData();
   }
 
+  function getLastAStarDebugData() {
+    return pathRuntime.getLastAStarDebugData();
+  }
+
   function computeCatPath(start, goal, obstacles) {
     return pathRuntime.computeCatPath(start, goal, obstacles);
   }
@@ -152,7 +156,6 @@ export function createCatNavigationRuntime(ctx) {
     hasClearTravelLine,
     ensureCatPath,
     canReachGroundTarget,
-    nudgeBlockingPickupAwayFromCat: recoveryRuntime.nudgeBlockingPickupAwayFromCat,
   });
 
   return {
@@ -163,6 +166,7 @@ export function createCatNavigationRuntime(ctx) {
     hasClearTravelLine,
     getNavMeshDebugData,
     getActiveNavMeshDebugData,
+    getLastAStarDebugData,
     computeCatPath,
     canReachGroundTarget,
     ensureCatPath,

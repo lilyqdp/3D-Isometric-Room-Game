@@ -22,6 +22,7 @@ export function createCatPathfindingRuntime(ctx) {
 
   const tempQ = new THREE.Quaternion();
   const tempEuler = new THREE.Euler();
+  const tempForward = new THREE.Vector3();
   const recastState = {
     ready: false,
     failed: false,
@@ -31,6 +32,14 @@ export function createCatPathfindingRuntime(ctx) {
     static: null,
     dynamic: null,
     active: null,
+  };
+  const lastAStarDebug = {
+    mode: "none", // none | fallback | recast
+    start: null,
+    goal: null,
+    edges: [],
+    finalPath: [],
+    timestamp: 0,
   };
   const lastPlannedSignature = {
     static: "",
@@ -43,7 +52,7 @@ export function createCatPathfindingRuntime(ctx) {
     walkableSlopeAngle: 50,
     walkableHeight: 0.25,
     walkableClimb: 0.08,
-    walkableRadius: Math.max(0.05, CAT_COLLISION.catBodyRadius - CAT_PATH_CLEARANCE_EPSILON),
+    walkableRadius: Math.max(0.05, CAT_COLLISION.catBodyRadius),
     maxEdgeLen: 12,
     maxSimplificationError: 0.7,
     minRegionArea: 0,
@@ -78,6 +87,7 @@ export function createCatPathfindingRuntime(ctx) {
         z: hamper.pos.z,
         hx: hamper.outerHalfX + 0.02,
         hz: hamper.outerHalfZ + 0.02,
+        navPad: 0.02,
         y: hamper.rimY * 0.5,
         h: hamper.rimY + 0.06,
       },
@@ -86,6 +96,7 @@ export function createCatPathfindingRuntime(ctx) {
         x: trashCan.pos.x,
         z: trashCan.pos.z,
         r: trashCan.outerRadius + 0.12,
+        navPad: 0.12,
         y: trashCan.rimY * 0.5,
         h: trashCan.rimY + 0.08,
       },
@@ -97,6 +108,7 @@ export function createCatPathfindingRuntime(ctx) {
         z: leg.z,
         hx: leg.halfX + 0.03,
         hz: leg.halfZ + 0.03,
+        navPad: 0.03,
         y: leg.topY * 0.5,
         h: leg.topY + 0.04,
       });
@@ -108,43 +120,50 @@ export function createCatPathfindingRuntime(ctx) {
         x: cup.group.position.x,
         z: cup.group.position.z,
         r: CUP_COLLISION.radius + 0.04,
+        navPad: 0.04,
         y: cup.group.position.y,
         h: (CUP_COLLISION.waterHeight || 0.27) + 0.14,
       });
     }
     if (includePickups) {
       for (const p of pickups) {
-        const cdx = p.mesh.position.x - cat.pos.x;
-        const cdz = p.mesh.position.z - cat.pos.z;
+        const px = p.body?.position?.x ?? p.mesh.position.x;
+        const pz = p.body?.position?.z ?? p.mesh.position.z;
+        const cdx = px - cat.pos.x;
+        const cdz = pz - cat.pos.z;
         if (!includeClosePickups && cdx * cdx + cdz * cdz < 0.22 * 0.22) continue;
         const shape = p.body?.shapes?.[0];
-        const halfY = shape?.halfExtents?.y || (p.type === "laundry" ? 0.05 : 0.04);
+        const halfX = shape?.halfExtents?.x || (p.type === "laundry" ? 0.24 : 0.15);
+        const halfZ = shape?.halfExtents?.z || (p.type === "laundry" ? 0.18 : 0.12);
+        const halfY = shape?.halfExtents?.y || (p.type === "laundry" ? 0.04 : 0.03);
         // Keep pickup obstacles tall enough that recast still blocks them after they settle flat.
         const height = p.type === "laundry" ? Math.max(0.2, halfY * 2 + 0.1) : Math.max(0.18, halfY * 2 + 0.1);
-        const centerY = p.mesh.position.y + 0.05;
-        if (p.type === "laundry") {
+        const centerY = (p.body?.position?.y ?? p.mesh.position.y) + 0.05;
+        let yaw = 0;
+        if (p.body?.quaternion) {
           tempQ.set(p.body.quaternion.x, p.body.quaternion.y, p.body.quaternion.z, p.body.quaternion.w);
-          tempEuler.setFromQuaternion(tempQ, "YXZ");
-          obstacles.push({
-            kind: "obb",
-            x: p.mesh.position.x,
-            z: p.mesh.position.z,
-            hx: 0.17,
-            hz: 0.11,
-            yaw: tempEuler.y,
-            y: centerY,
-            h: height,
-          });
-        } else {
-          obstacles.push({
-            kind: "circle",
-            x: p.mesh.position.x,
-            z: p.mesh.position.z,
-            r: pickupRadius(p) + CAT_COLLISION.pickupRadiusBoost * 0.35,
-            y: centerY,
-            h: height,
-          });
+          // Derive planar yaw from forward axis projection to avoid roll/pitch artifacts.
+          tempForward.set(0, 0, 1).applyQuaternion(tempQ);
+          tempForward.y = 0;
+          if (tempForward.lengthSq() > 1e-6) {
+            tempForward.normalize();
+            yaw = Math.atan2(tempForward.x, tempForward.z);
+          } else {
+            tempEuler.setFromQuaternion(tempQ, "YXZ");
+            yaw = tempEuler.y;
+          }
         }
+        obstacles.push({
+          kind: "obb",
+          x: px,
+          z: pz,
+          hx: halfX,
+          hz: halfZ,
+          navPad: 0,
+          yaw,
+          y: centerY,
+          h: height,
+        });
       }
     }
     obstacles._includePickups = !!includePickups;
@@ -194,8 +213,8 @@ export function createCatPathfindingRuntime(ctx) {
   }
 
   function getCatPathClearance() {
-    // Inflate path clearance a bit so paths do not graze obstacle edges.
-    return Math.max(0.01, CAT_COLLISION.catBodyRadius + 0.03 - CAT_PATH_CLEARANCE_EPSILON);
+    // Keep nav/path collision radius identical to cat shove/body radius.
+    return Math.max(0.01, CAT_COLLISION.catBodyRadius);
   }
 
   function hasClearTravelLine(a, b, obstacles, clearance = CAT_NAV.clearance, queryY = 0) {
@@ -627,7 +646,24 @@ export function createCatPathfindingRuntime(ctx) {
   }
 
   function computeFallbackCatPath(start, goal, obstacles, navClearance) {
+    lastAStarDebug.mode = "fallback";
+    lastAStarDebug.start = start.clone();
+    lastAStarDebug.goal = goal.clone();
+    lastAStarDebug.edges = [];
+    lastAStarDebug.finalPath = [];
+    lastAStarDebug.timestamp = getClockTime();
+
     if (hasClearTravelLine(start, goal, obstacles, navClearance)) {
+      lastAStarDebug.edges = [
+        {
+          from: start.clone(),
+          to: goal.clone(),
+          order: 0,
+          accepted: true,
+          reason: "straight",
+        },
+      ];
+      lastAStarDebug.finalPath = [start.clone(), goal.clone()];
       return [start.clone(), goal.clone()];
     }
 
@@ -639,7 +675,19 @@ export function createCatPathfindingRuntime(ctx) {
     const startTri = findTriangleForPoint(freeStart, navMesh, obstacles, navClearance);
     const goalTri = findTriangleForPoint(freeGoal, navMesh, obstacles, navClearance);
     if (startTri < 0 || goalTri < 0) return [];
-    if (startTri === goalTri) return [start.clone(), goal.clone()];
+    if (startTri === goalTri) {
+      lastAStarDebug.edges = [
+        {
+          from: start.clone(),
+          to: goal.clone(),
+          order: 0,
+          accepted: true,
+          reason: "sameCell",
+        },
+      ];
+      lastAStarDebug.finalPath = [start.clone(), goal.clone()];
+      return [start.clone(), goal.clone()];
+    }
 
     const triCount = navMesh.triangles.length;
     const g = new Float32Array(triCount);
@@ -655,6 +703,7 @@ export function createCatPathfindingRuntime(ctx) {
     const open = [startTri];
     g[startTri] = 0;
     f[startTri] = navMesh.triangles[startTri].centroid.distanceTo(navMesh.triangles[goalTri].centroid);
+    let aStarOrder = 0;
 
     while (open.length) {
       let bestI = 0;
@@ -676,15 +725,33 @@ export function createCatPathfindingRuntime(ctx) {
 
       const currentCenter = navMesh.triangles[current].centroid;
       for (const neighbor of navMesh.triangles[current].neighbors) {
-        if (closed[neighbor]) continue;
         const neighborCenter = navMesh.triangles[neighbor].centroid;
-        if (!hasClearTravelLine(currentCenter, neighborCenter, obstacles, navClearance)) continue;
+        const edgeRecord = {
+          from: currentCenter.clone(),
+          to: neighborCenter.clone(),
+          order: aStarOrder++,
+          accepted: false,
+          reason: "checked",
+        };
+        if (lastAStarDebug.edges.length < 1800) {
+          lastAStarDebug.edges.push(edgeRecord);
+        }
+        if (closed[neighbor]) continue;
+        if (!hasClearTravelLine(currentCenter, neighborCenter, obstacles, navClearance)) {
+          edgeRecord.reason = "blocked";
+          continue;
+        }
         const candidate = g[current] + currentCenter.distanceTo(neighborCenter);
-        if (candidate >= g[neighbor]) continue;
+        if (candidate >= g[neighbor]) {
+          edgeRecord.reason = "worse";
+          continue;
+        }
         came[neighbor] = current;
         g[neighbor] = candidate;
         f[neighbor] = candidate + neighborCenter.distanceTo(navMesh.triangles[goalTri].centroid);
         open.push(neighbor);
+        edgeRecord.accepted = true;
+        edgeRecord.reason = "accepted";
       }
     }
 
@@ -703,12 +770,28 @@ export function createCatPathfindingRuntime(ctx) {
       waypoints.push(navMesh.triangles[triPath[i]].centroid.clone());
     }
     waypoints.push(goal.clone());
-    return smoothCatPath(waypoints, obstacles, navClearance);
+    const final = smoothCatPath(waypoints, obstacles, navClearance);
+    lastAStarDebug.finalPath = final.map((p) => p.clone());
+    return final;
   }
 
   function computeCatPath(start, goal, obstacles) {
     const navClearance = getCatPathClearance();
     if (hasClearTravelLine(start, goal, obstacles, navClearance)) {
+      lastAStarDebug.mode = "straight";
+      lastAStarDebug.start = start.clone();
+      lastAStarDebug.goal = goal.clone();
+      lastAStarDebug.edges = [
+        {
+          from: start.clone(),
+          to: goal.clone(),
+          order: 0,
+          accepted: true,
+          reason: "straight",
+        },
+      ];
+      lastAStarDebug.finalPath = [start.clone(), goal.clone()];
+      lastAStarDebug.timestamp = getClockTime();
       return [start.clone(), goal.clone()];
     }
 
@@ -719,6 +802,21 @@ export function createCatPathfindingRuntime(ctx) {
     if (Array.isArray(recastPath) && recastPath.length >= 2) {
       recastPath[0] = start.clone();
       recastPath[recastPath.length - 1] = goal.clone();
+      lastAStarDebug.mode = "recast";
+      lastAStarDebug.start = start.clone();
+      lastAStarDebug.goal = goal.clone();
+      lastAStarDebug.edges = [];
+      for (let i = 1; i < recastPath.length; i++) {
+        lastAStarDebug.edges.push({
+          from: recastPath[i - 1].clone(),
+          to: recastPath[i].clone(),
+          order: i - 1,
+          accepted: true,
+          reason: "recastPath",
+        });
+      }
+      lastAStarDebug.finalPath = recastPath.map((p) => p.clone());
+      lastAStarDebug.timestamp = getClockTime();
       return recastPath;
     }
 
@@ -763,6 +861,17 @@ export function createCatPathfindingRuntime(ctx) {
     await ensureRecastInitialized();
   }
 
+  function getLastAStarDebugData() {
+    return {
+      mode: lastAStarDebug.mode,
+      start: lastAStarDebug.start ? lastAStarDebug.start.clone() : null,
+      goal: lastAStarDebug.goal ? lastAStarDebug.goal.clone() : null,
+      edges: Array.isArray(lastAStarDebug.edges) ? lastAStarDebug.edges : [],
+      finalPath: Array.isArray(lastAStarDebug.finalPath) ? lastAStarDebug.finalPath : [],
+      timestamp: lastAStarDebug.timestamp || 0,
+    };
+  }
+
   return {
     initPathfinding,
     buildCatObstacles,
@@ -772,6 +881,7 @@ export function createCatPathfindingRuntime(ctx) {
     catPathDistance,
     getNavMeshDebugData,
     getActiveNavMeshDebugData,
+    getLastAStarDebugData,
     computeCatPath,
     isPathTraversable,
     canReachGroundTarget,

@@ -161,18 +161,19 @@ export function createCatJumpPlanningRuntime(ctx) {
 
       const path = computeCatPath(from, a, staticObstacles);
       if (!isPathTraversable(path, staticObstacles)) continue;
+      const dynamicPath = computeCatPath(from, a, dynamicObstacles);
+      if (!isPathTraversable(dynamicPath, dynamicObstacles)) continue;
       const jumpTargets = computeDeskJumpTargets(a, desiredTopPoint);
       if (!jumpTargets) continue;
       if (isCatPointBlocked(jumpTargets.top.x, jumpTargets.top.z, dynamicObstacles, landingClearance, landingY)) continue;
       if (!hasClearTravelLine(jumpTargets.hook, jumpTargets.top, dynamicObstacles, landingClearance, landingY)) continue;
 
-      let score = catPathDistance(path) + from.distanceTo(a) * 0.12;
+      let score = catPathDistance(dynamicPath) + from.distanceTo(a) * 0.12;
       if (desiredTopPoint) {
         const dx = jumpTargets.top.x - desiredTopPoint.x;
         const dz = jumpTargets.top.z - desiredTopPoint.z;
         score += Math.hypot(dx, dz) * 0.9;
       }
-      if (isPathTraversable(path, dynamicObstacles)) score -= 0.25;
       valid.push({ anchor: a, score });
     }
 

@@ -28,6 +28,11 @@ export function createPickupsRuntime(ctx) {
 
   let dragState = null;
   let dragHover = { binType: null, topEntry: false };
+  const tempCatRel = new CANNON.Vec3();
+  const tempCatLocal = new CANNON.Vec3();
+  const tempInvQuat = new CANNON.Quaternion();
+  const tempNormalLocal = new CANNON.Vec3();
+  const tempNormalWorld = new CANNON.Vec3();
 
   function setMouseFromEvent(event) {
     const rect = renderer.domElement.getBoundingClientRect();
@@ -70,6 +75,80 @@ export function createPickupsRuntime(ctx) {
 
   function pickupRadius(pickup) {
     return pickup.type === "laundry" ? 0.2 : 0.16;
+  }
+
+  function pickupHalfExtents(pickup) {
+    const shape = pickup?.body?.shapes?.[0];
+    if (shape?.halfExtents) {
+      return {
+        x: shape.halfExtents.x,
+        y: shape.halfExtents.y,
+        z: shape.halfExtents.z,
+      };
+    }
+    return pickup.type === "laundry"
+      ? { x: 0.24, y: 0.04, z: 0.18 }
+      : { x: 0.15, y: 0.03, z: 0.12 };
+  }
+
+  function sampleCatPickupShoveContact(pickup) {
+    const b = pickup.body;
+    if (!b) return null;
+
+    const catMinY = cat.group.position.y - 0.02;
+    const catMaxY = cat.group.position.y + 0.34;
+    const half = pickupHalfExtents(pickup);
+    const pickupMinY = b.position.y - half.y;
+    const pickupMaxY = b.position.y + half.y;
+    if (pickupMaxY < catMinY || pickupMinY > catMaxY) return null;
+
+    const catRadius = CAT_COLLISION.catBodyRadius;
+    tempCatRel.set(cat.pos.x - b.position.x, 0, cat.pos.z - b.position.z);
+    b.quaternion.inverse(tempInvQuat);
+    tempInvQuat.vmult(tempCatRel, tempCatLocal);
+
+    const clampedX = THREE.MathUtils.clamp(tempCatLocal.x, -half.x, half.x);
+    const clampedZ = THREE.MathUtils.clamp(tempCatLocal.z, -half.z, half.z);
+    const sepX = tempCatLocal.x - clampedX;
+    const sepZ = tempCatLocal.z - clampedZ;
+    const distSq = sepX * sepX + sepZ * sepZ;
+    if (distSq >= catRadius * catRadius) return null;
+
+    const dist = Math.sqrt(Math.max(1e-12, distSq));
+    let nx = 0;
+    let nz = 0;
+
+    if (distSq > 1e-8) {
+      // Local normal points from pickup bounds to cat center; invert to push pickup away from cat.
+      tempNormalLocal.set(sepX / dist, 0, sepZ / dist);
+      b.quaternion.vmult(tempNormalLocal, tempNormalWorld);
+      nx = -tempNormalWorld.x;
+      nz = -tempNormalWorld.z;
+    } else {
+      // Cat center is inside projected pickup bounds; push from cat center toward pickup center.
+      nx = b.position.x - cat.pos.x;
+      nz = b.position.z - cat.pos.z;
+      const nLen = Math.hypot(nx, nz);
+      if (nLen < 1e-4) {
+        nx = Math.sin(cat.group.rotation.y);
+        nz = Math.cos(cat.group.rotation.y);
+      } else {
+        nx /= nLen;
+        nz /= nLen;
+      }
+    }
+
+    const nMag = Math.hypot(nx, nz);
+    if (nMag > 1e-6) {
+      nx /= nMag;
+      nz /= nMag;
+    }
+
+    return {
+      nx,
+      nz,
+      penetration: catRadius - Math.sqrt(distSq),
+    };
   }
 
   function jitterGeometry(geometry, amount) {
@@ -532,52 +611,36 @@ export function createPickupsRuntime(ctx) {
       const angSpeed = b.angularVelocity.length();
       if (angSpeed > maxAngular) b.angularVelocity.scale(maxAngular / angSpeed, b.angularVelocity);
 
-      const catBaseY = cat.group.position.y;
-      const catMinY = catBaseY - 0.02;
-      const catMaxY = catBaseY + 0.34;
-      const pickupHalfY = p.type === "laundry" ? 0.05 : 0.04;
-      const pickupMinY = b.position.y - pickupHalfY;
-      const pickupMaxY = b.position.y + pickupHalfY;
-      const overlapsCatHeight = pickupMaxY >= catMinY && pickupMinY <= catMaxY;
-
-      if (overlapsCatHeight) {
-        const catRadius = CAT_COLLISION.catBodyRadius;
-        const itemRadius = pickupRadius(p) * 0.86;
-        const minDist = catRadius + itemRadius;
-        let dxCat = b.position.x - cat.pos.x;
-        let dzCat = b.position.z - cat.pos.z;
-        let dist = Math.hypot(dxCat, dzCat);
-        if (dist < minDist) {
-          if (dist < 1e-4) {
-            dxCat = Math.sin(cat.group.rotation.y);
-            dzCat = Math.cos(cat.group.rotation.y);
-            dist = 1;
-          }
-          const nxCat = dxCat / dist;
-          const nzCat = dzCat / dist;
-          const push = minDist - dist + 0.05;
-          b.wakeUp();
-          b.position.x += nxCat * push;
-          b.position.z += nzCat * push;
-          const impact = Math.max(0, -b.velocity.y);
-          const bounce =
-            p.type === "trash"
-              ? 1.35 + Math.min(0.45, impact * 0.16)
-              : 1.28 + Math.min(0.36, impact * 0.14);
-          b.velocity.x += nxCat * bounce;
-          b.velocity.z += nzCat * bounce;
-          if (p.type === "laundry") {
-            const side = (Math.random() - 0.5) * 0.28;
-            b.velocity.x += -nzCat * side;
-            b.velocity.z += nxCat * side;
-          }
-          b.velocity.y = Math.max(b.velocity.y, p.type === "trash" ? 0.9 : 0.82);
-          b.angularVelocity.y += (Math.random() - 0.5) * 2.1;
-          b.angularVelocity.x += (Math.random() - 0.5) * 1.4;
-          b.angularVelocity.z += (Math.random() - 0.5) * 1.4;
-          p.inMotion = true;
-          if (p.motion === "drag") p.motion = "bounce";
+      const shoveContact = sampleCatPickupShoveContact(p);
+      const half = pickupHalfExtents(p);
+      const pickupBottomY = b.position.y - half.y;
+      const catTopY = cat.group.position.y + 0.34;
+      const droppedOnCat = b.velocity.y < -0.42 && pickupBottomY >= catTopY - 0.02;
+      if (shoveContact && droppedOnCat) {
+        const nxCat = shoveContact.nx;
+        const nzCat = shoveContact.nz;
+        const push = shoveContact.penetration + 0.05;
+        b.wakeUp();
+        b.position.x += nxCat * push;
+        b.position.z += nzCat * push;
+        const impact = Math.max(0, -b.velocity.y);
+        const bounce =
+          p.type === "trash"
+            ? 1.35 + Math.min(0.45, impact * 0.16)
+            : 1.28 + Math.min(0.36, impact * 0.14);
+        b.velocity.x += nxCat * bounce;
+        b.velocity.z += nzCat * bounce;
+        if (p.type === "laundry") {
+          const side = (Math.random() - 0.5) * 0.28;
+          b.velocity.x += -nzCat * side;
+          b.velocity.z += nxCat * side;
         }
+        b.velocity.y = Math.max(b.velocity.y, p.type === "trash" ? 0.9 : 0.82);
+        b.angularVelocity.y += (Math.random() - 0.5) * 2.1;
+        b.angularVelocity.x += (Math.random() - 0.5) * 1.4;
+        b.angularVelocity.z += (Math.random() - 0.5) * 1.4;
+        p.inMotion = true;
+        if (p.motion === "drag") p.motion = "bounce";
       }
 
       resolvePickupCupWaterCollision(p);

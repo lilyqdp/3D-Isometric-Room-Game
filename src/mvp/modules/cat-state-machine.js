@@ -20,7 +20,6 @@ export function updateCatStateMachineRuntime(ctx, dt) {
     updateJump,
     getCurrentGroundGoal,
     ensureCatPath,
-    nudgeBlockingPickupAwayFromCat,
     findSafeGroundPoint,
     startJump,
     clearCatJumpTargets,
@@ -41,6 +40,7 @@ export function updateCatStateMachineRuntime(ctx, dt) {
 
   const animateCatPose = (stepDt, moving) => animateCatPoseRuntime(ctx, stepDt, moving);
   const CATNIP_MOUTH_OFFSET = 0.34;
+  const GROUND_MOVE_SPEED = 0.95;
   const catnipApproachTarget = new THREE.Vector3();
   const tableRoamTarget = new THREE.Vector3();
   const cupSwipePoint = new THREE.Vector3();
@@ -196,11 +196,7 @@ export function updateCatStateMachineRuntime(ctx, dt) {
         ? cat.pos
         : findSafeGroundPoint(desk.approach);
       if (!canReachGroundTarget(start, movePoint, dynamicObstacles)) {
-        if (nudgeBlockingPickupAwayFromCat()) {
-          ensureCatPath(movePoint, true, true);
-        } else {
-          enterNoPathSit();
-        }
+        enterNoPathSit();
         return false;
       }
     }
@@ -271,7 +267,7 @@ export function updateCatStateMachineRuntime(ctx, dt) {
         return true;
       }
       if (!cat.onTable) {
-        const reachedJumpAnchor = moveCatToward(cat.debugMoveJumpAnchor, stepDt, 1.0, 0);
+        const reachedJumpAnchor = moveCatToward(cat.debugMoveJumpAnchor, stepDt, GROUND_MOVE_SPEED, 0);
         cat.status = "Preparing jump";
         animateCatPose(stepDt, !reachedJumpAnchor);
         if (reachedJumpAnchor) {
@@ -332,7 +328,7 @@ export function updateCatStateMachineRuntime(ctx, dt) {
       return true;
     }
 
-    const reachedFloorTarget = moveCatToward(cat.debugMoveTarget, stepDt, 1.0, 0);
+    const reachedFloorTarget = moveCatToward(cat.debugMoveTarget, stepDt, GROUND_MOVE_SPEED, 0);
     cat.status = "Patrolling";
     animateCatPose(stepDt, !reachedFloorTarget);
     if (reachedFloorTarget) {
@@ -396,10 +392,6 @@ export function updateCatStateMachineRuntime(ctx, dt) {
       if (rescueGoal) {
         ensureCatPath(rescueGoal, true, true);
         cat.nav.repathAt = clockTime + CAT_NAV.repathInterval;
-      }
-      if (cat.nav.stuckT > 1.1 && nudgeBlockingPickupAwayFromCat()) {
-        cat.nav.repathAt = 0;
-        cat.nav.stuckT = Math.max(0.25, cat.nav.stuckT * 0.55);
       }
     }
 
@@ -493,7 +485,7 @@ export function updateCatStateMachineRuntime(ctx, dt) {
         }
         clearCatJumpTargets();
         const catnipTarget = getCatnipApproachTarget() || game.catnip.pos;
-        const atCatnip = moveCatToward(catnipTarget, stepDt, 1.0, 0);
+        const atCatnip = moveCatToward(catnipTarget, stepDt, GROUND_MOVE_SPEED, 0);
         faceCatnip(stepDt);
         cat.state = atCatnip ? "distracted" : "toCatnip";
         cat.status = atCatnip ? "Eating catnip" : "Going to catnip";
@@ -524,16 +516,12 @@ export function updateCatStateMachineRuntime(ctx, dt) {
           cat.nav.patrolPathCheckAt = clockTime + 0.2;
           const dynamicObstacles = buildCatObstacles(true, true);
           if (!canReachGroundTarget(cat.pos, target, dynamicObstacles)) {
-            if (nudgeBlockingPickupAwayFromCat()) {
-              ensureCatPath(target, true, true);
+            const nextPatrol = pickRandomPatrolPoint(cat.pos, false);
+            if (nextPatrol) {
+              cat.patrolTarget.copy(nextPatrol);
+              ensureCatPath(nextPatrol, true, true);
             } else {
-              const nextPatrol = pickRandomPatrolPoint(cat.pos, false);
-              if (nextPatrol) {
-                cat.patrolTarget.copy(nextPatrol);
-                ensureCatPath(nextPatrol, true, true);
-              } else {
-                enterNoPathSit();
-              }
+              enterNoPathSit();
             }
             animateCatPose(stepDt, false);
             return;
@@ -579,14 +567,10 @@ export function updateCatStateMachineRuntime(ctx, dt) {
       if (clockTime >= cat.nav.jumpBypassCheckAt && cat.jumpAnchor) {
         const dynamicObstacles = buildCatObstacles(true, true);
         const hasDynamicPath = canReachGroundTarget(cat.pos, cat.jumpAnchor, dynamicObstacles);
-        if (cat.nav.jumpNoClip) {
-          if (hasDynamicPath) {
-            resetCatJumpBypass();
-          }
-        } else if (!hasDynamicPath) {
-          // Temporary bypass through placeable clutter only; static geometry is still respected.
-          cat.nav.jumpNoClip = true;
-          clearCatNavPath(true);
+        if (!hasDynamicPath) {
+          if (!replanDeskJumpOrFallback()) return;
+        } else if (cat.nav.jumpNoClip) {
+          resetCatJumpBypass();
         }
         cat.nav.jumpBypassCheckAt = clockTime + CAT_NAV.jumpBypassCheckInterval;
       }
@@ -601,9 +585,9 @@ export function updateCatStateMachineRuntime(ctx, dt) {
       }
       const reachedDesk = moveCatToward(cat.jumpAnchor, stepDt, 0.92, 0, {
         direct: cat.jumpApproachLock,
-        ignoreDynamic: cat.nav.jumpNoClip,
+        ignoreDynamic: false,
       });
-      cat.status = cat.nav.jumpNoClip ? "Approaching jump point (bypassing clutter)" : "Approaching jump point";
+      cat.status = "Approaching jump point";
       animateCatPose(stepDt, true);
       if (reachedDesk) {
         cat.state = "prepareJump";

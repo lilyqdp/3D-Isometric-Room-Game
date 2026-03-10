@@ -15,20 +15,97 @@ export function createCatSteeringRuntime(ctx) {
     hasClearTravelLine,
     ensureCatPath,
     canReachGroundTarget,
-    nudgeBlockingPickupAwayFromCat,
   } = ctx;
 
   const tempTo = new THREE.Vector3();
   const tempFrom = new THREE.Vector3();
 
+  function ensureNavDebugStore() {
+    if (!cat.nav.debugStep || typeof cat.nav.debugStep !== "object") cat.nav.debugStep = {};
+    if (!cat.nav.debugCounters || typeof cat.nav.debugCounters !== "object") {
+      cat.nav.debugCounters = {
+        noPath: 0,
+        noSteer: 0,
+        repath: 0,
+        escape: 0,
+        rollback: 0,
+        rescueSnap: 0,
+        turnOnlyRepath: 0,
+        segmentRescue: 0,
+      };
+    }
+    if (!Array.isArray(cat.nav.debugEvents)) cat.nav.debugEvents = [];
+  }
+
+  function bumpDebugCounter(name) {
+    ensureNavDebugStore();
+    cat.nav.debugCounters[name] = (cat.nav.debugCounters[name] || 0) + 1;
+  }
+
+  function recordNavEvent(kind, data = null) {
+    ensureNavDebugStore();
+    const evt = {
+      t: getClockTime(),
+      kind,
+      state: cat.state,
+    };
+    if (data && typeof data === "object") Object.assign(evt, data);
+    cat.nav.debugEvents.push(evt);
+    if (cat.nav.debugEvents.length > 60) {
+      cat.nav.debugEvents.splice(0, cat.nav.debugEvents.length - 60);
+    }
+  }
+
   function getSpeedRef(speed) {
-    return Math.max(0.05, Number.isFinite(speed) ? speed : (cat.speed || 1));
+    const base = Math.max(0.05, Number.isFinite(speed) ? speed : (cat.speed || 1));
+    const speedScale = Math.max(0.1, Number.isFinite(CAT_NAV.locomotionSpeedScale) ? CAT_NAV.locomotionSpeedScale : 1);
+    return base * speedScale;
+  }
+
+  function updateDriveSpeed(targetSpeed, dt) {
+    const accel = Math.max(0.1, Number.isFinite(CAT_NAV.accel) ? CAT_NAV.accel : 3.2);
+    const decel = Math.max(0.1, Number.isFinite(CAT_NAV.decel) ? CAT_NAV.decel : 5.2);
+    const current = Number.isFinite(cat.nav.driveSpeed) ? cat.nav.driveSpeed : 0;
+    const target = Math.max(0, targetSpeed);
+    const rate = target >= current ? accel : decel;
+    const maxDelta = rate * Math.max(dt, 0);
+    const next = current + THREE.MathUtils.clamp(target - current, -maxDelta, maxDelta);
+    cat.nav.driveSpeed = Math.max(0, next);
+    return cat.nav.driveSpeed;
   }
 
   function clearNavMotionMetrics() {
     cat.nav.lastSpeed = 0;
+    cat.nav.driveSpeed = 0;
     cat.nav.speedNorm = 0;
     cat.nav.smoothedSpeed = 0;
+    cat.nav.turnBias = 0;
+    cat.nav.turnDirLock = 0;
+    cat.nav.locomotionHoldT = 0;
+  }
+
+  function setLocomotionIntent(clipKey, clipScale) {
+    if (!cat.locomotion) return;
+    cat.locomotion.activeClip = clipKey || "idle";
+    cat.locomotion.clipScale = Math.max(0, Number.isFinite(clipScale) ? clipScale : 0);
+  }
+
+  function getLocomotionProfile(clipKey) {
+    const fallback = {
+      idle: { planarSpeed: 0, turnRate: 0, localX: 0, localZ: 0 },
+      walkF: { planarSpeed: 0.9, turnRate: 1.1, localX: 0, localZ: 1 },
+      walkL: { planarSpeed: 0.78, turnRate: 0.7, localX: 0.32, localZ: 0.95 },
+      walkR: { planarSpeed: 0.78, turnRate: 0.7, localX: -0.32, localZ: 0.95 },
+      turn45L: { planarSpeed: 0, turnRate: 0.76, localX: 0, localZ: 0 },
+      turn45R: { planarSpeed: 0, turnRate: 0.76, localX: 0, localZ: 0 },
+      turn90L: { planarSpeed: 0, turnRate: 1.52, localX: 0, localZ: 0 },
+      turn90R: { planarSpeed: 0, turnRate: 1.52, localX: 0, localZ: 0 },
+    };
+    return (
+      (cat.locomotion && cat.locomotion.profiles && cat.locomotion.profiles[clipKey]) ||
+      fallback[clipKey] ||
+      fallback.walkF
+    );
   }
 
   function setNavMotionMetrics(moved, dt, speedRef) {
@@ -49,7 +126,80 @@ export function createCatSteeringRuntime(ctx) {
     return delta;
   }
 
+  function angleDelta(targetYaw, sourceYaw) {
+    return Math.atan2(Math.sin(targetYaw - sourceYaw), Math.cos(targetYaw - sourceYaw));
+  }
+
+  function chooseGroundLocomotion(rawYawDelta, dt) {
+    const prev = cat.locomotion?.activeClip || "walkF";
+    const prevBias = Number.isFinite(cat.nav.turnBias) ? cat.nav.turnBias : rawYawDelta;
+    const alpha = 1 - Math.exp(-Math.max(dt, 0) * 12);
+    const turnBias = THREE.MathUtils.lerp(prevBias, rawYawDelta, alpha);
+    cat.nav.turnBias = turnBias;
+    const absDy = Math.abs(turnBias);
+    const left = turnBias >= 0;
+    const sideFromSign = left ? 1 : -1;
+
+    let turnDirLock = Number.isFinite(cat.nav.turnDirLock) ? cat.nav.turnDirLock : 0;
+    if (absDy > 0.55) {
+      if (turnDirLock === 0) {
+        turnDirLock = sideFromSign;
+      } else if (sideFromSign !== turnDirLock && absDy > 1.45) {
+        // Allow lock flip only on very large opposite error to avoid left/right chatter.
+        turnDirLock = sideFromSign;
+      }
+    } else if (absDy < 0.16) {
+      turnDirLock = 0;
+    }
+    cat.nav.turnDirLock = turnDirLock;
+    const side = turnDirLock !== 0 ? turnDirLock : sideFromSign;
+
+    const isTurn90 = prev === "turn90L" || prev === "turn90R";
+    const lockedSide = prev.endsWith("L") ? 1 : prev.endsWith("R") ? -1 : side;
+
+    // Single-turn-clip policy: avoids visible frame popping from turn90<->turn45 transitions.
+    let desired = "walkF";
+    if (isTurn90) {
+      // Hysteresis while already turning.
+      desired = absDy > 0.24 ? (lockedSide > 0 ? "turn90L" : "turn90R") : "walkF";
+    } else if (absDy > 0.36) {
+      desired = side > 0 ? "turn90L" : "turn90R";
+    }
+
+    const hold = Number.isFinite(cat.nav.locomotionHoldT) ? cat.nav.locomotionHoldT : 0;
+    const holdThreshold = Math.max(0.04, Number.isFinite(CAT_NAV.locomotionSwitchHold) ? CAT_NAV.locomotionSwitchHold : 0.12);
+    if (desired !== prev) {
+      const isLeftRightFlip =
+        (prev === "turn90L" && desired === "turn90R") ||
+        (prev === "turn90R" && desired === "turn90L");
+      if (isLeftRightFlip && absDy < 1.05) {
+        // Keep previous side near the end of turns; prevents visual jitter/back-step.
+        cat.nav.locomotionHoldT = Math.min(0.2, hold + dt);
+        return prev;
+      }
+      const promoteToSharpTurn = desired.startsWith("turn90") && !prev.startsWith("turn90");
+      if (!promoteToSharpTurn && hold < holdThreshold) {
+        cat.nav.locomotionHoldT = hold + dt;
+        return prev;
+      }
+      cat.nav.locomotionHoldT = 0;
+      return desired;
+    }
+
+    cat.nav.locomotionHoldT = Math.min(0.2, hold + dt);
+    return desired;
+  }
+
   const GROUND_STEER_OFFSETS = [0, 0.2, -0.2, 0.42, -0.42, 0.66, -0.66, 0.92, -0.92, 1.22, -1.22, 1.48, -1.48];
+  const GROUND_STEER_OFFSETS_FULL = (() => {
+    const out = [];
+    const steps = 24;
+    for (let i = 0; i < steps; i++) {
+      out.push((i / steps) * Math.PI * 2 - Math.PI);
+    }
+    out.sort((a, b) => Math.abs(a) - Math.abs(b));
+    return out;
+  })();
   const ELEVATED_STEER_OFFSETS = [0, 0.22, -0.22, 0.44, -0.44, 0.7, -0.7, 1.0, -1.0];
 
   function getElevatedSurfaceCandidates(yLevel) {
@@ -113,7 +263,8 @@ export function createCatSteeringRuntime(ctx) {
       const faceDelta = Math.abs(
         Math.atan2(Math.sin(yaw - cat.group.rotation.y), Math.cos(yaw - cat.group.rotation.y))
       );
-      if (cat.nav.stuckT < 0.26 && faceDelta > 0.95) return;
+      const turnOnlyT = Number.isFinite(cat.nav.turnOnlyT) ? cat.nav.turnOnlyT : 0;
+      if (cat.nav.stuckT < 0.18 && turnOnlyT < 0.25 && faceDelta > 1.15) return;
 
       const tx = cat.pos.x + sx * step;
       const tz = cat.pos.z + sz * step;
@@ -144,12 +295,114 @@ export function createCatSteeringRuntime(ctx) {
 
     for (const offset of GROUND_STEER_OFFSETS) evaluate(offset, false);
     if (!best) {
-      for (const offset of GROUND_STEER_OFFSETS) evaluate(offset, true);
+      for (const offset of GROUND_STEER_OFFSETS_FULL) evaluate(offset, true);
+    }
+    return best;
+  }
+
+  function sampleObstacleOverlapScore(x, z, obstacles, clearance) {
+    let score = 0;
+    for (const obs of obstacles) {
+      const dx = x - obs.x;
+      const dz = z - obs.z;
+      if (obs.kind === "circle") {
+        const rr = obs.r + clearance;
+        const dist = Math.hypot(dx, dz);
+        if (dist < rr) score += 1 + (rr - dist);
+        continue;
+      }
+      if (obs.kind === "obb") {
+        const c = Math.cos(obs.yaw || 0);
+        const s = Math.sin(obs.yaw || 0);
+        const lx = c * dx + s * dz;
+        const lz = -s * dx + c * dz;
+        const ex = obs.hx + clearance;
+        const ez = obs.hz + clearance;
+        const ox = ex - Math.abs(lx);
+        const oz = ez - Math.abs(lz);
+        if (ox > 0 && oz > 0) score += 1 + Math.min(ox, oz);
+        continue;
+      }
+      const ox = obs.hx + clearance - Math.abs(dx);
+      const oz = obs.hz + clearance - Math.abs(dz);
+      if (ox > 0 && oz > 0) score += 1 + Math.min(ox, oz);
+    }
+    return score;
+  }
+
+  function chooseGroundEscapeStep(target, step, staticObstacles, dynamicObstacles, clearance) {
+    const currentOverlap = sampleObstacleOverlapScore(cat.pos.x, cat.pos.z, dynamicObstacles, clearance);
+    if (currentOverlap <= 0.0001) return null;
+
+    const baseYaw = Math.atan2(target.x - cat.pos.x, target.z - cat.pos.z);
+    const escapeSteps = [
+      Math.max(0.04, step * 1.8),
+      Math.max(0.04, step * 1.45),
+      Math.max(0.04, step * 1.15),
+      Math.max(0.04, step),
+      Math.max(0.032, step * 0.75),
+      Math.max(0.026, step * 0.55),
+    ];
+    const dirs = 28;
+    let best = null;
+    let bestScore = Infinity;
+
+    for (const s of escapeSteps) {
+      for (let i = 0; i < dirs; i++) {
+        const yaw = baseYaw + (i / dirs) * Math.PI * 2;
+        const sx = Math.sin(yaw);
+        const sz = Math.cos(yaw);
+        const tx = cat.pos.x + sx * s;
+        const tz = cat.pos.z + sz * s;
+        if (isCatPointBlocked(tx, tz, staticObstacles, clearance)) continue;
+        const overlap = sampleObstacleOverlapScore(tx, tz, dynamicObstacles, clearance);
+        const progress = (target.x - cat.pos.x) * sx + (target.z - cat.pos.z) * sz;
+        // Primary objective: reduce overlap quickly; secondary: still move roughly toward target.
+        const score = overlap * 12 - progress * 0.25 + Math.abs(angleDelta(yaw, baseYaw)) * 0.08;
+        if (score < bestScore) {
+          bestScore = score;
+          best = { sx, sz, yaw, step: s, overlap };
+        }
+      }
+      if (best && best.overlap <= currentOverlap - 0.02) break;
+    }
+
+    if (!best) return null;
+    if (best.overlap > currentOverlap + 0.005) return null;
+    return best;
+  }
+
+  function findNearestNavigablePoint(origin, target, staticObstacles, dynamicObstacles, clearance) {
+    const baseYaw = Math.atan2(target.x - origin.x, target.z - origin.z);
+    let best = null;
+    let bestScore = Infinity;
+    const radii = [0.06, 0.1, 0.14, 0.2, 0.28, 0.38, 0.5, 0.64, 0.8, 0.98];
+    for (let ri = 0; ri < radii.length; ri++) {
+      const r = radii[ri];
+      const steps = 28;
+      for (let i = 0; i < steps; i++) {
+        const t = i / steps;
+        const yaw = baseYaw + t * Math.PI * 2;
+        const x = origin.x + Math.sin(yaw) * r;
+        const z = origin.z + Math.cos(yaw) * r;
+        if (isCatPointBlocked(x, z, staticObstacles, clearance)) continue;
+        if (isCatPointBlocked(x, z, dynamicObstacles, clearance)) continue;
+        const dGoal = Math.hypot(target.x - x, target.z - z);
+        const dTurn = Math.abs(angleDelta(yaw, baseYaw));
+        const score = r * 0.9 + dGoal * 0.35 + dTurn * 0.04;
+        if (score < bestScore) {
+          bestScore = score;
+          if (!best) best = new THREE.Vector3();
+          best.set(x, 0, z);
+        }
+      }
+      if (best) break;
     }
     return best;
   }
 
   function moveCatToward(target, dt, speed, yLevel, opts = {}) {
+    ensureNavDebugStore();
     let direct = !!opts.direct;
     let ignoreDynamic = !!opts.ignoreDynamic;
     let chase = target;
@@ -187,18 +440,45 @@ export function createCatSteeringRuntime(ctx) {
           const segmentClearance = ignoreDynamic ? staticClearance : dynamicClearance;
           if (!hasClearTravelLine(cat.pos, chase, segmentObstacles, segmentClearance)) {
             ensureCatPath(tempTo, true, !ignoreDynamic);
+            bumpDebugCounter("repath");
+            recordNavEvent("repath-segment-blocked", { ignoreDynamic: !!ignoreDynamic });
             if (cat.nav.path.length > 1) {
               const nIndex = THREE.MathUtils.clamp(cat.nav.index, 1, cat.nav.path.length - 1);
               chase = cat.nav.path[nIndex];
+              if (!hasClearTravelLine(cat.pos, chase, segmentObstacles, segmentClearance)) {
+                const rescueChase = findNearestNavigablePoint(cat.pos, tempTo, buildCatObstacles(false), segmentObstacles, segmentClearance);
+                if (rescueChase) {
+                  chase = rescueChase;
+                  bumpDebugCounter("segmentRescue");
+                  recordNavEvent("segment-blocked-local-rescue", { x: rescueChase.x, z: rescueChase.z });
+                }
+              }
             }
           }
         }
         if (cat.nav.path.length <= 1) {
+          cat.nav.debugStep = {
+            phase: "ground",
+            reason: "noPath",
+            direct,
+            ignoreDynamic,
+            targetX: target.x,
+            targetZ: target.z,
+            pathLen: cat.nav.path.length,
+            pathIndex: cat.nav.index,
+            stuckT: cat.nav.stuckT,
+            time: getClockTime(),
+          };
+          bumpDebugCounter("noPath");
+          recordNavEvent("no-path", { targetX: target.x, targetZ: target.z });
           cat.group.position.set(cat.pos.x, yLevel, cat.pos.z);
+          setLocomotionIntent("idle", 0);
+          updateDriveSpeed(0, dt);
           clearNavMotionMetrics();
           return false;
         }
       }
+
     }
 
     cat.nav.debugDestination.set(target.x, yLevel, target.z);
@@ -206,47 +486,204 @@ export function createCatSteeringRuntime(ctx) {
     const dx = chase.x - cat.pos.x;
     const dz = chase.z - cat.pos.z;
     const d = Math.hypot(dx, dz);
+    cat.nav.debugStep = {
+      phase: yLevel <= 0.02 ? "ground" : "elevated",
+      reason: "active",
+      direct,
+      ignoreDynamic,
+      targetX: target.x,
+      targetZ: target.z,
+      chaseX: chase.x,
+      chaseZ: chase.z,
+      distToChase: d,
+      pathLen: cat.nav.path.length,
+      pathIndex: cat.nav.index,
+      stuckT: cat.nav.stuckT,
+      turnOnlyT: Number.isFinite(cat.nav.turnOnlyT) ? cat.nav.turnOnlyT : 0,
+      time: getClockTime(),
+    };
     if (d < 0.06) {
+      cat.nav.debugStep.reason = "nearTarget";
       cat.group.position.set(cat.pos.x, yLevel, cat.pos.z);
+      setLocomotionIntent("idle", 0);
+      updateDriveSpeed(0, dt);
       clearNavMotionMetrics();
       return cat.pos.distanceTo(target) < 0.14;
     }
     const nx = dx / d;
     const nz = dz / d;
     const yaw = Math.atan2(nx, nz);
-    const dy = rotateCatToward(yaw, dt);
-    let step = Math.min(d, speed * dt);
-    if (yLevel <= 0.02 && Math.abs(dy) > CAT_NAV.turnSlowThreshold) {
-      const t = THREE.MathUtils.clamp((Math.abs(dy) - CAT_NAV.turnSlowThreshold) / 0.9, 0, 1);
-      step *= THREE.MathUtils.lerp(1.0, 0.2, t);
-    }
-    if (yLevel <= 0.02 && Math.abs(dy) > CAT_NAV.turnStopThreshold) {
-      cat.group.position.set(cat.pos.x, yLevel, cat.pos.z);
-      clearNavMotionMetrics();
-      cat.nav.stuckT += dt * 0.4;
-      if (cat.nav.stuckT > 0.4 && getClockTime() >= cat.nav.repathAt) {
-        ensureCatPath(target, true, !ignoreDynamic);
-        cat.nav.repathAt = getClockTime() + CAT_NAV.repathInterval;
+    const rawDy = angleDelta(yaw, cat.group.rotation.y);
+    let moveSpeed = 0;
+    let step = 0;
+    let locomotionClip = "walkF";
+    const maxLocoScale = Math.max(1.0, Number.isFinite(CAT_NAV.locomotionScaleCap) ? CAT_NAV.locomotionScaleCap : 8.0);
+    let locomotionScale = THREE.MathUtils.clamp(speedRef, 0.35, maxLocoScale);
+    let turnOnly = false;
+
+    if (yLevel <= 0.02) {
+      locomotionClip = chooseGroundLocomotion(rawDy, dt);
+      turnOnly = locomotionClip.startsWith("turn");
+      cat.nav.debugStep.rawYawDelta = rawDy;
+      cat.nav.debugStep.turnOnly = turnOnly;
+      if (turnOnly) {
+        locomotionScale = THREE.MathUtils.clamp(locomotionScale * 0.86, 0.55, Math.min(maxLocoScale, 2.0));
+      } else {
+        locomotionScale = THREE.MathUtils.clamp(locomotionScale, 0.55, maxLocoScale);
       }
-      return false;
+      const profile = getLocomotionProfile(locomotionClip);
+      const turnRate = Math.max(0.28, profile.turnRate || CAT_NAV.maxTurnRate * (turnOnly ? 0.46 : 0.7));
+      // Keep world yaw speed aligned to the turn clip playback speed to reduce visible foot skating.
+      const turnClipScale = turnOnly ? THREE.MathUtils.clamp(locomotionScale, 0.7, 1.8) : locomotionScale;
+      let turnBlend = 1;
+      if (turnOnly && cat.locomotionActions && cat.locomotionWeights instanceof Map) {
+        const turnAction = cat.locomotionActions[locomotionClip];
+        const w = turnAction ? cat.locomotionWeights.get(turnAction) : null;
+        if (Number.isFinite(w)) turnBlend = THREE.MathUtils.clamp(w, 0.15, 1);
+      }
+      const maxYawStep = turnRate * turnClipScale * 0.92 * turnBlend * Math.max(dt, 0);
+      const yawStep = THREE.MathUtils.clamp(rawDy, -maxYawStep, maxYawStep);
+      cat.group.rotation.y += yawStep;
+      const clipPlanarSpeed = Math.max(0, profile.planarSpeed) * locomotionScale;
+      moveSpeed = updateDriveSpeed(turnOnly ? 0 : clipPlanarSpeed, dt);
+      step = turnOnly ? 0 : Math.min(d, moveSpeed * dt);
+      cat.nav.commandedSpeed = Math.max(0.05, turnOnly ? turnRate * turnClipScale * CAT_COLLISION.catBodyRadius : clipPlanarSpeed);
+      setLocomotionIntent(
+        locomotionClip,
+        turnOnly ? turnClipScale : Math.max(0.01, moveSpeed / Math.max(profile.planarSpeed, 1e-5))
+      );
+    } else {
+      const profile = getLocomotionProfile("walkF");
+      const clipPlanarSpeed = Math.max(0.1, profile.planarSpeed) * THREE.MathUtils.clamp(speedRef, 0.5, maxLocoScale);
+      moveSpeed = updateDriveSpeed(clipPlanarSpeed, dt);
+      step = Math.min(d, moveSpeed * dt);
+      cat.nav.commandedSpeed = Math.max(0.05, clipPlanarSpeed);
+      setLocomotionIntent("walkF", Math.max(0.01, moveSpeed / Math.max(profile.planarSpeed, 1e-5)));
     }
 
     if (yLevel <= 0.02) {
+      if (turnOnly) {
+        cat.nav.debugStep.reason = "turnOnly";
+        cat.nav.turnOnlyT = (Number.isFinite(cat.nav.turnOnlyT) ? cat.nav.turnOnlyT : 0) + dt;
+        if (d > 0.35 && Math.abs(rawDy) > 0.9) {
+          cat.nav.stuckT += dt * 0.45;
+        } else {
+          cat.nav.stuckT = Math.max(0, cat.nav.stuckT - dt * 0.2);
+        }
+        if (cat.nav.turnOnlyT > 0.7 && d > 0.35 && getClockTime() >= cat.nav.repathAt) {
+          ensureCatPath(target, true, !ignoreDynamic);
+          cat.nav.repathAt = getClockTime() + CAT_NAV.repathInterval * 0.8;
+          bumpDebugCounter("turnOnlyRepath");
+          bumpDebugCounter("repath");
+          recordNavEvent("repath-turnonly", {
+            d,
+            rawYawDelta: rawDy,
+            ignoreDynamic: !!ignoreDynamic,
+          });
+          cat.nav.turnOnlyT = 0;
+        }
+        cat.group.position.set(cat.pos.x, yLevel, cat.pos.z);
+        cat.nav.lastSpeed = 0;
+        cat.nav.smoothedSpeed = 0;
+        cat.nav.speedNorm = 0;
+        return false;
+      }
+      cat.nav.turnOnlyT = 0;
+      const staticClearance = getCatPathClearance();
       const staticObstacles = buildCatObstacles(false);
       const dynamicObstacles = ignoreDynamic ? staticObstacles : buildCatObstacles(true, true);
-      const steerTarget = chase;
-      const steer = chooseGroundSteer(steerTarget, step, staticObstacles, dynamicObstacles, ignoreDynamic);
-      if (!steer) {
-        cat.nav.stuckT += dt;
-        if (cat.nav.stuckT > 0.55) {
-          nudgeBlockingPickupAwayFromCat();
-        }
-        if (cat.nav.stuckT > 0.3 && getClockTime() >= cat.nav.repathAt) {
+      const posBlockedStatic = isCatPointBlocked(cat.pos.x, cat.pos.z, staticObstacles, staticClearance * 0.98);
+      const posBlockedDynamic = !ignoreDynamic && isCatPointBlocked(cat.pos.x, cat.pos.z, dynamicObstacles, staticClearance * 0.98);
+      cat.nav.debugStep.posBlockedStatic = posBlockedStatic;
+      cat.nav.debugStep.posBlockedDynamic = posBlockedDynamic;
+      if (posBlockedStatic || posBlockedDynamic) {
+        const rescued = findNearestNavigablePoint(cat.pos, chase, staticObstacles, dynamicObstacles, staticClearance);
+        if (rescued) {
+          cat.pos.copy(rescued);
+          cat.group.position.set(cat.pos.x, yLevel, cat.pos.z);
+          cat.nav.stuckT = 0;
+          cat.nav.noSteerFrames = 0;
           ensureCatPath(target, true, !ignoreDynamic);
-          cat.nav.repathAt = getClockTime() + CAT_NAV.repathInterval;
+          cat.nav.repathAt = getClockTime() + CAT_NAV.repathInterval * 0.6;
+          bumpDebugCounter("rescueSnap");
+          recordNavEvent("rescue-from-blocked-pos", { x: rescued.x, z: rescued.z });
+          return false;
         }
-        if (cat.nav.stuckT > 1.15) {
-          clearCatNavPath(false);
+      }
+      cat.nav.debugStep.overlapDynamic = sampleObstacleOverlapScore(cat.pos.x, cat.pos.z, dynamicObstacles, staticClearance);
+      cat.nav.debugStep.overlapStatic = sampleObstacleOverlapScore(cat.pos.x, cat.pos.z, staticObstacles, staticClearance);
+      const steerTarget = chase;
+      let steerStepBase = step;
+      let steer = chooseGroundSteer(steerTarget, steerStepBase, staticObstacles, dynamicObstacles, ignoreDynamic);
+      if (!steer && step > 0.015) {
+        const stepScales = [0.75, 0.55, 0.38, 0.25];
+        for (let i = 0; i < stepScales.length && !steer; i++) {
+          const testStep = Math.max(0.015, step * stepScales[i]);
+          steer = chooseGroundSteer(steerTarget, testStep, staticObstacles, dynamicObstacles, ignoreDynamic);
+          if (steer) steerStepBase = testStep;
+        }
+      }
+      if (!steer) {
+        const escape = chooseGroundEscapeStep(steerTarget, step, staticObstacles, dynamicObstacles, staticClearance);
+        if (escape) {
+          cat.nav.debugStep.reason = "escapeStep";
+          tempFrom.copy(cat.pos);
+          cat.pos.x += escape.sx * escape.step;
+          cat.pos.z += escape.sz * escape.step;
+          if (isCatPointBlocked(cat.pos.x, cat.pos.z, staticObstacles, staticClearance * 0.98)) {
+            cat.pos.copy(tempFrom);
+            bumpDebugCounter("rollback");
+            recordNavEvent("escape-rollback");
+          } else {
+            cat.group.position.set(cat.pos.x, yLevel, cat.pos.z);
+            cat.nav.steerYaw = escape.yaw;
+            rotateCatToward(escape.yaw, dt);
+            const moved = cat.pos.distanceTo(tempFrom);
+            setLocomotionIntent("walkF", 0.7);
+            updateDriveSpeed(Math.max(0.15, speedRef * 0.45), dt);
+            setNavMotionMetrics(moved, dt, Math.max(0.05, cat.nav.commandedSpeed));
+            cat.nav.stuckT = Math.max(0, cat.nav.stuckT - dt * 0.25);
+            cat.nav.noSteerFrames = 0;
+            bumpDebugCounter("escape");
+            recordNavEvent("escape-step", { moved });
+            return false;
+          }
+        }
+        cat.nav.debugStep.reason = "noSteer";
+        cat.nav.debugStep.overlapDynamic = sampleObstacleOverlapScore(cat.pos.x, cat.pos.z, dynamicObstacles, staticClearance);
+        setLocomotionIntent("idle", 0);
+        updateDriveSpeed(0, dt);
+        cat.nav.stuckT += dt;
+        cat.nav.noSteerFrames = (cat.nav.noSteerFrames || 0) + 1;
+        cat.nav.debugStep.noSteerFrames = cat.nav.noSteerFrames;
+        bumpDebugCounter("noSteer");
+        const now = getClockTime();
+        const shouldForceRepath = cat.nav.noSteerFrames > 0;
+        if ((cat.nav.stuckT > 0.06 || shouldForceRepath) && now >= cat.nav.repathAt) {
+          ensureCatPath(target, true, !ignoreDynamic);
+          cat.nav.repathAt = now + CAT_NAV.repathInterval * (shouldForceRepath ? 0.15 : 0.35);
+          bumpDebugCounter("repath");
+          recordNavEvent("repath-stuck", {
+            ignoreDynamic: !!ignoreDynamic,
+            stuckT: cat.nav.stuckT,
+            noSteerFrames: cat.nav.noSteerFrames,
+          });
+        }
+        if (cat.nav.stuckT > 0.14 || cat.nav.noSteerFrames > 1) {
+          const rescued = findNearestNavigablePoint(cat.pos, steerTarget, staticObstacles, dynamicObstacles, staticClearance);
+          if (rescued) {
+            cat.pos.copy(rescued);
+            cat.group.position.set(cat.pos.x, yLevel, cat.pos.z);
+            cat.nav.stuckT = 0;
+            cat.nav.noSteerFrames = 0;
+            ensureCatPath(target, true, !ignoreDynamic);
+            cat.nav.repathAt = getClockTime() + CAT_NAV.repathInterval * 0.6;
+            bumpDebugCounter("rescueSnap");
+            recordNavEvent("rescue-snap", { x: rescued.x, z: rescued.z });
+          } else {
+            clearCatNavPath(false);
+            recordNavEvent("clear-path-no-rescue");
+          }
         }
         return false;
       }
@@ -255,31 +692,39 @@ export function createCatSteeringRuntime(ctx) {
       const facingDelta = Math.abs(
         Math.atan2(Math.sin(steer.yaw - cat.group.rotation.y), Math.cos(steer.yaw - cat.group.rotation.y))
       );
-      const forwardScale = THREE.MathUtils.clamp(1 - facingDelta / 1.7, 0.26, 1);
-      const steerStep = step * forwardScale;
+      const facing01 = THREE.MathUtils.clamp(1 - facingDelta / 1.45, 0, 1);
+      const forwardScale = THREE.MathUtils.clamp(facing01 * facing01, 0.04, 1);
+      const steerStep = steerStepBase * forwardScale;
       cat.pos.x += steer.sx * steerStep;
       cat.pos.z += steer.sz * steerStep;
 
       const collisionObstacles = ignoreDynamic ? staticObstacles : dynamicObstacles;
       const collisionClearance = getCatPathClearance();
       if (isCatPointBlocked(cat.pos.x, cat.pos.z, collisionObstacles, collisionClearance * 0.98)) {
+        cat.nav.debugStep.reason = "rollback-blocked";
         cat.pos.copy(tempFrom);
         cat.group.position.set(cat.pos.x, yLevel, cat.pos.z);
+        setLocomotionIntent("idle", 0);
+        updateDriveSpeed(0, dt);
         clearNavMotionMetrics();
         cat.nav.stuckT += dt;
+        bumpDebugCounter("rollback");
         if (getClockTime() >= cat.nav.repathAt) {
           ensureCatPath(target, true, !ignoreDynamic);
           cat.nav.repathAt = getClockTime() + CAT_NAV.repathInterval;
+          bumpDebugCounter("repath");
+          recordNavEvent("repath-rollback", { ignoreDynamic: !!ignoreDynamic, stuckT: cat.nav.stuckT });
         }
         return false;
       }
 
       cat.group.position.set(cat.pos.x, yLevel, cat.pos.z);
       cat.nav.steerYaw = steer.yaw;
-      rotateCatToward(steer.yaw, dt);
 
       const moved = cat.pos.distanceTo(tempFrom);
-      if (moved < CAT_NAV.stuckSpeed * dt && d > 0.18) {
+      if (moved > 0.003) cat.nav.noSteerFrames = 0;
+      const movingExpected = moveSpeed > CAT_NAV.stuckSpeed * 1.5;
+      if (movingExpected && moved < CAT_NAV.stuckSpeed * dt && d > 0.18) {
         cat.nav.stuckT += dt;
         if (cat.nav.stuckT > 0.36 && getClockTime() >= cat.nav.repathAt) {
           ensureCatPath(target, true, !ignoreDynamic);
@@ -288,7 +733,7 @@ export function createCatSteeringRuntime(ctx) {
       } else {
         cat.nav.stuckT = Math.max(0, cat.nav.stuckT - dt * 0.9);
       }
-      setNavMotionMetrics(moved, dt, speedRef);
+      setNavMotionMetrics(moved, dt, Math.max(0.05, cat.nav.commandedSpeed));
       return cat.pos.distanceToSquared(target) < 0.14 * 0.14;
     }
 
@@ -325,8 +770,11 @@ export function createCatSteeringRuntime(ctx) {
       break;
     }
     if (!foundStep) {
+      cat.nav.debugStep.reason = "elevated-noStep";
       cat.pos.copy(tempFrom);
       cat.group.position.set(cat.pos.x, yLevel, cat.pos.z);
+      setLocomotionIntent("idle", 0);
+      updateDriveSpeed(0, dt);
       clearNavMotionMetrics();
       cat.nav.stuckT += dt * 0.5;
       return false;
@@ -336,7 +784,7 @@ export function createCatSteeringRuntime(ctx) {
     rotateCatToward(pickedYaw, dt);
 
     const moved = cat.pos.distanceTo(tempFrom);
-    setNavMotionMetrics(moved, dt, speedRef);
+    setNavMotionMetrics(moved, dt, Math.max(0.05, cat.nav.commandedSpeed));
 
     return cat.pos.distanceToSquared(target) < 0.14 * 0.14;
   }

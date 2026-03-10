@@ -26,6 +26,7 @@ function animateCatPose(dt, moving) {
     isJumpSettle ||
     !!cat.jump;
   const speedRef = Math.max(0.05, Number.isFinite(cat.nav.commandedSpeed) ? cat.nav.commandedSpeed : (cat.speed || 1));
+  const worldSpeed = Math.max(0, Number.isFinite(cat.nav.smoothedSpeed) ? cat.nav.smoothedSpeed : (cat.nav.lastSpeed || 0));
   const navSpeedNorm = Number.isFinite(cat.nav.speedNorm)
     ? cat.nav.speedNorm
     : THREE.MathUtils.clamp((cat.nav.lastSpeed || 0) / speedRef, 0, 1.75);
@@ -75,7 +76,8 @@ function animateCatPose(dt, moving) {
         if (!isJumpState) return;
       }
       if (!usesSpecialPose) {
-        updateCatClipLocomotion(cat, dt, movingAmt > 0.08, navSpeedNorm);
+        const clipMoving = !forceStill && (moving || worldSpeed > 0.12 || navSpeedNorm > 0.16);
+        updateCatClipLocomotion(cat, dt, clipMoving, navSpeedNorm, worldSpeed);
 
         cat.modelAnchor.position.y = THREE.MathUtils.damp(cat.modelAnchor.position.y, 0, 10, dt);
         cat.modelAnchor.rotation.x = THREE.MathUtils.damp(cat.modelAnchor.rotation.x, 0, 10, dt);

@@ -261,11 +261,16 @@ const CAT_NAV = {
   step: 0.26,
   margin: 0.4,
   clearance: 0.2,
+  locomotionSpeedScale: 3.0,
+  locomotionScaleCap: 8.0,
   repathInterval: 0.18,
   jumpBypassCheckInterval: 0.18,
   stuckSpeed: 0.035,
   stuckReset: 2.8,
   maxTurnRate: 2.5, // rad/sec
+  accel: 3.2, // m/s^2
+  decel: 5.2, // m/s^2
+  locomotionSwitchHold: 0.16,
   turnSlowThreshold: 0.65,
   turnStopThreshold: 1.35,
   localLookAhead: 0.56,
@@ -523,6 +528,7 @@ const debugRuntime = createDebugOverlayRuntime({
   cat,
   cup,
   desk,
+  pickupRadius: (pickup) => pickupsRuntime.pickupRadius(pickup),
   ROOM,
   CAT_NAV,
   CAT_COLLISION,
@@ -533,6 +539,7 @@ const debugRuntime = createDebugOverlayRuntime({
   getCatPathClearance: navRuntime.getCatPathClearance,
   getNavMeshDebugData: navRuntime.getNavMeshDebugData,
   getActiveNavMeshDebugData: navRuntime.getActiveNavMeshDebugData,
+  getLastAStarDebugData: navRuntime.getLastAStarDebugData,
   computeCatPath: navRuntime.computeCatPath,
   computeDeskJumpTargets: navRuntime.computeDeskJumpTargets,
   getDeskDesiredTarget: () => getDeskDesiredTarget(),
@@ -753,8 +760,16 @@ function resetGame() {
   cat.nav.stuckT = 0;
   cat.nav.lastSpeed = 0;
   cat.nav.commandedSpeed = 0;
+  cat.nav.driveSpeed = 0;
   cat.nav.speedNorm = 0;
   cat.nav.smoothedSpeed = 0;
+  cat.nav.turnBias = 0;
+  cat.nav.turnDirLock = 0;
+  cat.nav.locomotionHoldT = 0;
+  if (cat.locomotion) {
+    cat.locomotion.activeClip = "idle";
+    cat.locomotion.clipScale = 0;
+  }
   cat.modelAnchor.position.set(0, 0, 0);
   cat.modelAnchor.rotation.set(0, 0, 0);
   refreshCatPatrolTarget();
@@ -936,7 +951,6 @@ function updateCat(dt) {
       recoverCatFromPickupTrap: navRuntime.recoverCatFromPickupTrap,
       getCurrentGroundGoal: navRuntime.getCurrentGroundGoal,
       ensureCatPath: navRuntime.ensureCatPath,
-      nudgeBlockingPickupAwayFromCat: navRuntime.nudgeBlockingPickupAwayFromCat,
       findSafeGroundPoint: navRuntime.findSafeGroundPoint,
       startJump,
       updateJump,

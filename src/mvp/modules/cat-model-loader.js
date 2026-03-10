@@ -83,6 +83,26 @@ export function createCatModelRuntime(ctx) {
       clipSpecialState: "",
       clipSpecialPhase: "",
       useClipLocomotion: false,
+      clipWalkActive: false,
+      clipWalkScale: 0,
+      locomotionActions: {},
+      locomotionActionKeys: new Map(),
+      locomotionWeights: new Map(),
+      locomotionLastTargetKey: "idle",
+      locomotion: {
+        activeClip: "idle",
+        clipScale: 0,
+        profiles: {
+          idle: { planarSpeed: 0, turnRate: 0, localX: 0, localZ: 0 },
+          walkF: { planarSpeed: 0.9, turnRate: 1.1, localX: 0, localZ: 1 },
+          walkL: { planarSpeed: 0.78, turnRate: 0.7, localX: 0.32, localZ: 0.95 },
+          walkR: { planarSpeed: 0.78, turnRate: 0.7, localX: -0.32, localZ: 0.95 },
+          turn45L: { planarSpeed: 0, turnRate: 0.76, localX: 0, localZ: 0 },
+          turn45R: { planarSpeed: 0, turnRate: 0.76, localX: 0, localZ: 0 },
+          turn90L: { planarSpeed: 0, turnRate: 1.52, localX: 0, localZ: 0 },
+          turn90R: { planarSpeed: 0, turnRate: 1.52, localX: 0, localZ: 0 },
+        },
+      },
       pos: new THREE.Vector3(1.5, 0, 1.7),
       state: "patrol", // patrol|toDesk|prepareJump|launchUp|forepawHook|pullUp|jumpSettle|toCup|swipe|jumpDown|landStop|sit|toCatnip|distracted
       lastState: "patrol",
@@ -121,8 +141,12 @@ export function createCatModelRuntime(ctx) {
         path: [],
         index: 0,
         commandedSpeed: 0,
+        driveSpeed: 0,
         speedNorm: 0,
         smoothedSpeed: 0,
+        turnBias: 0,
+        turnDirLock: 0,
+        locomotionHoldT: 0,
         repathAt: 0,
         anchorReplanAt: 0,
         anchorLandingCheckAt: 0,
@@ -148,6 +172,7 @@ export function createCatModelRuntime(ctx) {
     const targetLength = 0.92;
     const scale = targetLength / sourceLength;
     model.scale.multiplyScalar(scale);
+    model.userData.motionScale = scale;
 
     tempBox.setFromObject(model);
     tempBox.getCenter(tempCenter);
@@ -321,6 +346,85 @@ export function createCatModelRuntime(ctx) {
     }
   }
 
+  function findRootPositionTrack(clip) {
+    const posTracks = clip?.tracks?.filter((track) => track.name.endsWith(".position")) || [];
+    if (!posTracks.length) return null;
+    return (
+      posTracks.find((track) => /^root(\.|$)/i.test(track.name)) ||
+      posTracks.find((track) => /(^|[_.])root([_.]|$)/i.test(track.name)) ||
+      posTracks.find((track) => /hips?/i.test(track.name)) ||
+      posTracks[0]
+    );
+  }
+
+  function findRootQuaternionTrack(clip) {
+    const rotTracks = clip?.tracks?.filter((track) => track.name.endsWith(".quaternion")) || [];
+    if (!rotTracks.length) return null;
+    return (
+      rotTracks.find((track) => /^root(\.|$)/i.test(track.name)) ||
+      rotTracks.find((track) => /(^|[_.])root([_.]|$)/i.test(track.name)) ||
+      rotTracks.find((track) => /hips?/i.test(track.name)) ||
+      rotTracks[0]
+    );
+  }
+
+  function extractClipPlanarMotion(clip) {
+    const track = findRootPositionTrack(clip);
+    if (!track || !track.values || track.values.length < 6) return null;
+    const values = track.values;
+    const sx = values[0];
+    const sz = values[2];
+    const ex = values[values.length - 3];
+    const ez = values[values.length - 1];
+    const dx = ex - sx;
+    const dz = ez - sz;
+    const dist = Math.hypot(dx, dz);
+    if (dist < 1e-5) return null;
+    const duration = Math.max(clip.duration, 1e-5);
+    return {
+      planarSpeed: dist / duration,
+      localX: dx / dist,
+      localZ: dz / dist,
+    };
+  }
+
+  function extractClipTurnRate(clip) {
+    const track = findRootQuaternionTrack(clip);
+    if (!track || !track.values || track.values.length < 8) return 0;
+    const values = track.values;
+    const qStart = new THREE.Quaternion(values[0], values[1], values[2], values[3]);
+    const qEnd = new THREE.Quaternion(
+      values[values.length - 4],
+      values[values.length - 3],
+      values[values.length - 2],
+      values[values.length - 1]
+    );
+    // In this rig, local +Y maps to the horizontal heading vector after root rest rotation.
+    const dirStart = new THREE.Vector3(0, 1, 0).applyQuaternion(qStart);
+    const dirEnd = new THREE.Vector3(0, 1, 0).applyQuaternion(qEnd);
+    dirStart.y = 0;
+    dirEnd.y = 0;
+    if (dirStart.lengthSq() < 1e-5 || dirEnd.lengthSq() < 1e-5) return 0;
+    dirStart.normalize();
+    dirEnd.normalize();
+    const yawStart = Math.atan2(dirStart.x, dirStart.z);
+    const yawEnd = Math.atan2(dirEnd.x, dirEnd.z);
+    const yawDelta = Math.atan2(Math.sin(yawEnd - yawStart), Math.cos(yawEnd - yawStart));
+    return Math.abs(yawDelta) / Math.max(clip.duration, 1e-5);
+  }
+
+  function makeLocomotionProfile(sourceClip, fallback) {
+    const base = fallback || { planarSpeed: 0, turnRate: 0, localX: 0, localZ: 0 };
+    const planar = extractClipPlanarMotion(sourceClip);
+    const turnRate = extractClipTurnRate(sourceClip);
+    return {
+      planarSpeed: planar?.planarSpeed ?? base.planarSpeed,
+      turnRate: turnRate > 1e-4 ? turnRate : base.turnRate,
+      localX: planar?.localX ?? base.localX,
+      localZ: planar?.localZ ?? base.localZ,
+    };
+  }
+
   function setupCatClipAnimations(catObject, model, clips) {
     catObject.clipMixer = null;
     catObject.clipActions.clear();
@@ -332,10 +436,21 @@ export function createCatModelRuntime(ctx) {
     catObject.clipSpecialState = "";
     catObject.clipSpecialPhase = "";
     catObject.useClipLocomotion = false;
+    catObject.clipWalkActive = false;
+    catObject.clipWalkScale = 0;
+    catObject.locomotionActions = {};
+    catObject.locomotionActionKeys = new Map();
+    catObject.locomotionWeights = new Map();
+    catObject.locomotionLastTargetKey = "idle";
+    if (catObject.locomotion) {
+      catObject.locomotion.activeClip = "idle";
+      catObject.locomotion.clipScale = 0;
+    }
 
     if (!clips || clips.length === 0) return;
 
     const inPlaceClips = clips.map((clip) => makeInPlaceClip(clip));
+    const sourceClipByName = new Map(clips.map((clip) => [clip.name, clip]));
     const mixer = new THREE.AnimationMixer(model);
     catObject.clipMixer = mixer;
     for (const clip of inPlaceClips) {
@@ -346,15 +461,51 @@ export function createCatModelRuntime(ctx) {
     }
 
     const walkClip =
-      pickAnimationClip(inPlaceClips, [/walk/i, /locomot/i, /trot/i, /run/i, /move/i]) || inPlaceClips[0];
+      pickAnimationClip(inPlaceClips, [/^walk_f$/i, /^walk$/i, /walk_f/i, /walk/i, /trot_f/i, /run_f/i]) || inPlaceClips[0];
     const idleClip =
-      pickAnimationClip(inPlaceClips, [/idle/i, /rest/i, /stand/i, /wait/i]) || walkClip || inPlaceClips[0];
+      pickAnimationClip(inPlaceClips, [/^idle$/i, /idle/i, /rest/i, /stand/i, /wait/i]) || walkClip || inPlaceClips[0];
 
-    const walkAction = mixer.clipAction(walkClip);
-    const idleAction = mixer.clipAction(idleClip);
+    const locomotionClips = {
+      idle: idleClip,
+      walkF: walkClip,
+      walkL:
+        pickAnimationClip(inPlaceClips, [/^walk_l$/i, /walk_l/i, /trot_l/i, /run_l/i, /incline_side/i]) || walkClip,
+      walkR:
+        pickAnimationClip(inPlaceClips, [/^walk_r$/i, /walk_r/i, /trot_r/i, /run_r/i, /incline_side/i]) || walkClip,
+      turn45L:
+        pickAnimationClip(inPlaceClips, [/^turn-45_l$/i, /turn[-_. ]?45[-_. ]?l/i, /turn\.l/i, /crouch_turn\.l/i]) ||
+        walkClip,
+      turn45R:
+        pickAnimationClip(inPlaceClips, [/^turn-45_r$/i, /turn[-_. ]?45[-_. ]?r/i, /turn\.r/i, /crouch_turn\.r/i]) ||
+        walkClip,
+      turn90L:
+        pickAnimationClip(inPlaceClips, [/^turn-90_l$/i, /turn[-_. ]?90[-_. ]?l/i, /turn\.l/i, /crouch_turn\.l/i]) ||
+        walkClip,
+      turn90R:
+        pickAnimationClip(inPlaceClips, [/^turn-90_r$/i, /turn[-_. ]?90[-_. ]?r/i, /turn\.r/i, /crouch_turn\.r/i]) ||
+        walkClip,
+    };
+
+    const locomotionActions = {};
+    const locomotionActionKeys = new Map();
+    const locomotionWeights = new Map();
+    for (const [key, clip] of Object.entries(locomotionClips)) {
+      if (!clip) continue;
+      const action = mixer.clipAction(clip);
+      action.enabled = true;
+      action.setLoop(THREE.LoopRepeat, Infinity);
+      locomotionActions[key] = action;
+      locomotionActionKeys.set(action, key);
+      locomotionWeights.set(action, 0);
+    }
+    catObject.locomotionActions = locomotionActions;
+    catObject.locomotionActionKeys = locomotionActionKeys;
+    catObject.locomotionWeights = locomotionWeights;
+
+    const walkAction = locomotionActions.walkF || mixer.clipAction(walkClip);
+    const idleAction = locomotionActions.idle || mixer.clipAction(idleClip);
     walkAction.play();
     if (idleAction !== walkAction) idleAction.play();
-
     walkAction.setEffectiveWeight(0);
     idleAction.setEffectiveWeight(1);
     idleAction.setEffectiveTimeScale(1);
@@ -363,6 +514,20 @@ export function createCatModelRuntime(ctx) {
     catObject.idleAction = idleAction;
     catObject.activeClipAction = idleAction;
     catObject.useClipLocomotion = true;
+
+    if (catObject.locomotion?.profiles) {
+      const motionScale =
+        Number.isFinite(model?.userData?.motionScale) && model.userData.motionScale > 1e-5
+          ? model.userData.motionScale
+          : 1;
+      for (const [key, clip] of Object.entries(locomotionClips)) {
+        if (!clip) continue;
+        const sourceClip = sourceClipByName.get(clip.name) || clip;
+        const profile = makeLocomotionProfile(sourceClip, catObject.locomotion.profiles[key]);
+        profile.planarSpeed *= motionScale;
+        catObject.locomotion.profiles[key] = profile;
+      }
+    }
 
     const lookDownClip = pickAnimationClip(inPlaceClips, [/lookdown/i]);
     const eatIntroClip =
@@ -479,6 +644,16 @@ export function createCatModelRuntime(ctx) {
     catObject.idleAction.play();
     catObject.walkAction.setEffectiveWeight(0);
     catObject.idleAction.setEffectiveWeight(0);
+    if (catObject.locomotionActions) {
+      for (const action of Object.values(catObject.locomotionActions)) {
+        if (!action) continue;
+        action.enabled = true;
+        action.play();
+        action.setEffectiveWeight(0);
+        action.setEffectiveTimeScale(1);
+        catObject.locomotionWeights.set(action, 0);
+      }
+    }
 
     if (hasSequence) {
       if (catObject.clipSpecialPhase === "intro" && def.introAction && def.loopAction) {
@@ -507,7 +682,7 @@ export function createCatModelRuntime(ctx) {
     return true;
   }
 
-  function updateCatClipLocomotion(catObject, dt, moving, speedNorm) {
+  function updateCatClipLocomotion(catObject, dt, moving, speedNorm, worldSpeed = 0) {
     if (!catObject.useClipLocomotion || !catObject.clipMixer || !catObject.walkAction || !catObject.idleAction) return;
     if (catObject.clipSpecialAction) {
       catObject.clipSpecialAction.setEffectiveWeight(0);
@@ -517,38 +692,86 @@ export function createCatModelRuntime(ctx) {
       catObject.clipSpecialPhase = "";
     }
 
-    const walkAction = catObject.walkAction;
-    const idleAction = catObject.idleAction;
-    walkAction.enabled = true;
-    idleAction.enabled = true;
-    walkAction.play();
-    idleAction.play();
-    const target = moving ? walkAction : idleAction;
+    const locomotionActions = catObject.locomotionActions || {};
+    const locomotionWeights = catObject.locomotionWeights || new Map();
+    catObject.locomotionWeights = locomotionWeights;
+    const walkAction = locomotionActions.walkF || catObject.walkAction;
+    const idleAction = locomotionActions.idle || catObject.idleAction;
+    const clipKey =
+      catObject.locomotion?.activeClip ||
+      (moving ? "walkF" : "idle");
+    const requestedAction = locomotionActions[clipKey] || (moving ? walkAction : idleAction);
+    const target = requestedAction || idleAction;
+    const keyMap = catObject.locomotionActionKeys || new Map();
+    const targetKey = keyMap.get(target) || (target === idleAction ? "idle" : "walkF");
+    const prevTargetKey = catObject.locomotionLastTargetKey || targetKey;
+    const isWalkKey = (key) => key === "walkF" || key === "walkL" || key === "walkR";
+    const isTurnKey = (key) => key === "turn90L" || key === "turn90R" || key === "turn45L" || key === "turn45R";
 
-    if (catObject.activeClipAction !== target) {
-      target.reset().play();
-      if (catObject.activeClipAction && catObject.activeClipAction !== target) {
-        catObject.activeClipAction.crossFadeTo(target, 0.22, false);
-      } else {
-        target.setEffectiveWeight(1);
-      }
-      catObject.activeClipAction = target;
+    if (targetKey !== prevTargetKey && isTurnKey(targetKey) && !isTurnKey(prevTargetKey)) {
+      // Entering a turn from walk/idle: start from a deterministic pose and blend in.
+      target.reset();
     }
+    if (targetKey !== prevTargetKey && isWalkKey(targetKey) && isWalkKey(prevTargetKey)) {
+      // Walk-to-walk keeps phase continuity.
+      const prevAction = catObject.activeClipAction || locomotionActions[prevTargetKey];
+      if (prevAction && prevAction !== target) {
+        const prevDuration = Math.max(prevAction.getClip()?.duration || 0, 0.001);
+        const targetDuration = Math.max(target.getClip()?.duration || 0, 0.001);
+        const phase = ((prevAction.time % prevDuration) + prevDuration) % prevDuration;
+        target.time = (phase / prevDuration) * targetDuration;
+      }
+    }
+    catObject.locomotionLastTargetKey = targetKey;
+    catObject.activeClipAction = target;
 
-    const walkTimeScale = THREE.MathUtils.clamp(0.6 + speedNorm * 0.95, 0.6, 1.85);
+    const requestedScale = Number.isFinite(catObject.locomotion?.clipScale) ? catObject.locomotion.clipScale : 0;
+    const gaitNorm = THREE.MathUtils.clamp(speedNorm, 0, 1.7);
+    const desiredScale = requestedScale > 1e-3 ? requestedScale : THREE.MathUtils.clamp(0.2 + gaitNorm * 1.05, 0.2, 1.45);
+    catObject.clipWalkScale = THREE.MathUtils.damp(
+      Number.isFinite(catObject.clipWalkScale) ? catObject.clipWalkScale : 0,
+      target === idleAction ? 0 : desiredScale,
+      target === idleAction ? 18 : 14,
+      Math.max(dt, 0)
+    );
+    const activeScale = Math.max(0.01, catObject.clipWalkScale);
 
-    if (walkAction === idleAction) {
-      walkAction.setEffectiveWeight(1);
-      walkAction.setEffectiveTimeScale(moving ? walkTimeScale : 0.45);
-    } else if (moving) {
-      walkAction.setEffectiveWeight(1);
-      idleAction.setEffectiveWeight(0);
-      walkAction.setEffectiveTimeScale(walkTimeScale);
-      idleAction.setEffectiveTimeScale(1.0);
-    } else {
-      walkAction.setEffectiveWeight(0);
-      idleAction.setEffectiveWeight(1);
-      idleAction.setEffectiveTimeScale(1.0);
+    const allActions = new Set([idleAction, walkAction, ...Object.values(locomotionActions)].filter(Boolean));
+    for (const action of allActions) {
+      const actionKey = keyMap.get(action) || (action === idleAction ? "idle" : "walkF");
+      const targetWeight = action === target ? 1 : 0;
+      const trackedWeight = locomotionWeights.get(action);
+      const currentWeight = Number.isFinite(trackedWeight)
+        ? trackedWeight
+        : action.getEffectiveWeight();
+      let weightRate = targetWeight > currentWeight ? 13 : 18;
+      if (isTurnKey(targetKey)) {
+        // Snap turn blend a bit faster so walk/turn overlap does not look like foot skating.
+        if (actionKey === targetKey) {
+          weightRate = targetWeight > currentWeight ? 24 : 20;
+        } else {
+          weightRate = targetWeight > currentWeight ? 16 : 24;
+        }
+      }
+      let nextWeight = THREE.MathUtils.damp(currentWeight, targetWeight, weightRate, Math.max(dt, 0));
+      if (Math.abs(nextWeight - targetWeight) < 1e-3) nextWeight = targetWeight;
+      locomotionWeights.set(action, nextWeight);
+
+      action.enabled = true;
+      action.play();
+      action.setEffectiveWeight(nextWeight);
+
+      if (actionKey === "idle") {
+        action.setEffectiveTimeScale(1.0);
+      } else {
+        const isActiveTurn = isTurnKey(actionKey) && actionKey === targetKey;
+        const runScale = isActiveTurn ? Math.max(0.7, Math.min(activeScale, 1.8)) : activeScale;
+        if (isTurnKey(actionKey) && actionKey !== targetKey && nextWeight < 0.015) {
+          action.setEffectiveTimeScale(0);
+        } else {
+          action.setEffectiveTimeScale(Math.max(0.01, runScale));
+        }
+      }
     }
 
     catObject.clipMixer.update(dt);

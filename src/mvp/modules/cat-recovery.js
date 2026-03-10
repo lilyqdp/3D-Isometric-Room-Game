@@ -21,20 +21,36 @@ export function createCatRecoveryRuntime(ctx) {
     bestDeskJumpAnchor,
   } = ctx;
 
+  const tempToCatLocal = new THREE.Vector3();
+  const tempPickupQuat = new THREE.Quaternion();
+
   function getCatPickupOverlap() {
     let count = 0;
     let maxPenetration = 0;
     const catRadius = CAT_COLLISION.catBodyRadius + 0.04;
+    const catMinY = cat.group.position.y - 0.02;
+    const catMaxY = cat.group.position.y + 0.34;
     for (const p of pickups) {
       if (!p.body) continue;
       if (isDraggingPickup(p)) continue;
       if (p.body.position.y > 1.25) continue;
-      const itemRadius = pickupRadius(p) * 0.98;
-      const dx = p.body.position.x - cat.pos.x;
-      const dz = p.body.position.z - cat.pos.z;
-      const dist = Math.hypot(dx, dz);
-      const minDist = catRadius + itemRadius;
-      const penetration = minDist - dist;
+      const shape = p.body.shapes?.[0];
+      if (!shape?.halfExtents) continue;
+      const pickupMinY = p.body.position.y - shape.halfExtents.y;
+      const pickupMaxY = p.body.position.y + shape.halfExtents.y;
+      if (pickupMaxY < catMinY || pickupMinY > catMaxY) continue;
+
+      tempToCatLocal.set(cat.pos.x - p.body.position.x, 0, cat.pos.z - p.body.position.z);
+      tempPickupQuat
+        .set(p.body.quaternion.x, p.body.quaternion.y, p.body.quaternion.z, p.body.quaternion.w)
+        .invert();
+      tempToCatLocal.applyQuaternion(tempPickupQuat);
+      const clampedX = THREE.MathUtils.clamp(tempToCatLocal.x, -shape.halfExtents.x, shape.halfExtents.x);
+      const clampedZ = THREE.MathUtils.clamp(tempToCatLocal.z, -shape.halfExtents.z, shape.halfExtents.z);
+      const sepX = tempToCatLocal.x - clampedX;
+      const sepZ = tempToCatLocal.z - clampedZ;
+      const dist = Math.hypot(sepX, sepZ);
+      const penetration = catRadius - dist;
       if (penetration > 0) {
         count++;
         if (penetration > maxPenetration) maxPenetration = penetration;
@@ -262,7 +278,6 @@ export function createCatRecoveryRuntime(ctx) {
     let recovery = findNearestCatRecoveryPoint(cat.pos, true);
     if (!recovery) recovery = findNearestCatRecoveryPoint(cat.pos, false);
     if (!recovery || recovery.distanceToSquared(cat.pos) < 0.01) {
-      nudgeBlockingPickupAwayFromCat();
       cat.nav.pickupTrapT = 0.12;
       return false;
     }
@@ -274,7 +289,6 @@ export function createCatRecoveryRuntime(ctx) {
     resetCatUnstuckTracking();
     cat.nav.stuckT = 0;
     cat.status = "Recovering";
-    nudgeBlockingPickupAwayFromCat();
 
     if (goal) ensureCatPath(goal, true, true);
     return true;
