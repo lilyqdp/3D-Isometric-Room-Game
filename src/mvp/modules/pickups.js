@@ -616,31 +616,66 @@ export function createPickupsRuntime(ctx) {
       const pickupBottomY = b.position.y - half.y;
       const catTopY = cat.group.position.y + 0.34;
       const droppedOnCat = b.velocity.y < -0.42 && pickupBottomY >= catTopY - 0.02;
-      if (shoveContact && droppedOnCat) {
+      if (shoveContact) {
         const nxCat = shoveContact.nx;
         const nzCat = shoveContact.nz;
-        const push = shoveContact.penetration + 0.05;
-        b.wakeUp();
-        b.position.x += nxCat * push;
-        b.position.z += nzCat * push;
-        const impact = Math.max(0, -b.velocity.y);
-        const bounce =
-          p.type === "trash"
-            ? 1.35 + Math.min(0.45, impact * 0.16)
-            : 1.28 + Math.min(0.36, impact * 0.14);
-        b.velocity.x += nxCat * bounce;
-        b.velocity.z += nzCat * bounce;
-        if (p.type === "laundry") {
-          const side = (Math.random() - 0.5) * 0.28;
-          b.velocity.x += -nzCat * side;
-          b.velocity.z += nxCat * side;
+
+        if (droppedOnCat) {
+          const push = shoveContact.penetration + 0.05;
+          b.wakeUp();
+          b.position.x += nxCat * push;
+          b.position.z += nzCat * push;
+          const impact = Math.max(0, -b.velocity.y);
+          const bounce =
+            p.type === "trash"
+              ? 1.35 + Math.min(0.45, impact * 0.16)
+              : 1.28 + Math.min(0.36, impact * 0.14);
+          b.velocity.x += nxCat * bounce;
+          b.velocity.z += nzCat * bounce;
+          if (p.type === "laundry") {
+            const side = (Math.random() - 0.5) * 0.28;
+            b.velocity.x += -nzCat * side;
+            b.velocity.z += nxCat * side;
+          }
+          b.velocity.y = Math.max(b.velocity.y, p.type === "trash" ? 0.9 : 0.82);
+          b.angularVelocity.y += (Math.random() - 0.5) * 2.1;
+          b.angularVelocity.x += (Math.random() - 0.5) * 1.4;
+          b.angularVelocity.z += (Math.random() - 0.5) * 1.4;
+          p.inMotion = true;
+          if (p.motion === "drag") p.motion = "bounce";
+        } else {
+          // Cat physically shoves movable clutter out of its path while walking.
+          const catSpeed = Math.max(
+            Number.isFinite(cat.nav?.lastSpeed) ? cat.nav.lastSpeed : 0,
+            Number.isFinite(cat.nav?.commandedSpeed) ? cat.nav.commandedSpeed : 0
+          );
+          const catMoving = !!cat.jump || catSpeed > 0.06;
+          if (catMoving) {
+            const push = THREE.MathUtils.clamp(shoveContact.penetration + 0.01, 0.01, 0.06);
+            b.wakeUp();
+            b.position.x += nxCat * push;
+            b.position.z += nzCat * push;
+
+            const outwardSpeed = b.velocity.x * nxCat + b.velocity.z * nzCat;
+            const targetOutward = THREE.MathUtils.clamp(
+              (p.type === "trash" ? 0.35 : 0.28) + catSpeed * 0.42,
+              0.22,
+              p.type === "trash" ? 1.15 : 0.9
+            );
+            if (outwardSpeed < targetOutward) {
+              const add = targetOutward - outwardSpeed;
+              b.velocity.x += nxCat * add;
+              b.velocity.z += nzCat * add;
+            }
+
+            const tangent = p.type === "trash" ? 0.14 : 0.1;
+            b.velocity.x += -nzCat * tangent * 0.5;
+            b.velocity.z += nxCat * tangent * 0.5;
+            b.velocity.y = Math.max(b.velocity.y, 0.02);
+            p.inMotion = true;
+            if (!p.motion || p.motion === "drag") p.motion = "bounce";
+          }
         }
-        b.velocity.y = Math.max(b.velocity.y, p.type === "trash" ? 0.9 : 0.82);
-        b.angularVelocity.y += (Math.random() - 0.5) * 2.1;
-        b.angularVelocity.x += (Math.random() - 0.5) * 1.4;
-        b.angularVelocity.z += (Math.random() - 0.5) * 1.4;
-        p.inMotion = true;
-        if (p.motion === "drag") p.motion = "bounce";
       }
 
       resolvePickupCupWaterCollision(p);

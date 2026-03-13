@@ -1,10 +1,12 @@
+import { buildWeightedJumpGraph, dijkstraAllCostsFrom, dijkstraJumpCountsFrom } from "./cat-jump-graph.js";
+
 export function createCatJumpPlanningRuntime(ctx) {
   const {
     THREE,
     CAT_NAV,
     CAT_COLLISION,
-    desk,
-    DESK_JUMP_ANCHORS,
+    ROOM,
+    getElevatedSurfaceDefs,
     CUP_COLLISION,
     pickups,
     cup,
@@ -17,341 +19,1402 @@ export function createCatJumpPlanningRuntime(ctx) {
     hasClearTravelLine,
   } = ctx;
 
-  const deskJumpPerimeter = (() => {
-    if (Array.isArray(DESK_JUMP_ANCHORS) && DESK_JUMP_ANCHORS.length > 0) {
-      let minX = Infinity;
-      let maxX = -Infinity;
-      let minZ = Infinity;
-      let maxZ = -Infinity;
-      for (let i = 0; i < DESK_JUMP_ANCHORS.length; i++) {
-        const a = DESK_JUMP_ANCHORS[i];
-        if (!a) continue;
-        minX = Math.min(minX, a.x);
-        maxX = Math.max(maxX, a.x);
-        minZ = Math.min(minZ, a.z);
-        maxZ = Math.max(maxZ, a.z);
-      }
-      if (
-        Number.isFinite(minX) &&
-        Number.isFinite(maxX) &&
-        Number.isFinite(minZ) &&
-        Number.isFinite(maxZ)
-      ) {
-        return { minX, maxX, minZ, maxZ };
-      }
-    }
-    return {
-      minX: desk.pos.x - desk.sizeX * 0.5 - 0.72,
-      maxX: desk.pos.x + desk.sizeX * 0.5 + 0.72,
-      minZ: desk.pos.z - desk.sizeZ * 0.5 - 0.68,
-      maxZ: desk.pos.z + desk.sizeZ * 0.5 + 0.68,
-    };
-  })();
+  const SURFACE_CFG = {
+    anchorsPerEdge: 5,
+    jumpAngleMinDownDeg: 0,
+    jumpAngleMaxDownDeg: 60,
+    jumpAngleStepDeg: 2,
+    jumpMaxDistance: 1.6,
+    jumpUpArc: 0.46,
+    jumpDownArc: 0.34,
+    launchOuterPad: 0.02,
+    landingClearanceMul: 1.5,
+    jumpVerticalProbePad: 0.22,
+    jumpSideProbeMul: 0.42,
+    // For down-jumps, stage nearer the edge to reduce visual mismatch
+    // between the edge animation and physical launch point.
+    downJumpEdgeBias: 0.72,
+    sameLevelTolerance: 0.08,
+    // Keep vertical hops physically plausible: chair->high platform links are rejected.
+    maxJumpUpHeight: 1.28,
+  };
 
-  function sampleDeskJumpPerimeter(step = 0.24) {
-    const points = [];
-    const { minX, maxX, minZ, maxZ } = deskJumpPerimeter;
-    const spanX = Math.max(0.001, maxX - minX);
-    const spanZ = Math.max(0.001, maxZ - minZ);
-    const nx = Math.max(2, Math.ceil(spanX / step) + 1);
-    const nz = Math.max(2, Math.ceil(spanZ / step) + 1);
-    for (let i = 0; i < nx; i++) {
-      const t = nx <= 1 ? 0 : i / (nx - 1);
-      const x = THREE.MathUtils.lerp(minX, maxX, t);
-      points.push(new THREE.Vector3(x, 0, minZ));
-      points.push(new THREE.Vector3(x, 0, maxZ));
-    }
-    for (let i = 1; i < nz - 1; i++) {
-      const t = nz <= 1 ? 0 : i / (nz - 1);
-      const z = THREE.MathUtils.lerp(minZ, maxZ, t);
-      points.push(new THREE.Vector3(minX, 0, z));
-      points.push(new THREE.Vector3(maxX, 0, z));
-    }
-    return points;
+  const floorY = 0;
+  const jumpGraphCache = {
+    graph: null,
+    fromCache: new Map(),
+    jumpCountFromCache: new Map(),
+    linkByAnchorKey: new Map(),
+  };
+
+  function pointKey(v, quantum = 0.02) {
+    const q = (n) => Math.round((Number.isFinite(n) ? n : 0) / quantum);
+    return `${q(v.x)}:${q(v.z)}`;
   }
 
-  const deskJumpPerimeterSamples = sampleDeskJumpPerimeter(Math.max(0.2, CAT_NAV.step * 0.8));
-
-  function closestPointOnDeskJumpPerimeter(from) {
-    const { minX, maxX, minZ, maxZ } = deskJumpPerimeter;
-    const x = THREE.MathUtils.clamp(from.x, minX, maxX);
-    const z = THREE.MathUtils.clamp(from.z, minZ, maxZ);
-
-    const outX = from.x < minX || from.x > maxX;
-    const outZ = from.z < minZ || from.z > maxZ;
-    if (outX || outZ) {
-      return new THREE.Vector3(x, 0, z);
-    }
-
-    const dxL = Math.abs(from.x - minX);
-    const dxR = Math.abs(maxX - from.x);
-    const dzB = Math.abs(from.z - minZ);
-    const dzT = Math.abs(maxZ - from.z);
-    let side = "left";
-    let best = dxL;
-    if (dxR < best) {
-      best = dxR;
-      side = "right";
-    }
-    if (dzB < best) {
-      best = dzB;
-      side = "bottom";
-    }
-    if (dzT < best) {
-      side = "top";
-    }
-
-    if (side === "left") return new THREE.Vector3(minX, 0, z);
-    if (side === "right") return new THREE.Vector3(maxX, 0, z);
-    if (side === "bottom") return new THREE.Vector3(x, 0, minZ);
-    return new THREE.Vector3(x, 0, maxZ);
+  function linkAnchorKey(fromSurfaceId, toSurfaceId, v) {
+    return `${fromSurfaceId || "?"}->${toSurfaceId || "?"}:${pointKey(v)}`;
   }
 
-  function getDeskJumpCandidates(from) {
-    const candidates = [closestPointOnDeskJumpPerimeter(from)];
+  function normalizeAvoidSurfaceIds(avoidSurfaceIds) {
+    const out = new Set();
+    if (!avoidSurfaceIds) return out;
+    if (avoidSurfaceIds instanceof Set) {
+      for (const id of avoidSurfaceIds) {
+        if (id != null && id !== "") out.add(String(id));
+      }
+      return out;
+    }
+    if (Array.isArray(avoidSurfaceIds)) {
+      for (const id of avoidSurfaceIds) {
+        if (id != null && id !== "") out.add(String(id));
+      }
+      return out;
+    }
+    if (avoidSurfaceIds != null && avoidSurfaceIds !== "") {
+      out.add(String(avoidSurfaceIds));
+    }
+    return out;
+  }
+
+  function cloneXZ(v) {
+    return new THREE.Vector3(v.x, 0, v.z);
+  }
+
+  function getConfiguredElevatedSurfaces() {
+    if (typeof getElevatedSurfaceDefs !== "function") return [];
+    const defs = getElevatedSurfaceDefs(true);
+    if (!Array.isArray(defs)) return [];
+    const out = [];
     const seen = new Set();
-    const add = (v) => {
-      const key = `${v.x.toFixed(3)}:${v.z.toFixed(3)}`;
+    for (const def of defs) {
+      if (!def) continue;
+      const minX = Number(def.minX);
+      const maxX = Number(def.maxX);
+      const minZ = Number(def.minZ);
+      const maxZ = Number(def.maxZ);
+      const y = Number(def.y);
+      if (![minX, maxX, minZ, maxZ, y].every(Number.isFinite)) continue;
+      if (y <= floorY + 0.04) continue;
+      if (maxX - minX <= 0.08 || maxZ - minZ <= 0.08) continue;
+      const id = String(def.id || def.name || `surface-${out.length}`);
+      if (id === "floor" || seen.has(id)) continue;
+      seen.add(id);
+      out.push({ id, minX, maxX, minZ, maxZ, y });
+    }
+    return out;
+  }
+
+  function makeRectSurface(id, y, minX, maxX, minZ, maxZ, inset) {
+    const safeInset = Math.max(0, inset);
+    const inner = {
+      minX: minX + safeInset,
+      maxX: maxX - safeInset,
+      minZ: minZ + safeInset,
+      maxZ: maxZ - safeInset,
+    };
+    return {
+      id,
+      y,
+      outer: { minX, maxX, minZ, maxZ },
+      inner,
+      anchors: [],
+    };
+  }
+
+  function isInsideRect(rect, x, z, pad = 0) {
+    return (
+      x >= rect.minX + pad &&
+      x <= rect.maxX - pad &&
+      z >= rect.minZ + pad &&
+      z <= rect.maxZ - pad
+    );
+  }
+
+  function buildRectAnchors(surface, countPerEdge = 5) {
+    const anchors = [];
+    const seen = new Set();
+    const n = Math.max(2, countPerEdge | 0);
+    const inner = surface.inner;
+    const outer = surface.outer;
+
+    if (inner.minX >= inner.maxX || inner.minZ >= inner.maxZ) return anchors;
+
+    const addAnchor = (edgeIndex, t, innerX, innerZ, outerX, outerZ, nx, nz) => {
+      const key = `${Math.round(innerX * 1000)}:${Math.round(innerZ * 1000)}`;
       if (seen.has(key)) return;
       seen.add(key);
-      candidates.push(v);
+      anchors.push({
+        id: `${surface.id}:a${anchors.length}`,
+        surfaceId: surface.id,
+        edgeIndex,
+        t,
+        inner: new THREE.Vector3(innerX, 0, innerZ),
+        outer: new THREE.Vector3(outerX, 0, outerZ),
+        normal: new THREE.Vector3(nx, 0, nz),
+      });
     };
-    for (let i = 0; i < deskJumpPerimeterSamples.length; i++) {
-      add(deskJumpPerimeterSamples[i]);
+
+    for (let i = 0; i < n; i++) {
+      const t = n <= 1 ? 0 : i / (n - 1);
+      const xI = THREE.MathUtils.lerp(inner.minX, inner.maxX, t);
+      // Outer point shares x with inner point for this edge.
+      addAnchor(0, t, xI, inner.maxZ, xI, outer.maxZ, 0, 1);
     }
-    if (Array.isArray(DESK_JUMP_ANCHORS)) {
-      for (let i = 0; i < DESK_JUMP_ANCHORS.length; i++) {
-        const a = DESK_JUMP_ANCHORS[i];
-        if (a) add(a);
-      }
+    for (let i = 0; i < n; i++) {
+      const t = n <= 1 ? 0 : i / (n - 1);
+      const zI = THREE.MathUtils.lerp(inner.maxZ, inner.minZ, t);
+      // Outer point shares z with inner point for this edge.
+      addAnchor(1, t, inner.maxX, zI, outer.maxX, zI, 1, 0);
     }
-    candidates.sort((a, b) => from.distanceToSquared(a) - from.distanceToSquared(b));
-    return candidates;
+    for (let i = 0; i < n; i++) {
+      const t = n <= 1 ? 0 : i / (n - 1);
+      const xI = THREE.MathUtils.lerp(inner.maxX, inner.minX, t);
+      // Outer point shares x with inner point for this edge.
+      addAnchor(2, t, xI, inner.minZ, xI, outer.minZ, 0, -1);
+    }
+    for (let i = 0; i < n; i++) {
+      const t = n <= 1 ? 0 : i / (n - 1);
+      const zI = THREE.MathUtils.lerp(inner.minZ, inner.maxZ, t);
+      // Outer point shares z with inner point for this edge.
+      addAnchor(3, t, inner.minX, zI, outer.minX, zI, -1, 0);
+    }
+
+    const cx = (inner.minX + inner.maxX) * 0.5;
+    const cz = (inner.minZ + inner.maxZ) * 0.5;
+    anchors.sort((a, b) => {
+      const aa = Math.atan2(a.inner.z - cz, a.inner.x - cx);
+      const bb = Math.atan2(b.inner.z - cz, b.inner.x - cx);
+      return aa - bb;
+    });
+    for (let i = 0; i < anchors.length; i++) {
+      anchors[i].ringIndex = i;
+      anchors[i].nodeId = `node:${surface.id}:inner:${i}`;
+    }
+    return anchors;
   }
 
-  function nearestDeskJumpAnchor(from) {
-    const staticObstacles = buildCatObstacles(false);
-    const candidates = getDeskJumpCandidates(from);
-    let best = null;
-    let bestD = Infinity;
-    for (let i = 0; i < candidates.length; i++) {
-      const a = candidates[i];
-      if (isCatPointBlocked(a.x, a.z, staticObstacles, CAT_NAV.clearance * 0.85)) continue;
-      const d = from.distanceToSquared(a);
-      if (d < bestD) {
-        bestD = d;
-        best = a;
+  function intersectProbeWithSurface(origin, dir, maxDist, surface, sameLevelTolerance = SURFACE_CFG.sameLevelTolerance) {
+    const EPS = 1e-6;
+    const dy = dir.y;
+    // Horizontal probe: allow same-level links by ray-vs-rect intersection in XZ.
+    if (Math.abs(dy) < EPS) {
+      if (Math.abs(surface.y - origin.y) > sameLevelTolerance) return null;
+      let tMin = 0;
+      let tMax = maxDist;
+
+      if (Math.abs(dir.x) < EPS) {
+        if (origin.x < surface.inner.minX || origin.x > surface.inner.maxX) return null;
+      } else {
+        const tx1 = (surface.inner.minX - origin.x) / dir.x;
+        const tx2 = (surface.inner.maxX - origin.x) / dir.x;
+        tMin = Math.max(tMin, Math.min(tx1, tx2));
+        tMax = Math.min(tMax, Math.max(tx1, tx2));
+        if (tMin > tMax) return null;
       }
+
+      if (Math.abs(dir.z) < EPS) {
+        if (origin.z < surface.inner.minZ || origin.z > surface.inner.maxZ) return null;
+      } else {
+        const tz1 = (surface.inner.minZ - origin.z) / dir.z;
+        const tz2 = (surface.inner.maxZ - origin.z) / dir.z;
+        tMin = Math.max(tMin, Math.min(tz1, tz2));
+        tMax = Math.min(tMax, Math.max(tz1, tz2));
+        if (tMin > tMax) return null;
+      }
+
+      const t = tMin > EPS ? tMin : (tMax > EPS ? tMax : null);
+      if (!Number.isFinite(t) || t <= 0 || t > maxDist) return null;
+      return {
+        t,
+        point: new THREE.Vector3(origin.x + dir.x * t, surface.y, origin.z + dir.z * t),
+      };
     }
-    return best || candidates[0] || new THREE.Vector3(desk.pos.x, 0, desk.pos.z);
+
+    const t = (surface.y - origin.y) / dy;
+    if (!(t > 0 && t <= maxDist)) return null;
+    const x = origin.x + dir.x * t;
+    const z = origin.z + dir.z * t;
+    if (!isInsideRect(surface.inner, x, z, 0)) return null;
+    return {
+      t,
+      point: new THREE.Vector3(x, surface.y, z),
+    };
   }
 
-  function bestDeskJumpAnchor(from, desiredTopPoint = null) {
-    const staticObstacles = buildCatObstacles(false);
-    const dynamicObstacles = buildCatObstacles(true, true);
-    const candidates = getDeskJumpCandidates(from);
-    const valid = [];
-    const maxChecks = Math.min(candidates.length, 32);
-    const landingY = desk.topY + 0.02;
-    const landingClearance = CAT_COLLISION.catBodyRadius * 1.5;
-
-    for (let i = 0; i < maxChecks; i++) {
-      const a = candidates[i];
-      if (isCatPointBlocked(a.x, a.z, staticObstacles, CAT_NAV.clearance * 0.85)) continue;
-
-      const path = computeCatPath(from, a, staticObstacles);
-      if (!isPathTraversable(path, staticObstacles)) continue;
-      const dynamicPath = computeCatPath(from, a, dynamicObstacles);
-      if (!isPathTraversable(dynamicPath, dynamicObstacles)) continue;
-      const jumpTargets = computeDeskJumpTargets(a, desiredTopPoint);
-      if (!jumpTargets) continue;
-      if (isCatPointBlocked(jumpTargets.top.x, jumpTargets.top.z, dynamicObstacles, landingClearance, landingY)) continue;
-      if (!hasClearTravelLine(jumpTargets.hook, jumpTargets.top, dynamicObstacles, landingClearance, landingY)) continue;
-
-      let score = catPathDistance(dynamicPath) + from.distanceTo(a) * 0.12;
-      if (desiredTopPoint) {
-        const dx = jumpTargets.top.x - desiredTopPoint.x;
-        const dz = jumpTargets.top.z - desiredTopPoint.z;
-        score += Math.hypot(dx, dz) * 0.9;
-      }
-      valid.push({ anchor: a, score });
-    }
-
-    if (valid.length > 0) {
-      valid.sort((a, b) => a.score - b.score);
-      return valid[0].anchor;
-    }
-    return nearestDeskJumpAnchor(from);
-  }
-
-  function computeDeskJumpTargets(anchor, desiredTopPoint = null) {
-    const relX = anchor.x - desk.pos.x;
-    const relZ = anchor.z - desk.pos.z;
-    const hook = new THREE.Vector3();
-    const top = new THREE.Vector3();
-    const edgeOut = 0.24;
-    const topIn = 0.34;
-
-    const comingFromXSide = Math.abs(relX) >= Math.abs(relZ);
-    if (comingFromXSide) {
-      const sx = Math.sign(relX || 1);
-      const edgeX = desk.pos.x + sx * (desk.sizeX * 0.5 + edgeOut);
-      const z = THREE.MathUtils.clamp(
-        anchor.z,
-        desk.pos.z - desk.sizeZ * 0.5 + 0.24,
-        desk.pos.z + desk.sizeZ * 0.5 - 0.24
+  function buildSurfaceRegistry() {
+    const surfaces = [];
+    const floorMinX = ROOM.minX + CAT_NAV.margin;
+    const floorMaxX = ROOM.maxX - CAT_NAV.margin;
+    const floorMinZ = ROOM.minZ + CAT_NAV.margin;
+    const floorMaxZ = ROOM.maxZ - CAT_NAV.margin;
+    surfaces.push(
+      makeRectSurface("floor", floorY, floorMinX, floorMaxX, floorMinZ, floorMaxZ, CAT_COLLISION.catBodyRadius)
+    );
+    const elevated = getConfiguredElevatedSurfaces();
+    for (const surface of elevated) {
+      surfaces.push(
+        makeRectSurface(
+          surface.id,
+          surface.y,
+          surface.minX,
+          surface.maxX,
+          surface.minZ,
+          surface.maxZ,
+          CAT_COLLISION.catBodyRadius
+        )
       );
-      hook.set(edgeX, 0, z);
-      top.set(desk.pos.x + sx * (desk.sizeX * 0.5 - topIn), 0, z);
-    } else {
-      const sz = Math.sign(relZ || 1);
-      const edgeZ = desk.pos.z + sz * (desk.sizeZ * 0.5 + edgeOut);
-      const x = THREE.MathUtils.clamp(
-        anchor.x,
-        desk.pos.x - desk.sizeX * 0.5 + 0.3,
-        desk.pos.x + desk.sizeX * 0.5 - 0.3
-      );
-      hook.set(x, 0, edgeZ);
-      top.set(x, 0, desk.pos.z + sz * (desk.sizeZ * 0.5 - topIn));
     }
 
-    const landingY = desk.topY + 0.02;
-    const dynamicObstacles = buildCatObstacles(true, true);
-    // Must keep jump destination clear by at least 1.5x cat radius from nearby objects.
-    const landingClearance = CAT_COLLISION.catBodyRadius * 1.5;
-    const cupAvoid = CAT_COLLISION.catBodyRadius + CUP_COLLISION.radius + 0.18;
-    const landingObjectRadius = CAT_COLLISION.catBodyRadius * 1.5;
+    const byId = new Map();
+    for (const surface of surfaces) {
+      surface.anchors = buildRectAnchors(surface, SURFACE_CFG.anchorsPerEdge);
+      byId.set(surface.id, surface);
+    }
 
-    const isObjectNearLanding = (p, y) => {
-      // Explicitly reject jump landings if cup/pickups are near the touchdown point on this surface.
-      if (!cup.broken && !cup.falling && cup.group.visible) {
-        const cupY = cup.group.position.y;
-        if (Math.abs(cupY - y) <= 0.36) {
-          const dx = p.x - cup.group.position.x;
-          const dz = p.z - cup.group.position.z;
-          const minDist = landingObjectRadius + CUP_COLLISION.radius;
-          if (dx * dx + dz * dz < minDist * minDist) return true;
+    return { surfaces, byId };
+  }
+
+  function normalizeIgnoreSurfaceIds(value) {
+    if (!value) return [];
+    if (Array.isArray(value)) return value.map((v) => String(v));
+    if (value instanceof Set) return Array.from(value, (v) => String(v));
+    return [String(value)];
+  }
+
+  function shouldIgnoreObstacleForLink(obs, fromSurfaceId, toSurfaceId) {
+    if (!obs) return false;
+    const fromId = fromSurfaceId == null ? null : String(fromSurfaceId);
+    const toId = toSurfaceId == null ? null : String(toSurfaceId);
+
+    if (obs.tag === "surfaceSolid") {
+      const sid = obs.surfaceId == null ? null : String(obs.surfaceId);
+      return !!sid && (sid === fromId || sid === toId);
+    }
+
+    const ignoreIds = normalizeIgnoreSurfaceIds(obs.jumpIgnoreSurfaceIds);
+    if (!ignoreIds.length) return false;
+    return (fromId && ignoreIds.includes(fromId)) || (toId && ignoreIds.includes(toId));
+  }
+
+  function filterObstaclesForLink(obstacles, fromSurfaceId, toSurfaceId) {
+    if (!Array.isArray(obstacles) || !obstacles.length) return [];
+    return obstacles.filter((obs) => !shouldIgnoreObstacleForLink(obs, fromSurfaceId, toSurfaceId));
+  }
+
+  function getJumpObstaclesForLink(link, obstacles) {
+    if (!link) return Array.isArray(obstacles) ? obstacles : [];
+    return filterObstaclesForLink(obstacles, link.fromSurfaceId, link.toSurfaceId);
+  }
+
+  function firstBlockedPointOnSegment(
+    a,
+    b,
+    clearance,
+    yFrom = 0,
+    yTo = yFrom,
+    obstacles = []
+  ) {
+    if (!a || !b) return null;
+    const dx = b.x - a.x;
+    const dz = b.z - a.z;
+    const dist = Math.hypot(dx, dz);
+    if (dist < 1e-6) {
+      const qy = Number.isFinite(yFrom) ? yFrom : 0;
+      if (isCatPointBlocked(a.x, a.z, obstacles, clearance, qy)) {
+        return new THREE.Vector3(a.x, qy, a.z);
+      }
+      return null;
+    }
+    const samples = Math.max(3, Math.ceil(dist / 0.06));
+    for (let i = 0; i <= samples; i++) {
+      const t = i / samples;
+      const x = a.x + dx * t;
+      const z = a.z + dz * t;
+      const qy = THREE.MathUtils.lerp(yFrom, yTo, t);
+      if (isCatPointBlocked(x, z, obstacles, clearance, qy)) {
+        return new THREE.Vector3(x, qy, z);
+      }
+    }
+    return null;
+  }
+
+  function isSegmentBlocked(
+    a,
+    b,
+    clearance,
+    yFrom = 0,
+    yTo = yFrom,
+    obstacles = []
+  ) {
+    return !!firstBlockedPointOnSegment(a, b, clearance, yFrom, yTo, obstacles);
+  }
+
+  function buildDirectedJumpLinks(surfaceRegistry) {
+    const links = [];
+    const debugProbes = [];
+    const surfaces = surfaceRegistry.surfaces;
+    const staticObstacles = buildCatObstacles(false, false).filter(
+      (obs) => obs && obs.tag !== "cup" && !obs.pickupKey
+    );
+    const makeSurfaceSolidObstacles = () => {
+      const slabThickness = Math.max(0.06, CAT_COLLISION.catBodyRadius * 0.55);
+      const slabs = [];
+      for (const s of surfaces) {
+        if (!s || s.id === "floor") continue;
+        const width = Math.max(0.06, s.outer.maxX - s.outer.minX);
+        const depth = Math.max(0.06, s.outer.maxZ - s.outer.minZ);
+        slabs.push({
+          kind: "box",
+          tag: "surfaceSolid",
+          surfaceId: String(s.id),
+          x: (s.outer.minX + s.outer.maxX) * 0.5,
+          z: (s.outer.minZ + s.outer.maxZ) * 0.5,
+          hx: width * 0.5,
+          hz: depth * 0.5,
+          y: s.y - slabThickness * 0.5,
+          h: slabThickness,
+        });
+      }
+      return slabs;
+    };
+    const staticJumpObstacles = [...staticObstacles, ...makeSurfaceSolidObstacles()];
+    const debugVectorBlockers = [];
+    const probeClearance = CAT_NAV.clearance * 0.9;
+    const hookClearance = CAT_COLLISION.catBodyRadius * SURFACE_CFG.landingClearanceMul;
+    const debugVectorPad = Math.max(probeClearance, hookClearance);
+    for (const obs of staticJumpObstacles) {
+      if (!obs) continue;
+      const blockerClass = obs.tag === "surfaceSolid" ? "surface" : "object";
+      const ignoreSurfaceIds = normalizeIgnoreSurfaceIds(obs.jumpIgnoreSurfaceIds);
+      if (obs.kind === "circle") {
+        debugVectorBlockers.push({
+          kind: "circle",
+          x: obs.x,
+          z: obs.z,
+          r: Math.max(0.01, (obs.r || 0) + debugVectorPad),
+          y: obs.y,
+          h: obs.h,
+          pad: debugVectorPad,
+          tag: obs.tag || "",
+          blockerClass,
+          surfaceId: obs.surfaceId || null,
+          jumpIgnoreSurfaceIds: ignoreSurfaceIds,
+        });
+      } else {
+        debugVectorBlockers.push({
+          kind: obs.kind === "obb" ? "obb" : "box",
+          x: obs.x,
+          z: obs.z,
+          hx: Math.max(0.01, (obs.hx || 0.01) + debugVectorPad),
+          hz: Math.max(0.01, (obs.hz || 0.01) + debugVectorPad),
+          yaw: Number.isFinite(obs.yaw) ? obs.yaw : 0,
+          y: obs.y,
+          h: obs.h,
+          pad: debugVectorPad,
+          tag: obs.tag || "",
+          blockerClass,
+          surfaceId: obs.surfaceId || null,
+          jumpIgnoreSurfaceIds: ignoreSurfaceIds,
+        });
+      }
+    }
+    const jumpObstaclesForLink = (fromSurfaceId, toSurfaceId) =>
+      filterObstaclesForLink(staticJumpObstacles, fromSurfaceId, toSurfaceId);
+    const segmentBlocked = (
+      a,
+      b,
+      clearance,
+      yFrom = 0,
+      yTo = yFrom,
+      obstacles = staticJumpObstacles
+    ) => isSegmentBlocked(a, b, clearance, yFrom, yTo, obstacles);
+    const jumpArcBlocked = (
+      from,
+      fromY,
+      to,
+      toY,
+      arcHeight,
+      clearance,
+      obstacles = staticJumpObstacles
+    ) => {
+      const dx = to.x - from.x;
+      const dz = to.z - from.z;
+      const dist = Math.hypot(dx, dz);
+      const samples = Math.max(8, Math.ceil(dist / 0.06));
+      const verticalPad = Math.max(0.05, SURFACE_CFG.jumpVerticalProbePad);
+      const arcClearance = Math.max(clearance, CAT_COLLISION.catBodyRadius * 0.9);
+      const sideOffset = Math.max(0.04, CAT_COLLISION.catBodyRadius * SURFACE_CFG.jumpSideProbeMul);
+      const invLen = dist > 1e-6 ? 1 / dist : 0;
+      const perpX = -dz * invLen;
+      const perpZ = dx * invLen;
+      for (let i = 1; i < samples; i++) {
+        const u = i / samples;
+        const x = THREE.MathUtils.lerp(from.x, to.x, u);
+        const z = THREE.MathUtils.lerp(from.z, to.z, u);
+        const y =
+          THREE.MathUtils.lerp(fromY, toY, u) +
+          Math.sin(Math.PI * u) * arcHeight;
+        const probePoints = [[x, z]];
+        if (u > 0.18 && u < 0.82) {
+          probePoints.push([x + perpX * sideOffset, z + perpZ * sideOffset]);
+          probePoints.push([x - perpX * sideOffset, z - perpZ * sideOffset]);
         }
-      }
-      for (const pickup of pickups) {
-        if (!pickup?.mesh || !pickup.body) continue;
-        if (!pickup.mesh.visible) continue;
-        const py = pickup.mesh.position.y;
-        if (!Number.isFinite(py) || Math.abs(py - y) > 0.36) continue;
-        const dx = p.x - pickup.mesh.position.x;
-        const dz = p.z - pickup.mesh.position.z;
-        const minDist = landingObjectRadius + Math.max(0.04, pickupRadius(pickup));
-        if (dx * dx + dz * dz < minDist * minDist) return true;
+        for (const [px, pz] of probePoints) {
+          if (isCatPointBlocked(px, pz, obstacles, arcClearance, y)) return true;
+          if (isCatPointBlocked(px, pz, obstacles, arcClearance, y + verticalPad)) {
+            return true;
+          }
+        }
       }
       return false;
     };
+    const minDeg = THREE.MathUtils.clamp(Number(SURFACE_CFG.jumpAngleMinDownDeg), 0, 89.9);
+    const maxDeg = THREE.MathUtils.clamp(
+      Number(SURFACE_CFG.jumpAngleMaxDownDeg),
+      minDeg,
+      89.9
+    );
+    const stepDeg = Math.max(1, Number(SURFACE_CFG.jumpAngleStepDeg) || 5);
+    const angleDegs = [];
+    for (let deg = maxDeg; deg >= minDeg - 1e-4; deg -= stepDeg) {
+      angleDegs.push(Math.max(minDeg, deg));
+    }
+    if (!angleDegs.length || angleDegs[angleDegs.length - 1] > minDeg + 1e-4) {
+      angleDegs.push(minDeg);
+    }
 
-    const isLandingSafeAtY = (p, y) => {
-      if (isObjectNearLanding(p, y)) return false;
-      if (isCatPointBlocked(p.x, p.z, dynamicObstacles, landingClearance, y)) return false;
-      if (!cup.broken && !cup.falling) {
+    const elevated = surfaces.filter((s) => s.y > floorY + 0.05);
+    for (const source of elevated) {
+      for (const anchor of source.anchors) {
+        const origin = new THREE.Vector3(
+          anchor.outer.x + anchor.normal.x * SURFACE_CFG.launchOuterPad,
+          source.y + 0.02,
+          anchor.outer.z + anchor.normal.z * SURFACE_CFG.launchOuterPad
+        );
+        const fallbackTheta = THREE.MathUtils.degToRad(maxDeg);
+        const fallbackDir = new THREE.Vector3(
+          anchor.normal.x * Math.cos(fallbackTheta),
+          -Math.sin(fallbackTheta),
+          anchor.normal.z * Math.cos(fallbackTheta)
+        );
+        const fallbackMissPoint = new THREE.Vector3(
+          origin.x + fallbackDir.x * SURFACE_CFG.jumpMaxDistance,
+          origin.y + fallbackDir.y * SURFACE_CFG.jumpMaxDistance,
+          origin.z + fallbackDir.z * SURFACE_CFG.jumpMaxDistance
+        );
+
+        const candidatesBySurface = new Map();
+        for (const angleDeg of angleDegs) {
+          const theta = THREE.MathUtils.degToRad(angleDeg);
+          const cos = Math.cos(theta);
+          const sin = Math.sin(theta);
+          const dir = new THREE.Vector3(anchor.normal.x * cos, -sin, anchor.normal.z * cos);
+
+          let bestHitForAngle = null;
+          let bestTargetForAngle = null;
+          for (const target of surfaces) {
+            if (target.id === source.id) continue;
+            if (target.y > source.y + SURFACE_CFG.sameLevelTolerance) continue;
+            const hit = intersectProbeWithSurface(
+              origin,
+              dir,
+              SURFACE_CFG.jumpMaxDistance,
+              target,
+              SURFACE_CFG.sameLevelTolerance
+            );
+            if (!hit) continue;
+            const dy = Math.max(0, source.y - target.y);
+            if (dy > SURFACE_CFG.maxJumpUpHeight) continue;
+            if (!bestHitForAngle || hit.t < bestHitForAngle.t) {
+              bestHitForAngle = hit;
+              bestTargetForAngle = target;
+            }
+          }
+
+          if (!bestHitForAngle || !bestTargetForAngle) continue;
+          if (candidatesBySurface.has(bestTargetForAngle.id)) continue;
+
+          const jumpFrom = bestHitForAngle.point.clone();
+          const top = new THREE.Vector3(anchor.inner.x, source.y, anchor.inner.z);
+          const hook = new THREE.Vector3(anchor.outer.x, source.y, anchor.outer.z);
+          const linkObstacles = jumpObstaclesForLink(bestTargetForAngle.id, source.id);
+          // Reject probe hit if the cat-radius corridor is occluded on launch or on top latch.
+          const blockedOnLaunch = segmentBlocked(
+            jumpFrom,
+            hook,
+            probeClearance,
+            bestTargetForAngle.y,
+            source.y,
+            linkObstacles
+          );
+          const blockedOnTopLatch = segmentBlocked(
+            hook,
+            top,
+            hookClearance,
+            source.y,
+            source.y,
+            linkObstacles
+          );
+          const blockedOnJumpUpArc = jumpArcBlocked(
+            jumpFrom,
+            bestTargetForAngle.y,
+            top,
+            source.y,
+            SURFACE_CFG.jumpUpArc,
+            hookClearance,
+            linkObstacles
+          );
+          const blockedOnJumpDownArc = jumpArcBlocked(
+            top,
+            source.y,
+            jumpFrom,
+            bestTargetForAngle.y,
+            SURFACE_CFG.jumpDownArc,
+            probeClearance,
+            linkObstacles
+          );
+          const staticValidUp = !blockedOnLaunch && !blockedOnTopLatch && !blockedOnJumpUpArc;
+          const staticValidDown = !blockedOnJumpDownArc;
+          if (!staticValidUp && !staticValidDown) continue;
+
+          // First hit per surface wins (angle order is steep->shallow).
+          candidatesBySurface.set(bestTargetForAngle.id, {
+            hit: bestHitForAngle,
+            target: bestTargetForAngle,
+            angleDeg,
+            staticValidUp,
+            staticValidDown,
+          });
+        }
+
+        if (candidatesBySurface.size === 0) {
+          debugProbes.push({
+            surfaceId: source.id,
+            anchorId: anchor.id,
+            origin: origin.clone(),
+            end: fallbackMissPoint,
+            hit: false,
+            toSurfaceId: null,
+            angleDeg: maxDeg,
+          });
+          continue;
+        }
+
+        for (const candidate of candidatesBySurface.values()) {
+          const bestHit = candidate.hit;
+          const bestTarget = candidate.target;
+          debugProbes.push({
+            surfaceId: source.id,
+            anchorId: anchor.id,
+            origin: origin.clone(),
+            end: bestHit.point.clone(),
+            hit: true,
+            toSurfaceId: bestTarget.id,
+            angleDeg: candidate.angleDeg,
+          });
+          const jumpFrom = bestHit.point;
+          const top = cloneXZ(anchor.inner);
+          const hook = cloneXZ(anchor.outer);
+          const dy = Math.max(0, source.y - bestTarget.y);
+          const dx = top.x - jumpFrom.x;
+          const dz = top.z - jumpFrom.z;
+          const planar = Math.hypot(dx, dz);
+          const jumpCost = planar + dy * 0.9 + 0.45;
+
+          links.push({
+            id: `jump:${bestTarget.id}->${source.id}:${anchor.id}`,
+            fromSurfaceId: bestTarget.id,
+            toSurfaceId: source.id,
+            anchorId: anchor.id,
+            anchorNodeId: anchor.nodeId,
+            top,
+            hook,
+            jumpFrom,
+            jumpCost,
+            staticValidUp: !!candidate.staticValidUp,
+            staticValidDown: !!candidate.staticValidDown,
+          });
+        }
+      }
+    }
+
+    return { links, debugProbes, debugVectorBlockers };
+  }
+
+  function ensureJumpGraph() {
+    if (jumpGraphCache.graph) return jumpGraphCache.graph;
+    const surfaceRegistry = buildSurfaceRegistry();
+    const jumpBuild = buildDirectedJumpLinks(surfaceRegistry);
+    const jumpLinks = jumpBuild.links;
+    const graph = buildWeightedJumpGraph(THREE, floorY, surfaceRegistry, jumpLinks);
+    const linksByFromSurface = new Map();
+    const linksByToSurface = new Map();
+    const linksByPair = new Map();
+    for (const link of jumpLinks) {
+      if (!linksByFromSurface.has(link.fromSurfaceId)) linksByFromSurface.set(link.fromSurfaceId, []);
+      linksByFromSurface.get(link.fromSurfaceId).push(link);
+      if (!linksByToSurface.has(link.toSurfaceId)) linksByToSurface.set(link.toSurfaceId, []);
+      linksByToSurface.get(link.toSurfaceId).push(link);
+      const pairKey = `${link.fromSurfaceId}->${link.toSurfaceId}`;
+      if (!linksByPair.has(pairKey)) linksByPair.set(pairKey, []);
+      linksByPair.get(pairKey).push(link);
+    }
+    jumpGraphCache.graph = {
+      surfaces: surfaceRegistry,
+      jumpLinks,
+      debugProbes: jumpBuild.debugProbes,
+      debugVectorBlockers: jumpBuild.debugVectorBlockers,
+      linksByFromSurface,
+      linksByToSurface,
+      linksByPair,
+      graph,
+    };
+    return jumpGraphCache.graph;
+  }
+
+  function shortestPathCost(fromNodeId, toNodeId) {
+    if (!fromNodeId || !toNodeId) return Infinity;
+    let fromDist = jumpGraphCache.fromCache.get(fromNodeId);
+    const built = ensureJumpGraph();
+    if (!fromDist) {
+      fromDist = dijkstraAllCostsFrom(fromNodeId, built.graph);
+      jumpGraphCache.fromCache.set(fromNodeId, fromDist);
+    }
+    return fromDist.get(toNodeId) ?? Infinity;
+  }
+
+  function shortestPathJumpCount(fromNodeId, toNodeId) {
+    if (!fromNodeId || !toNodeId) return Infinity;
+    let fromDist = jumpGraphCache.jumpCountFromCache.get(fromNodeId);
+    const built = ensureJumpGraph();
+    if (!fromDist) {
+      fromDist = dijkstraJumpCountsFrom(fromNodeId, built.graph);
+      jumpGraphCache.jumpCountFromCache.set(fromNodeId, fromDist);
+    }
+    return fromDist.get(toNodeId) ?? Infinity;
+  }
+
+  function nearestSurfaceNodeId(surfaceId, point) {
+    const built = ensureJumpGraph();
+    const surface = built.surfaces.byId.get(surfaceId);
+    if (!surface || !surface.anchors.length) return null;
+    let best = null;
+    let bestD2 = Infinity;
+    for (const anchor of surface.anchors) {
+      const d2 = anchor.inner.distanceToSquared(point);
+      if (d2 < bestD2) {
+        bestD2 = d2;
+        best = anchor.nodeId;
+      }
+    }
+    return best;
+  }
+
+  function getSurfaceAnchorNodeIds(surfaceId) {
+    const built = ensureJumpGraph();
+    const surface = built.surfaces.byId.get(surfaceId);
+    if (!surface || !Array.isArray(surface.anchors)) return [];
+    const out = [];
+    for (const anchor of surface.anchors) {
+      if (anchor?.nodeId) out.push(anchor.nodeId);
+    }
+    return out;
+  }
+
+  function minGraphCostToSurface(fromNodeId, targetSurfaceId, desiredTopPoint = null) {
+    if (!fromNodeId || !targetSurfaceId) return Infinity;
+    const desiredNodeId = desiredTopPoint ? nearestSurfaceNodeId(targetSurfaceId, desiredTopPoint) : null;
+    if (desiredNodeId) {
+      const direct = shortestPathCost(fromNodeId, desiredNodeId);
+      if (Number.isFinite(direct)) return direct;
+    }
+    const anchorNodeIds = getSurfaceAnchorNodeIds(targetSurfaceId);
+    if (!anchorNodeIds.length) return Infinity;
+    let best = Infinity;
+    for (const nodeId of anchorNodeIds) {
+      const cost = shortestPathCost(fromNodeId, nodeId);
+      if (cost < best) best = cost;
+    }
+    return best;
+  }
+
+  function minGraphJumpCountToSurface(fromNodeId, targetSurfaceId, desiredTopPoint = null) {
+    if (!fromNodeId || !targetSurfaceId) return Infinity;
+    const desiredNodeId = desiredTopPoint ? nearestSurfaceNodeId(targetSurfaceId, desiredTopPoint) : null;
+    if (desiredNodeId) {
+      const direct = shortestPathJumpCount(fromNodeId, desiredNodeId);
+      if (Number.isFinite(direct)) return direct;
+    }
+    const anchorNodeIds = getSurfaceAnchorNodeIds(targetSurfaceId);
+    if (!anchorNodeIds.length) return Infinity;
+    let best = Infinity;
+    for (const nodeId of anchorNodeIds) {
+      const jumps = shortestPathJumpCount(fromNodeId, nodeId);
+      if (jumps < best) best = jumps;
+    }
+    return best;
+  }
+
+  function isObjectNearLanding(p, y) {
+    const landingObjectRadius = CAT_COLLISION.catBodyRadius * SURFACE_CFG.landingClearanceMul;
+    if (!cup.broken && !cup.falling && cup.group.visible) {
+      if (Math.abs(cup.group.position.y - y) <= 0.36) {
         const dx = p.x - cup.group.position.x;
         const dz = p.z - cup.group.position.z;
-        if (dx * dx + dz * dz < cupAvoid * cupAvoid) return false;
+        const minDist = landingObjectRadius + CUP_COLLISION.radius;
+        if (dx * dx + dz * dz < minDist * minDist) return true;
       }
-      return true;
-    };
+    }
+    for (const pickup of pickups) {
+      if (!pickup?.mesh || !pickup.body || !pickup.mesh.visible) continue;
+      if (pickup.motion === "drag") continue;
+      const py = pickup.mesh.position.y;
+      if (!Number.isFinite(py) || Math.abs(py - y) > 0.36) continue;
+      const dx = p.x - pickup.mesh.position.x;
+      const dz = p.z - pickup.mesh.position.z;
+      const minDist = landingObjectRadius + Math.max(0.04, pickupRadius(pickup));
+      if (dx * dx + dz * dz < minDist * minDist) return true;
+    }
+    return false;
+  }
 
-    const isLandingSafe = (p) => {
-      // Validate both paw plane and upper body plane so obstacles above table are respected too.
-      return isLandingSafeAtY(p, landingY) && isLandingSafeAtY(p, landingY + 0.18);
-    };
+  function isLandingSafe(link, dynamicObstacles) {
+    if (!link) return false;
+    if (link.staticValidUp === false) return false;
+    const linkObstacles = getJumpObstaclesForLink(link, dynamicObstacles);
+    const toSurface = ensureJumpGraph().surfaces.byId.get(link.toSurfaceId);
+    if (!toSurface) return false;
+    const landingY = toSurface.y;
+    const landingClearance = CAT_COLLISION.catBodyRadius * SURFACE_CFG.landingClearanceMul;
+    const cupAvoid = CAT_COLLISION.catBodyRadius + CUP_COLLISION.radius + 0.18;
+    const p = link.top;
 
-    if (!isLandingSafe(top)) {
-      const candidates = [];
-      const tangentOffsets = [0, 0.18, -0.18, 0.34, -0.34, 0.48, -0.48];
-      const inwardOffsets = [0, 0.12, 0.2];
-      if (comingFromXSide) {
-        const sx = Math.sign(relX || 1);
-        const baseX = desk.pos.x + sx * (desk.sizeX * 0.5 - topIn);
-        for (const t of tangentOffsets) {
-          for (const inward of inwardOffsets) {
-            const z = THREE.MathUtils.clamp(
-              top.z + t,
-              desk.pos.z - desk.sizeZ * 0.5 + 0.26,
-              desk.pos.z + desk.sizeZ * 0.5 - 0.26
-            );
-            const x = baseX - sx * inward;
-            candidates.push(new THREE.Vector3(x, 0, z));
-          }
-        }
-      } else {
-        const sz = Math.sign(relZ || 1);
-        const baseZ = desk.pos.z + sz * (desk.sizeZ * 0.5 - topIn);
-        for (const t of tangentOffsets) {
-          for (const inward of inwardOffsets) {
-            const x = THREE.MathUtils.clamp(
-              top.x + t,
-              desk.pos.x - desk.sizeX * 0.5 + 0.28,
-              desk.pos.x + desk.sizeX * 0.5 - 0.28
-            );
-            const z = baseZ - sz * inward;
-            candidates.push(new THREE.Vector3(x, 0, z));
-          }
-        }
+    if (isObjectNearLanding(p, landingY)) return false;
+    if (isCatPointBlocked(p.x, p.z, linkObstacles, landingClearance, landingY)) return false;
+    if (isCatPointBlocked(p.x, p.z, linkObstacles, landingClearance, landingY + 0.18)) return false;
+    if (!hasClearTravelLine(link.hook, p, linkObstacles, landingClearance, landingY)) return false;
+    if (!cup.broken && !cup.falling) {
+      const dx = p.x - cup.group.position.x;
+      const dz = p.z - cup.group.position.z;
+      if (dx * dx + dz * dz < cupAvoid * cupAvoid) return false;
+    }
+    return true;
+  }
+
+  function isSurfaceJumpUpSafe(link, dynamicObstacles) {
+    if (!link) return false;
+    if (link.staticValidUp === false) return false;
+    const linkObstacles = getJumpObstaclesForLink(link, dynamicObstacles);
+    const built = ensureJumpGraph();
+    const fromSurface = built.surfaces.byId.get(link.fromSurfaceId);
+    const toSurface = built.surfaces.byId.get(link.toSurfaceId);
+    const fromY = Number.isFinite(fromSurface?.y) ? fromSurface.y : floorY;
+    const toY = Number.isFinite(toSurface?.y) ? toSurface.y : fromY;
+    const anchorClearance = CAT_NAV.clearance * 0.9;
+    if (!isJumpPointSafeAtY(link.jumpFrom, fromY, linkObstacles, anchorClearance)) return false;
+    if (isSegmentBlocked(link.jumpFrom, link.hook, anchorClearance, fromY, toY, linkObstacles)) {
+      return false;
+    }
+    const landingClearance = CAT_COLLISION.catBodyRadius * SURFACE_CFG.landingClearanceMul;
+    if (isSegmentBlocked(link.hook, link.top, landingClearance, toY, toY, linkObstacles)) {
+      return false;
+    }
+    return isLandingSafe(link, dynamicObstacles);
+  }
+
+  function isSurfaceJumpDownSafe(link, dynamicObstacles) {
+    if (!link) return false;
+    if (link.staticValidDown === false) return false;
+    const linkObstacles = getJumpObstaclesForLink(link, dynamicObstacles);
+    const built = ensureJumpGraph();
+    const fromSurface = built.surfaces.byId.get(link.fromSurfaceId);
+    const toSurface = built.surfaces.byId.get(link.toSurfaceId);
+    const landingY = Number.isFinite(fromSurface?.y) ? fromSurface.y : floorY;
+    const sourceY = Number.isFinite(toSurface?.y) ? toSurface.y : floorY;
+    const anchorClearance = CAT_NAV.clearance * 0.9;
+    if (!isJumpPointSafeAtY(link.top, sourceY, linkObstacles, anchorClearance)) return false;
+    if (!isJumpPointSafeAtY(link.jumpFrom, landingY, linkObstacles, anchorClearance)) return false;
+    if (isSegmentBlocked(link.top, link.jumpFrom, anchorClearance, sourceY, landingY, linkObstacles)) {
+      return false;
+    }
+    if (isObjectNearLanding(link.jumpFrom, landingY)) return false;
+    return true;
+  }
+
+  function minDynamicSurfaceJumpsToTarget(targetSurfaceId, dynamicObstacles) {
+    const built = ensureJumpGraph();
+    const surfaces = built.surfaces.surfaces || [];
+    const incoming = new Map();
+    for (const s of surfaces) {
+      if (s?.id) incoming.set(String(s.id), []);
+    }
+    for (const link of built.jumpLinks) {
+      if (isSurfaceJumpUpSafe(link, dynamicObstacles)) {
+        const to = String(link.toSurfaceId);
+        const from = String(link.fromSurfaceId);
+        if (incoming.has(to)) incoming.get(to).push(from);
       }
-
-      let bestCandidate = null;
-      let bestScore = Infinity;
-      for (const c of candidates) {
-        if (!isLandingSafe(c)) continue;
-        if (!hasClearTravelLine(hook, c, dynamicObstacles, landingClearance, landingY)) continue;
-        let score = c.distanceToSquared(top);
-        if (desiredTopPoint) {
-          const dx = c.x - desiredTopPoint.x;
-          const dz = c.z - desiredTopPoint.z;
-          score += (dx * dx + dz * dz) * 2.0;
-        }
-        if (score < bestScore) {
-          bestScore = score;
-          bestCandidate = c;
-        }
+      if (isSurfaceJumpDownSafe(link, dynamicObstacles)) {
+        const to = String(link.fromSurfaceId);
+        const from = String(link.toSurfaceId);
+        if (incoming.has(to)) incoming.get(to).push(from);
       }
-      if (bestCandidate) top.copy(bestCandidate);
     }
 
-    if (!isLandingSafe(top)) {
-      // Hard fallback: pick any safe desk point instead of landing into an occupied zone.
-      const minX = desk.pos.x - desk.sizeX * 0.5 + 0.32;
-      const maxX = desk.pos.x + desk.sizeX * 0.5 - 0.32;
-      const minZ = desk.pos.z - desk.sizeZ * 0.5 + 0.28;
-      const maxZ = desk.pos.z + desk.sizeZ * 0.5 - 0.28;
-      let best = null;
-      let bestD2 = Infinity;
-      for (let i = 0; i < 40; i++) {
-        const c = new THREE.Vector3(
-          THREE.MathUtils.lerp(minX, maxX, Math.random()),
-          0,
-          THREE.MathUtils.lerp(minZ, maxZ, Math.random())
+    const out = new Map();
+    const targetId = String(targetSurfaceId || "");
+    if (!targetId || !incoming.has(targetId)) return out;
+    out.set(targetId, 0);
+    const queue = [targetId];
+    while (queue.length > 0) {
+      const cur = queue.shift();
+      const base = out.get(cur) || 0;
+      const prevs = incoming.get(cur) || [];
+      for (const prev of prevs) {
+        if (out.has(prev)) continue;
+        out.set(prev, base + 1);
+        queue.push(prev);
+      }
+    }
+    return out;
+  }
+
+  function isGroundJumpFromSafe(link, dynamicObstacles) {
+    if (!link) return false;
+    const linkObstacles = getJumpObstaclesForLink(link, dynamicObstacles);
+    const clearance = CAT_NAV.clearance * 0.9;
+    const p = link.jumpFrom;
+    if (isCatPointBlocked(p.x, p.z, linkObstacles, clearance, floorY)) return false;
+    if (isCatPointBlocked(p.x, p.z, linkObstacles, clearance, floorY + 0.18)) return false;
+    return true;
+  }
+
+  function isJumpPointSafeAtY(point, yLevel, dynamicObstacles, clearance = CAT_NAV.clearance * 0.9) {
+    if (!point) return false;
+    const y = Number.isFinite(yLevel) ? yLevel : floorY;
+    if (isCatPointBlocked(point.x, point.z, dynamicObstacles, clearance, y)) return false;
+    if (isCatPointBlocked(point.x, point.z, dynamicObstacles, clearance, y + 0.18)) return false;
+    return true;
+  }
+
+  function groundPathCost(from, to, dynamicObstacles, clearance) {
+    if (hasClearTravelLine(from, to, dynamicObstacles, clearance, floorY)) {
+      return from.distanceTo(to);
+    }
+    const p = computeCatPath(from, to, dynamicObstacles);
+    if (!isPathTraversable(p, dynamicObstacles, clearance)) return Infinity;
+    return catPathDistance(p);
+  }
+
+  function resolveSourceSurfaceId(from, explicitSourceSurfaceId = null) {
+    if (explicitSourceSurfaceId) return String(explicitSourceSurfaceId);
+    const built = ensureJumpGraph();
+    const fromY = Number.isFinite(from?.y) ? from.y : floorY;
+    if (fromY <= floorY + 0.08) return "floor";
+
+    let best = null;
+    let bestScore = Infinity;
+    for (const surface of built.surfaces.surfaces) {
+      if (!surface || surface.id === "floor") continue;
+      const inside =
+        from.x >= surface.outer.minX - 0.06 &&
+        from.x <= surface.outer.maxX + 0.06 &&
+        from.z >= surface.outer.minZ - 0.06 &&
+        from.z <= surface.outer.maxZ + 0.06;
+      if (!inside) continue;
+      const dy = Math.abs(surface.y - fromY);
+      if (dy > 0.45) continue;
+      if (dy < bestScore) {
+        bestScore = dy;
+        best = surface.id;
+      }
+    }
+    return best || "floor";
+  }
+
+  function surfacePathCost(from, to, dynamicObstacles, clearance, sourceSurfaceId) {
+    const built = ensureJumpGraph();
+    const sourceSurface = built.surfaces.byId.get(sourceSurfaceId);
+    const sourceY = Number.isFinite(sourceSurface?.y) ? sourceSurface.y : floorY;
+    if (sourceSurfaceId === "floor" || sourceY <= floorY + 0.08) {
+      return groundPathCost(from, to, dynamicObstacles, clearance);
+    }
+    const fromOnSurface = new THREE.Vector3(from.x, sourceY, from.z);
+    const toOnSurface = new THREE.Vector3(to.x, sourceY, to.z);
+    if (hasClearTravelLine(fromOnSurface, toOnSurface, dynamicObstacles, clearance, sourceY)) {
+      return fromOnSurface.distanceTo(toOnSurface);
+    }
+    const p = computeCatPath(fromOnSurface, toOnSurface, dynamicObstacles);
+    if (!isPathTraversable(p, dynamicObstacles, clearance)) return Infinity;
+    return catPathDistance(p);
+  }
+
+  function getSurfaceLinks(surfaceId, fromSurfaceId = null) {
+    if (!surfaceId) return [];
+    const built = ensureJumpGraph();
+    if (!fromSurfaceId) return built.linksByToSurface.get(surfaceId) || [];
+    const pairKey = `${fromSurfaceId}->${surfaceId}`;
+    return built.linksByPair.get(pairKey) || [];
+  }
+
+  function selectBestSurfaceTransition(
+    surfaceId,
+    from,
+    desiredTopPoint = null,
+    fromSurfaceId = null,
+    avoidSurfaceIds = null
+  ) {
+    const built = ensureJumpGraph();
+    const resolvedFromSurfaceId = resolveSourceSurfaceId(from, fromSurfaceId);
+    if (!surfaceId || !resolvedFromSurfaceId || surfaceId === resolvedFromSurfaceId) return null;
+
+    const sourceSurface = built.surfaces.byId.get(resolvedFromSurfaceId);
+    if (!sourceSurface) return null;
+    const sourceY = Number.isFinite(sourceSurface.y) ? sourceSurface.y : floorY;
+    const dynamicObstacles = buildCatObstacles(true, true);
+    const anchorClearance = CAT_NAV.clearance * 0.9;
+    const avoidNextSurfaceIds = normalizeAvoidSurfaceIds(avoidSurfaceIds);
+    const dynamicSurfaceJumpCounts = minDynamicSurfaceJumpsToTarget(surfaceId, dynamicObstacles);
+    const sourceDynamicMinJumps = dynamicSurfaceJumpCounts.get(resolvedFromSurfaceId);
+
+    const candidates = [];
+    const outgoingUpLinks = built.linksByFromSurface.get(resolvedFromSurfaceId) || [];
+    for (const link of outgoingUpLinks) {
+      if (!isSurfaceJumpUpSafe(link, dynamicObstacles)) continue;
+      const remainingCost = minGraphCostToSurface(link.toNodeId, surfaceId, desiredTopPoint);
+      const remainingJumps = minGraphJumpCountToSurface(link.toNodeId, surfaceId, desiredTopPoint);
+      if (!Number.isFinite(remainingCost)) continue;
+      if (!Number.isFinite(remainingJumps)) continue;
+
+      const roughApproach = from.distanceTo(link.jumpFrom);
+      const jumpSpan = link.top.distanceTo(link.jumpFrom);
+      let roughScore =
+        roughApproach +
+        link.jumpCost * 0.8 +
+        jumpSpan * 0.42 +
+        remainingCost * 0.92 +
+        0.25;
+      if (desiredTopPoint && link.toSurfaceId === surfaceId) {
+        roughScore += link.top.distanceTo(desiredTopPoint) * 0.55;
+      }
+
+      candidates.push({
+        score: roughScore,
+        roughApproach,
+        transition: "up",
+        link,
+        anchorPoint: link.jumpFrom,
+        hookPoint: link.hook,
+        landingPoint: link.top,
+        nextSurfaceId: link.toSurfaceId,
+        exitNodeId: link.toNodeId,
+        remainingCost,
+        remainingJumps,
+        totalJumps: 1 + remainingJumps,
+        totalDynamicJumps: Infinity,
+        jumpSpan,
+      });
+    }
+
+    const incomingDownLinks = built.linksByToSurface.get(resolvedFromSurfaceId) || [];
+    for (const link of incomingDownLinks) {
+      if (!isSurfaceJumpDownSafe(link, dynamicObstacles)) continue;
+      const landingNodeId = nearestSurfaceNodeId(link.fromSurfaceId, link.jumpFrom);
+      const remainingCost =
+        link.fromSurfaceId === surfaceId
+          ? 0
+          : minGraphCostToSurface(landingNodeId, surfaceId, desiredTopPoint);
+      const remainingJumps =
+        link.fromSurfaceId === surfaceId
+          ? 0
+          : minGraphJumpCountToSurface(landingNodeId, surfaceId, desiredTopPoint);
+      if (!Number.isFinite(remainingCost)) continue;
+      if (!Number.isFinite(remainingJumps)) continue;
+
+      const roughApproach = from.distanceTo(link.top);
+      const jumpSpan = link.top.distanceTo(link.jumpFrom);
+      let roughScore =
+        roughApproach +
+        link.jumpCost * 0.76 +
+        jumpSpan * 0.42 +
+        remainingCost * 0.92 +
+        0.25;
+      if (desiredTopPoint && link.fromSurfaceId === surfaceId) {
+        roughScore += link.jumpFrom.distanceTo(desiredTopPoint) * 0.55;
+      }
+
+      candidates.push({
+        score: roughScore,
+        roughApproach,
+        transition: "down",
+        link,
+        anchorPoint: link.top,
+        hookPoint: link.hook,
+        landingPoint: link.jumpFrom,
+        nextSurfaceId: link.fromSurfaceId,
+        exitNodeId: link.fromNodeId,
+        remainingCost,
+        remainingJumps,
+        totalJumps: 1 + remainingJumps,
+        totalDynamicJumps: Infinity,
+        jumpSpan,
+      });
+    }
+
+    if (!candidates.length) return null;
+
+    for (const c of candidates) {
+      const dynRemaining = dynamicSurfaceJumpCounts.get(c.nextSurfaceId);
+      if (Number.isFinite(dynRemaining)) c.totalDynamicJumps = 1 + dynRemaining;
+    }
+    const jumpTiers = Array.from(
+      new Set(
+        candidates
+          .map((c) => (Number.isFinite(c.totalDynamicJumps) ? c.totalDynamicJumps : c.totalJumps))
+          .filter((v) => Number.isFinite(v))
+      )
+    ).sort((a, b) => a - b);
+    if (Number.isFinite(sourceDynamicMinJumps) && sourceDynamicMinJumps > 0) {
+      const rest = jumpTiers.filter((t) => t !== sourceDynamicMinJumps).sort((a, b) => a - b);
+      jumpTiers.length = 0;
+      jumpTiers.push(sourceDynamicMinJumps, ...rest);
+    }
+
+    const targetSurface = built.surfaces.byId.get(surfaceId);
+    const targetY = Number.isFinite(targetSurface?.y) ? targetSurface.y : floorY;
+    const dyToTargetSurface = targetY - sourceY;
+
+    for (const tier of jumpTiers) {
+      let tierCandidates = candidates.filter((c) => {
+        const candidateTier = Number.isFinite(c.totalDynamicJumps) ? c.totalDynamicJumps : c.totalJumps;
+        return candidateTier === tier;
+      });
+      if (dyToTargetSurface < -0.08) {
+        const downOnly = tierCandidates.filter((c) => c.transition === "down");
+        if (downOnly.length) tierCandidates = downOnly;
+      } else if (dyToTargetSurface > 0.08) {
+        const upOnly = tierCandidates.filter((c) => c.transition === "up");
+        if (upOnly.length) tierCandidates = upOnly;
+      }
+      if (!tierCandidates.length) continue;
+
+      // Selection policy:
+      // 1) fewest jumps (tier loop)
+      // 2) nearest jump anchor from current position
+      // 3) first anchor with a valid path to reach it on current surface
+      // If a closer anchor is blocked, fall through to the next closest.
+      let ordered = tierCandidates.slice().sort((a, b) => {
+        const d = a.roughApproach - b.roughApproach;
+        if (Math.abs(d) > 1e-5) return d;
+        const r = a.remainingCost - b.remainingCost;
+        if (Math.abs(r) > 1e-5) return r;
+        return a.score - b.score;
+      });
+
+      // Prefer non-avoid surfaces if available in this tier; otherwise keep all.
+      if (avoidNextSurfaceIds.size > 0) {
+        const nonAvoid = ordered.filter((c) => !avoidNextSurfaceIds.has(c.nextSurfaceId));
+        if (nonAvoid.length) ordered = nonAvoid;
+      }
+
+      for (const c of ordered) {
+        const pathCost = surfacePathCost(
+          from,
+          c.anchorPoint,
+          dynamicObstacles,
+          anchorClearance,
+          resolvedFromSurfaceId
         );
-        if (!isLandingSafe(c)) continue;
-        if (!hasClearTravelLine(hook, c, dynamicObstacles, landingClearance, landingY)) continue;
-        let d2 = c.distanceToSquared(top);
-        if (desiredTopPoint) {
-          const dx = c.x - desiredTopPoint.x;
-          const dz = c.z - desiredTopPoint.z;
-          d2 += (dx * dx + dz * dz) * 2.0;
-        }
-        if (d2 < bestD2) {
-          bestD2 = d2;
-          best = c;
-        }
+        if (!Number.isFinite(pathCost)) continue;
+
+        return { ...c, score: c.score + (pathCost - c.roughApproach) };
       }
-      if (best) top.copy(best);
     }
 
-    if (!isLandingSafe(top)) return null;
+    return null;
+  }
 
-    return { hook, top };
+  function getSurfaceLinksNearAnchor(surfaceId, anchor, maxDist = 0.42, fromSurfaceId = null) {
+    const links = getSurfaceLinks(surfaceId, fromSurfaceId);
+    const out = [];
+    const maxD2 = maxDist * maxDist;
+    for (const link of links) {
+      const d2 = link.jumpFrom.distanceToSquared(anchor);
+      if (d2 <= maxD2) out.push({ link, d2 });
+    }
+    if (out.length === 0) {
+      for (const link of links) {
+        out.push({ link, d2: link.jumpFrom.distanceToSquared(anchor) });
+      }
+    }
+    out.sort((a, b) => a.d2 - b.d2);
+    return out.map((v) => v.link);
+  }
+
+  function bestSurfaceJumpAnchor(
+    surfaceId,
+    from,
+    desiredTopPoint = null,
+    fromSurfaceId = null,
+    avoidNextSurfaceId = null
+  ) {
+    const resolvedFromSurfaceId = resolveSourceSurfaceId(from, fromSurfaceId);
+    const best = selectBestSurfaceTransition(
+      surfaceId,
+      from,
+      desiredTopPoint,
+      resolvedFromSurfaceId,
+      avoidNextSurfaceId
+    );
+    if (!best) return null;
+    jumpGraphCache.linkByAnchorKey.set(
+      linkAnchorKey(resolvedFromSurfaceId, surfaceId, best.anchorPoint),
+      best
+    );
+    return best.anchorPoint.clone();
+  }
+
+  function computeSurfaceJumpTargets(
+    surfaceId,
+    anchor,
+    desiredTopPoint = null,
+    fromSurfaceId = null,
+    avoidSurfaceIds = null
+  ) {
+    if (!anchor) return null;
+    const resolvedFromSurfaceId = resolveSourceSurfaceId(anchor, fromSurfaceId);
+    const avoidNextSurfaceIds = normalizeAvoidSurfaceIds(avoidSurfaceIds);
+    const cached = jumpGraphCache.linkByAnchorKey.get(
+      linkAnchorKey(resolvedFromSurfaceId, surfaceId, anchor)
+    );
+    const canUseCached =
+      cached &&
+      (avoidNextSurfaceIds.size === 0 || !avoidNextSurfaceIds.has(cached.nextSurfaceId));
+    const best =
+      (canUseCached ? cached : null) ||
+      selectBestSurfaceTransition(
+        surfaceId,
+        anchor,
+        desiredTopPoint,
+        resolvedFromSurfaceId,
+        avoidNextSurfaceIds
+      );
+    if (!best) return null;
+    jumpGraphCache.linkByAnchorKey.set(
+      linkAnchorKey(resolvedFromSurfaceId, surfaceId, best.anchorPoint),
+      best
+    );
+    return {
+      hook: best.hookPoint.clone(),
+      top: best.landingPoint.clone(),
+      surfaceId: best.nextSurfaceId,
+      transition: best.transition,
+    };
+  }
+
+  function computeSurfaceJumpDownTargets(
+    surfaceId,
+    fromTopPoint,
+    desiredGroundPoint = null,
+    desiredLandingSurfaceId = null
+  ) {
+    if (!fromTopPoint) return null;
+    const toSurface = ensureJumpGraph().surfaces.byId.get(surfaceId);
+    if (!toSurface) return null;
+    const links = getSurfaceLinks(surfaceId);
+    if (!links.length) return null;
+    const requestedLandingSurfaceId =
+      desiredLandingSurfaceId == null ? null : String(desiredLandingSurfaceId);
+    let candidateLinks = links;
+    if (requestedLandingSurfaceId) {
+      const exactMatches = links.filter((link) => String(link.fromSurfaceId) === requestedLandingSurfaceId);
+      if (exactMatches.length) candidateLinks = exactMatches;
+    }
+    const dynamicObstacles = buildCatObstacles(true, true);
+    const surfaceY = toSurface.y;
+    const topClearance = CAT_COLLISION.catBodyRadius * 1.08;
+    const desired = desiredGroundPoint ? cloneXZ(desiredGroundPoint) : null;
+    let best = null;
+    let bestScore = Infinity;
+    for (const link of candidateLinks) {
+      if (!isSurfaceJumpDownSafe(link, dynamicObstacles)) continue;
+      const rawStageTop = new THREE.Vector3(
+        THREE.MathUtils.lerp(link.top.x, link.hook.x, THREE.MathUtils.clamp(SURFACE_CFG.downJumpEdgeBias, 0, 0.95)),
+        surfaceY,
+        THREE.MathUtils.lerp(link.top.z, link.hook.z, THREE.MathUtils.clamp(SURFACE_CFG.downJumpEdgeBias, 0, 0.95))
+      );
+      const stageTop = rawStageTop.clone();
+      let stageTopWasClamped = false;
+      // Keep down-jump staging strictly inside the same support bounds used by elevated steering.
+      if (toSurface?.inner) {
+        const supportPad = 0.006;
+        const minX = Number.isFinite(toSurface.inner.minX) ? toSurface.inner.minX + supportPad : stageTop.x;
+        const maxX = Number.isFinite(toSurface.inner.maxX) ? toSurface.inner.maxX - supportPad : stageTop.x;
+        const minZ = Number.isFinite(toSurface.inner.minZ) ? toSurface.inner.minZ + supportPad : stageTop.z;
+        const maxZ = Number.isFinite(toSurface.inner.maxZ) ? toSurface.inner.maxZ - supportPad : stageTop.z;
+        const clampedX = minX <= maxX ? THREE.MathUtils.clamp(stageTop.x, minX, maxX) : stageTop.x;
+        const clampedZ = minZ <= maxZ ? THREE.MathUtils.clamp(stageTop.z, minZ, maxZ) : stageTop.z;
+        if (Math.abs(clampedX - stageTop.x) > 1e-6 || Math.abs(clampedZ - stageTop.z) > 1e-6) {
+          stageTopWasClamped = true;
+          stageTop.set(clampedX, surfaceY, clampedZ);
+        }
+      }
+      if (!hasClearTravelLine(fromTopPoint, stageTop, dynamicObstacles, topClearance, surfaceY)) continue;
+      if (!isJumpPointSafeAtY(stageTop, surfaceY, dynamicObstacles, topClearance)) continue;
+
+      let score = fromTopPoint.distanceTo(stageTop) * 1.2 + 0.2;
+      if (desired) score += link.jumpFrom.distanceTo(desired) * 0.45;
+      if (score < bestScore) {
+        bestScore = score;
+        best = {
+          link,
+          stageTop,
+          stageTopWasClamped,
+        };
+      }
+    }
+    if (!best) return null;
+    return {
+      top: best.stageTop.clone(),
+      hook: best.link.hook.clone(),
+      jumpFrom: best.link.jumpFrom.clone(),
+      topWasClamped: !!best.stageTopWasClamped,
+    };
+  }
+
+  function bestDeskJumpAnchor(from, desiredTopPoint = null) {
+    return bestSurfaceJumpAnchor("desk", from, desiredTopPoint);
+  }
+
+  function computeDeskJumpTargets(anchor, desiredTopPoint = null) {
+    return computeSurfaceJumpTargets("desk", anchor, desiredTopPoint, "floor");
+  }
+
+  function computeDeskJumpDownTargets(fromTopPoint, desiredGroundPoint = null) {
+    return computeSurfaceJumpDownTargets("desk", fromTopPoint, desiredGroundPoint);
+  }
+
+  function getSurfaceJumpDebugData() {
+    const built = ensureJumpGraph();
+    const dynamicObstacles = buildCatObstacles(true, true);
+
+    const surfaces = built.surfaces.surfaces.map((surface) => ({
+      id: surface.id,
+      y: surface.y,
+      outer: { ...surface.outer },
+      inner: { ...surface.inner },
+      anchors: surface.anchors.map((a) => ({
+        id: a.id,
+        edgeIndex: a.edgeIndex,
+        inner: a.inner.clone(),
+        outer: a.outer.clone(),
+      })),
+    }));
+
+    const links = built.jumpLinks.map((link) => ({
+      id: link.id,
+      fromSurfaceId: link.fromSurfaceId,
+      toSurfaceId: link.toSurfaceId,
+      anchorId: link.anchorId,
+      jumpFrom: link.jumpFrom.clone(),
+      hook: link.hook.clone(),
+      top: link.top.clone(),
+      staticValidUp: link.staticValidUp !== false,
+      staticValidDown: link.staticValidDown !== false,
+      validUp: isSurfaceJumpUpSafe(link, dynamicObstacles),
+      validDown: isSurfaceJumpDownSafe(link, dynamicObstacles),
+    })).map((entry) => {
+      const fromSurface = built.surfaces.byId.get(entry.fromSurfaceId);
+      const toSurface = built.surfaces.byId.get(entry.toSurfaceId);
+      const fromY = Number.isFinite(fromSurface?.y) ? fromSurface.y : floorY;
+      const toY = Number.isFinite(toSurface?.y) ? toSurface.y : fromY;
+      const launchStart = new THREE.Vector3(entry.jumpFrom.x, fromY, entry.jumpFrom.z);
+      const launchToHook = new THREE.Vector3(entry.hook.x, toY, entry.hook.z);
+      const hookToTopStart = launchToHook.clone();
+      const hookToTopEndTarget = new THREE.Vector3(entry.top.x, toY, entry.top.z);
+      const launchClearance = CAT_NAV.clearance * 0.9;
+      const landingClearance = CAT_COLLISION.catBodyRadius * SURFACE_CFG.landingClearanceMul;
+      const linkObstacles = getJumpObstaclesForLink(entry, dynamicObstacles);
+      const blockedOnLaunch = firstBlockedPointOnSegment(
+        launchStart,
+        launchToHook,
+        launchClearance,
+        fromY,
+        toY,
+        linkObstacles
+      );
+      const blockedOnHook = firstBlockedPointOnSegment(
+        hookToTopStart,
+        hookToTopEndTarget,
+        landingClearance,
+        toY,
+        toY,
+        linkObstacles
+      );
+      const blockedOnDown = firstBlockedPointOnSegment(
+        hookToTopEndTarget,
+        launchStart,
+        launchClearance,
+        toY,
+        fromY,
+        linkObstacles
+      );
+      return {
+        ...entry,
+        fromY,
+        toY,
+        launchClearance,
+        landingClearance,
+        validUp: entry.validUp && !blockedOnLaunch && !blockedOnHook,
+        validDown: entry.validDown && !blockedOnDown,
+        upLaunchStart: launchStart,
+        upLaunchEnd: blockedOnLaunch ? blockedOnLaunch : launchToHook,
+        upLaunchBlocked: !!blockedOnLaunch,
+        upHookStart: hookToTopStart,
+        upHookEnd: blockedOnHook ? blockedOnHook : hookToTopEndTarget,
+        upHookBlocked: !!blockedOnHook,
+        downStart: hookToTopEndTarget,
+        downEnd: blockedOnDown ? blockedOnDown : launchStart,
+        downBlocked: !!blockedOnDown,
+      };
+    });
+
+    const linkByProbeKey = new Map();
+    for (const link of links) {
+      const key = `${link.toSurfaceId}|${link.fromSurfaceId}|${link.anchorId}`;
+      linkByProbeKey.set(key, link);
+    }
+
+    const probes = (built.debugProbes || []).map((p) => {
+      const key = `${p.surfaceId}|${p.toSurfaceId}|${p.anchorId}`;
+      const linked = linkByProbeKey.get(key);
+      return {
+        surfaceId: p.surfaceId,
+        anchorId: p.anchorId,
+        toSurfaceId: p.toSurfaceId,
+        hit: !!p.hit,
+        // Green probe should mean "jump-up is actually valid now", not just "ray hit something".
+        validUp: !!linked?.validUp,
+        validDown: !!linked?.validDown,
+        staticValidUp: linked ? !!linked.staticValidUp : false,
+        staticValidDown: linked ? !!linked.staticValidDown : false,
+        origin: p.origin.clone(),
+        end: p.end.clone(),
+      };
+    });
+    const vectorBlockers = (built.debugVectorBlockers || []).map((obs) => ({ ...obs }));
+
+    return { surfaces, probes, links, vectorBlockers };
   }
 
   return {
+    bestSurfaceJumpAnchor,
+    computeSurfaceJumpTargets,
+    computeSurfaceJumpDownTargets,
     bestDeskJumpAnchor,
     computeDeskJumpTargets,
+    computeDeskJumpDownTargets,
+    getSurfaceJumpDebugData,
   };
 }

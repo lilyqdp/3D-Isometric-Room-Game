@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import * as CANNON from "./vendor/cannon-es.js";
-import { makeBins, makeDesk, makeRoomCorner } from "./modules/room.js";
+import { makeBins, makeChair, makeDesk, makeHoverShelf, makeRoomCorner, makeShelf, makeWindowSill } from "./modules/room.js";
 import { setupPhysicsWorld } from "./modules/physics.js";
 import { addRandomPickups, pickRandomCatSpawnPoint, spawnRandomPickup } from "./modules/spawning.js";
 import { updateCatStateMachineRuntime } from "./modules/cat-state-machine.js";
@@ -14,6 +14,7 @@ import { createCatnipRuntime } from "./modules/catnip-system.js";
 import { createUIRuntime } from "./modules/ui-system.js";
 import { createCatModelRuntime } from "./modules/cat-model-loader.js";
 import { createDebugControlsRuntime } from "./modules/debug-controls.js";
+import { createMainDebugCameraRuntime } from "./modules/main-debug-camera.js";
 
 // --- UI screens ---
 const startMenu = document.getElementById("startMenu");
@@ -74,8 +75,10 @@ const endTitleEl = document.getElementById("endTitle");
 const catStateStatEl = document.getElementById("catStateStat");
 const cupStatEl = document.getElementById("cupStat");
 const catnipStatEl = document.getElementById("catnipStat");
+const windowStatEl = document.getElementById("windowStat");
 const resultEl = document.getElementById("result");
 const catnipBtn = document.getElementById("catnipBtn");
+const windowBtn = document.getElementById("windowBtn");
 const restartBtn = document.getElementById("restartBtn");
 const modeBtnEl = document.getElementById("modeBtn");
 const debugBtnEl = document.getElementById("debugBtn");
@@ -128,46 +131,6 @@ const ROOM = {
   floorY: 0.0,
 };
 
-function buildDeskJumpAnchors(desk, options = {}) {
-  const offsetX = options.offsetX ?? 0.72;
-  const offsetZ = options.offsetZ ?? 0.68;
-  const step = options.step ?? 0.5;
-  const cornerPadX = options.cornerPadX ?? 0.28;
-  const cornerPadZ = options.cornerPadZ ?? 0.24;
-
-  const minX = desk.pos.x - desk.sizeX * 0.5 + cornerPadX;
-  const maxX = desk.pos.x + desk.sizeX * 0.5 - cornerPadX;
-  const minZ = desk.pos.z - desk.sizeZ * 0.5 + cornerPadZ;
-  const maxZ = desk.pos.z + desk.sizeZ * 0.5 - cornerPadZ;
-  const anchors = [];
-
-  const addEdgeAlongX = (z) => {
-    const span = Math.max(0.001, maxX - minX);
-    const samples = Math.max(2, Math.ceil(span / step) + 1);
-    for (let i = 0; i < samples; i++) {
-      const t = samples <= 1 ? 0 : i / (samples - 1);
-      anchors.push(new THREE.Vector3(THREE.MathUtils.lerp(minX, maxX, t), 0, z));
-    }
-  };
-
-  const addEdgeAlongZ = (x) => {
-    const span = Math.max(0.001, maxZ - minZ);
-    const samples = Math.max(2, Math.ceil(span / step) + 1);
-    for (let i = 0; i < samples; i++) {
-      const t = samples <= 1 ? 0 : i / (samples - 1);
-      anchors.push(new THREE.Vector3(x, 0, THREE.MathUtils.lerp(minZ, maxZ, t)));
-    }
-  };
-
-  // Full perimeter at stable offsets from each desk edge.
-  addEdgeAlongX(desk.pos.z + desk.sizeZ * 0.5 + offsetZ);
-  addEdgeAlongX(desk.pos.z - desk.sizeZ * 0.5 - offsetZ);
-  addEdgeAlongZ(desk.pos.x + desk.sizeX * 0.5 + offsetX);
-  addEdgeAlongZ(desk.pos.x - desk.sizeX * 0.5 - offsetX);
-
-  return anchors;
-}
-
 const desk = {
   pos: new THREE.Vector3(-2.4, 0, -2.6),
   sizeX: 3.1,
@@ -178,7 +141,57 @@ const desk = {
   // Keep cup near edge so a swipe reliably sends it off the desk.
   cup: new THREE.Vector3(-0.98, 0, -2.22),
 };
-const DESK_JUMP_ANCHORS = buildDeskJumpAnchors(desk);
+
+const chair = {
+  pos: new THREE.Vector3(0.45, 0, -1.65),
+  sizeX: 0.92,
+  sizeZ: 0.86,
+  seatY: 0.68,
+  seatThickness: 0.08,
+  legHalfX: 0.05,
+  legHalfZ: 0.05,
+  legInsetX: 0.31,
+  legInsetZ: 0.28,
+  backHeight: 0.82,
+  backThickness: 0.08,
+};
+
+const shelf = {
+  pos: new THREE.Vector3(-2.70, 0, -5.40),
+  width: 2.35,
+  depth: 0.92,
+  postHalf: 0.045,
+  surfaceY: 1.22,
+  boardThickness: 0.09,
+};
+
+const hoverShelf = {
+  id: "hoverShelf",
+  // Pulled closer to desk span while shifting away from the cup side.
+  pos: new THREE.Vector3(0.10, 0, -3.05),
+  width: 1.25,
+  depth: 0.9,
+  // Keep this much higher so floor->hoverShelf jump links are invalid.
+  surfaceY: desk.topY * 2,
+  thickness: 0.08,
+};
+
+const windowSill = {
+  id: "windowSill",
+  // To the right of shelf, slightly above it.
+  pos: new THREE.Vector3(-1.15, 0, -5.51),
+  width: 1.18,
+  depth: 0.78,
+  thickness: 0.06,
+  surfaceY: shelf.surfaceY + 0.24,
+  wallZ: -5.98,
+  windowWidth: 1.24,
+  windowHeight: 0.94,
+  openingCenterY: shelf.surfaceY + 0.66,
+  openDuration: 20,
+  sitPoint: new THREE.Vector3(-1.15, 0, -5.51),
+  outsideYaw: Math.PI,
+};
 
 const hamper = {
   pos: new THREE.Vector3(-5.8, 0, 2.4),
@@ -216,13 +229,20 @@ const game = {
   pendingLoseAt: null,
   catnip: null, // {mesh,pos,expiresAt}
   catnipCooldownUntil: 0,
+  catnipNoRouteUntil: 0,
   placeCatnipMode: false,
   invalidCatnipUntil: 0,
+  windowOpenUntil: 0,
 };
 
 const pickups = [];
 const shatterBits = [];
 let clockTime = 0;
+const SIMULATION_HZ = 120;
+const SIMULATION_DT = 1 / SIMULATION_HZ;
+const MAX_FRAME_DT = 0.1;
+const MAX_SIM_STEPS_PER_FRAME = 12;
+let simAccumulator = 0;
 
 const binVisuals = {
   hamper: { shells: [], ring: null },
@@ -261,6 +281,11 @@ const CAT_NAV = {
   step: 0.26,
   margin: 0.4,
   clearance: 0.2,
+  useDetourCrowd: true,
+  detourSpeedScale: 0.8,
+  detourArriveSnapRadius: 0.1,
+  detourLeadRadius: 0.9,
+  detourLeadDistance: 0.45,
   locomotionSpeedScale: 3.0,
   locomotionScaleCap: 8.0,
   repathInterval: 0.18,
@@ -358,8 +383,19 @@ catModelRuntime.loadCatModel(cat);
 const cup = makeCup({ THREE, desk, CUP_COLLISION });
 scene.add(cup.group);
 
-makeRoomCorner(scene);
+makeRoomCorner(scene, {
+  windowOpening: {
+    centerX: windowSill.pos.x,
+    centerY: windowSill.openingCenterY,
+    width: windowSill.windowWidth + 0.04,
+    height: windowSill.windowHeight + 0.04,
+  },
+});
 makeDesk(scene, desk);
+makeChair(scene, chair);
+makeShelf(scene, shelf);
+makeHoverShelf(scene, hoverShelf);
+const windowSillRuntime = makeWindowSill(scene, windowSill);
 makeBins({
   scene,
   hamper,
@@ -374,6 +410,14 @@ catnipBtn.addEventListener("click", () => {
   if (clockTime < game.catnipCooldownUntil) return;
   game.placeCatnipMode = true;
 });
+if (windowBtn) {
+  windowBtn.addEventListener("click", () => {
+    if (game.state !== "playing") return;
+    if (clockTime < game.windowOpenUntil) return;
+    game.placeCatnipMode = false;
+    game.windowOpenUntil = clockTime + windowSill.openDuration;
+  });
+}
 
 restartBtn.addEventListener("click", () => {
 
@@ -406,7 +450,6 @@ renderer.domElement.addEventListener("pointerdown", onPointerDown);
 renderer.domElement.addEventListener("contextmenu", onCanvasContextMenu);
 window.addEventListener("pointermove", onPointerMove);
 window.addEventListener("pointerup", onPointerUp);
-window.addEventListener("keydown", onKeyDown);
 
 const TARGET_BOUNDS = {
   minX: -5.2,
@@ -422,6 +465,148 @@ const DESK_LEGS = [
   { x: desk.pos.x + 1.45, z: desk.pos.z - 0.8, halfX: 0.1, halfZ: 0.1, topY: 1.02 },
   { x: desk.pos.x - 1.45, z: desk.pos.z + 0.8, halfX: 0.1, halfZ: 0.1, topY: 1.02 },
   { x: desk.pos.x + 1.45, z: desk.pos.z + 0.8, halfX: 0.1, halfZ: 0.1, topY: 1.02 },
+];
+
+const CHAIR_LEGS = [
+  { x: chair.pos.x - chair.legInsetX, z: chair.pos.z - chair.legInsetZ, halfX: chair.legHalfX, halfZ: chair.legHalfZ, topY: chair.seatY - chair.seatThickness },
+  { x: chair.pos.x + chair.legInsetX, z: chair.pos.z - chair.legInsetZ, halfX: chair.legHalfX, halfZ: chair.legHalfZ, topY: chair.seatY - chair.seatThickness },
+  { x: chair.pos.x - chair.legInsetX, z: chair.pos.z + chair.legInsetZ, halfX: chair.legHalfX, halfZ: chair.legHalfZ, topY: chair.seatY - chair.seatThickness },
+  { x: chair.pos.x + chair.legInsetX, z: chair.pos.z + chair.legInsetZ, halfX: chair.legHalfX, halfZ: chair.legHalfZ, topY: chair.seatY - chair.seatThickness },
+];
+
+const CHAIR_BACK_COLLIDER = {
+  x: chair.pos.x,
+  z: chair.pos.z - chair.sizeZ * 0.5 + chair.backThickness * 0.5,
+  halfX: chair.sizeX * 0.5,
+  halfZ: chair.backThickness * 0.5,
+  y: chair.seatY + chair.backHeight * 0.5 - chair.seatThickness * 0.5,
+  h: chair.backHeight,
+};
+
+const SHELF_POSTS = (() => {
+  const insetX = shelf.width * 0.5 - shelf.postHalf;
+  const insetZ = shelf.depth * 0.5 - shelf.postHalf;
+  return [
+    { x: shelf.pos.x - insetX, z: shelf.pos.z - insetZ, halfX: shelf.postHalf, halfZ: shelf.postHalf, topY: shelf.surfaceY - shelf.boardThickness },
+    { x: shelf.pos.x + insetX, z: shelf.pos.z - insetZ, halfX: shelf.postHalf, halfZ: shelf.postHalf, topY: shelf.surfaceY - shelf.boardThickness },
+    { x: shelf.pos.x - insetX, z: shelf.pos.z + insetZ, halfX: shelf.postHalf, halfZ: shelf.postHalf, topY: shelf.surfaceY - shelf.boardThickness },
+    { x: shelf.pos.x + insetX, z: shelf.pos.z + insetZ, halfX: shelf.postHalf, halfZ: shelf.postHalf, topY: shelf.surfaceY - shelf.boardThickness },
+  ];
+})();
+
+const SHELF_BACK_COLLIDER = {
+  x: shelf.pos.x,
+  z: shelf.pos.z - shelf.depth * 0.5 + 0.02,
+  halfX: shelf.width * 0.5,
+  halfZ: 0.02,
+  y: (shelf.surfaceY + 0.2) * 0.5 - shelf.boardThickness * 0.5,
+  h: shelf.surfaceY - 0.2 + 0.08,
+};
+
+const EXTRA_NAV_OBSTACLES = [
+  ...CHAIR_LEGS.map((leg) => ({
+    kind: "box",
+    x: leg.x,
+    z: leg.z,
+    hx: leg.halfX + 0.03,
+    hz: leg.halfZ + 0.03,
+    navPad: 0.03,
+    // Allow jump links to/from the chair seat to ignore chair legs only.
+    jumpIgnoreSurfaceIds: ["chair"],
+    y: leg.topY * 0.5,
+    h: leg.topY + 0.04,
+  })),
+  {
+    kind: "box",
+    x: CHAIR_BACK_COLLIDER.x,
+    z: CHAIR_BACK_COLLIDER.z,
+    hx: CHAIR_BACK_COLLIDER.halfX + 0.02,
+    hz: CHAIR_BACK_COLLIDER.halfZ + 0.02,
+    navPad: 0.02,
+    y: CHAIR_BACK_COLLIDER.y,
+    h: CHAIR_BACK_COLLIDER.h + 0.04,
+  },
+  ...SHELF_POSTS.map((post) => ({
+    kind: "box",
+    x: post.x,
+    z: post.z,
+    hx: post.halfX + 0.02,
+    hz: post.halfZ + 0.02,
+    navPad: 0.02,
+    // Allow jump links to/from the shelf top to ignore shelf posts only.
+    jumpIgnoreSurfaceIds: ["shelf"],
+    y: post.topY * 0.5,
+    h: post.topY + 0.04,
+  })),
+  {
+    kind: "box",
+    x: SHELF_BACK_COLLIDER.x,
+    z: SHELF_BACK_COLLIDER.z,
+    hx: SHELF_BACK_COLLIDER.halfX + 0.02,
+    hz: SHELF_BACK_COLLIDER.halfZ + 0.02,
+    navPad: 0.02,
+    y: SHELF_BACK_COLLIDER.y,
+    h: SHELF_BACK_COLLIDER.h + 0.04,
+  },
+];
+
+const EXTRA_STATIC_BOXES = [
+  ...CHAIR_LEGS.map((leg) => ({
+    x: leg.x,
+    y: leg.topY * 0.5,
+    z: leg.z,
+    hx: leg.halfX,
+    hy: leg.topY * 0.5,
+    hz: leg.halfZ,
+  })),
+  {
+    x: chair.pos.x,
+    y: chair.seatY - chair.seatThickness * 0.5,
+    z: chair.pos.z,
+    hx: chair.sizeX * 0.5,
+    hy: chair.seatThickness * 0.5,
+    hz: chair.sizeZ * 0.5,
+  },
+  {
+    x: CHAIR_BACK_COLLIDER.x,
+    y: CHAIR_BACK_COLLIDER.y,
+    z: CHAIR_BACK_COLLIDER.z,
+    hx: CHAIR_BACK_COLLIDER.halfX,
+    hy: CHAIR_BACK_COLLIDER.h * 0.5,
+    hz: CHAIR_BACK_COLLIDER.halfZ,
+  },
+  ...SHELF_POSTS.map((post) => ({
+    x: post.x,
+    y: post.topY * 0.5,
+    z: post.z,
+    hx: post.halfX,
+    hy: post.topY * 0.5,
+    hz: post.halfZ,
+  })),
+  {
+    x: shelf.pos.x,
+    y: shelf.surfaceY - shelf.boardThickness * 0.5,
+    z: shelf.pos.z,
+    hx: shelf.width * 0.5,
+    hy: shelf.boardThickness * 0.5,
+    hz: shelf.depth * 0.5,
+  },
+  {
+    x: SHELF_BACK_COLLIDER.x,
+    y: SHELF_BACK_COLLIDER.y,
+    z: SHELF_BACK_COLLIDER.z,
+    hx: SHELF_BACK_COLLIDER.halfX,
+    hy: SHELF_BACK_COLLIDER.h * 0.5,
+    hz: SHELF_BACK_COLLIDER.halfZ,
+  },
+  {
+    x: windowSill.pos.x,
+    y: windowSill.surfaceY - windowSill.thickness * 0.5,
+    z: windowSill.pos.z,
+    hx: windowSill.width * 0.5,
+    hy: windowSill.thickness * 0.5,
+    hz: windowSill.depth * 0.5,
+  },
 ];
 
 const pickupsRuntime = createPickupsRuntime({
@@ -464,7 +649,7 @@ const navRuntime = createCatNavigationRuntime({
   hamper,
   trashCan,
   DESK_LEGS,
-  DESK_JUMP_ANCHORS,
+  EXTRA_NAV_OBSTACLES,
   CUP_COLLISION,
   pickups,
   cat,
@@ -472,6 +657,7 @@ const navRuntime = createCatNavigationRuntime({
   game,
   pickupRadius: (pickup) => pickupsRuntime.pickupRadius(pickup),
   isDraggingPickup: (pickup) => pickupsRuntime.isDraggingPickup(pickup),
+  getElevatedSurfaceDefs,
   clearCatNavPath,
   resetCatUnstuckTracking,
   getClockTime: () => clockTime,
@@ -502,7 +688,6 @@ const catnipRuntime = createCatnipRuntime({
   raycaster,
   mouse,
   floorPlane,
-  tempV3,
   tempTo,
   ROOM,
   CAT_NAV,
@@ -514,9 +699,13 @@ const catnipRuntime = createCatnipRuntime({
   pickupRadius: (pickup) => pickupsRuntime.pickupRadius(pickup),
   buildCatObstacles: navRuntime.buildCatObstacles,
   isCatPointBlocked: navRuntime.isCatPointBlocked,
+  getCatPathClearance: navRuntime.getCatPathClearance,
   canReachGroundTarget: navRuntime.canReachGroundTarget,
   findSafeGroundPoint: navRuntime.findSafeGroundPoint,
   bestDeskJumpAnchor: navRuntime.bestDeskJumpAnchor,
+  bestSurfaceJumpAnchor: navRuntime.bestSurfaceJumpAnchor,
+  computeSurfaceJumpTargets: navRuntime.computeSurfaceJumpTargets,
+  getElevatedSurfaceDefs,
   getClockTime: () => clockTime,
 });
 
@@ -542,6 +731,7 @@ const debugRuntime = createDebugOverlayRuntime({
   getLastAStarDebugData: navRuntime.getLastAStarDebugData,
   computeCatPath: navRuntime.computeCatPath,
   computeDeskJumpTargets: navRuntime.computeDeskJumpTargets,
+  getSurfaceJumpDebugData: navRuntime.getSurfaceJumpDebugData,
   getDeskDesiredTarget: () => getDeskDesiredTarget(),
   getTimeScale: () => game.timeScale,
   setTimeScale: (value) => {
@@ -574,12 +764,27 @@ const debugControlsRuntime = createDebugControlsRuntime({
   resetCatUnstuckTracking,
   getElevatedSurfaceDefs,
 });
+const debugCameraRuntime = createMainDebugCameraRuntime({
+  THREE,
+  camera,
+  controls,
+  debugRuntime,
+  debugControlsRuntime,
+  game,
+  getClockTime: () => clockTime,
+});
+
+window.addEventListener("keydown", debugCameraRuntime.onKeyDown);
+window.addEventListener("keyup", debugCameraRuntime.onKeyUp);
+window.addEventListener("blur", debugCameraRuntime.resetDebugCameraInput);
 
 const uiRuntime = createUIRuntime({
   sortedStatEl,
   catStateStatEl,
   cupStatEl,
   catnipStatEl,
+  windowStatEl,
+  windowBtnEl: windowBtn,
   resultEl,
   game,
   cat,
@@ -589,7 +794,16 @@ const uiRuntime = createUIRuntime({
   getClockTime: () => clockTime,
 });
 
-setupPhysicsWorld({ CANNON, physics, DESK_LEGS, ROOM, desk, hamper, trashCan });
+setupPhysicsWorld({
+  CANNON,
+  physics,
+  DESK_LEGS,
+  ROOM,
+  desk,
+  hamper,
+  trashCan,
+  EXTRA_STATIC_BOXES,
+});
 await navRuntime.initPathfinding();
 resetGame();
 debugRuntime.initDebugView(clockTime);
@@ -604,16 +818,6 @@ window.addEventListener("resize", () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 });
-
-function onKeyDown(event) {
-  debugRuntime.onKeyDown(event, clockTime);
-  if (event.repeat) return;
-  if (game.state !== "playing") return;
-  if (!debugRuntime.isDebugVisible()) return;
-  if ((event.key || "").toLowerCase() !== "t") return;
-  event.preventDefault();
-  debugControlsRuntime.teleportCatToDebugMouseTarget();
-}
 
 function updateDebugView() {
   debugRuntime.updateDebugView(clockTime);
@@ -681,8 +885,11 @@ function resetGame() {
   game.pendingLoseAt = null;
   game.placeCatnipMode = false;
   game.catnipCooldownUntil = 0;
+  game.catnipNoRouteUntil = 0;
   game.invalidCatnipUntil = 0;
+  game.windowOpenUntil = 0;
   catnipRuntime.clearCatnip();
+  windowSillRuntime.setOpenAmount(0);
 
   cupRuntime.resetCup();
 
@@ -724,13 +931,19 @@ function resetGame() {
   cat.onTable = false;
   cat.debugMoveActive = false;
   cat.debugMoveSurface = "floor";
+  cat.debugMoveSurfaceId = "floor";
+  cat.debugMoveFinalSurfaceId = "floor";
   cat.debugMoveY = 0;
+  cat.debugMoveFinalY = 0;
   cat.debugMoveJumpAnchor.set(cat.pos.x, 0, cat.pos.z);
   cat.debugMoveLanding.set(cat.pos.x, 0, cat.pos.z);
   cat.debugMoveJumpOff.set(cat.pos.x, 0, cat.pos.z);
   cat.debugMoveJumpDown.set(cat.pos.x, 0, cat.pos.z);
+  cat.debugMoveJumpDownY = 0;
+  cat.debugMoveDirectJump = false;
   cat.debugMoveSitSeconds = 0;
   cat.debugMoveTarget.set(cat.pos.x, 0, cat.pos.z);
+  cat.debugMoveFinalTarget.set(cat.pos.x, 0, cat.pos.z);
   cat.tableRoamTarget.set(desk.pos.x, 0, desk.pos.z);
   cat.nextTableRoamAt = 0;
   cat.tableRollStartAt = clockTime + CAT_BEHAVIOR.initialRollDelay;
@@ -743,6 +956,7 @@ function resetGame() {
   cat.swipeHitDone = false;
   cat.jump = null;
   cat.landStopNextState = "patrol";
+  cat.landStopDuration = 0.22;
   cat.clipSpecialState = "";
   cat.clipSpecialPhase = "";
   if (cat.clipSpecialAction) {
@@ -755,6 +969,16 @@ function resetGame() {
   clearCatNavPath(true);
   cat.nav.anchorReplanAt = 0;
   cat.nav.anchorLandingCheckAt = 0;
+  cat.nav.lastSurfaceHopFrom = "";
+  cat.nav.lastSurfaceHopTo = "";
+  cat.nav.lastSurfaceHopAt = 0;
+  if (Array.isArray(cat.nav.surfaceHopTrail)) cat.nav.surfaceHopTrail.length = 0;
+  else cat.nav.surfaceHopTrail = [];
+  cat.nav.jumpDownPlanAt = 0;
+  cat.nav.jumpDownPlanValid = false;
+  cat.nav.jumpDownNoMoveT = 0;
+  cat.nav.jumpDownLandingSurfaceId = null;
+  cat.nav.jumpDownDebug = {};
   resetCatJumpBypass();
   resetCatUnstuckTracking();
   cat.nav.stuckT = 0;
@@ -766,6 +990,10 @@ function resetGame() {
   cat.nav.turnBias = 0;
   cat.nav.turnDirLock = 0;
   cat.nav.locomotionHoldT = 0;
+  cat.nav.catnipPathCheckAt = 0;
+  cat.nav.catnipUseExactTarget = false;
+  cat.nav.windowPathCheckAt = 0;
+  cat.nav.windowHoldActive = false;
   if (cat.locomotion) {
     cat.locomotion.activeClip = "idle";
     cat.locomotion.clipScale = 0;
@@ -773,6 +1001,7 @@ function resetGame() {
   cat.modelAnchor.position.set(0, 0, 0);
   cat.modelAnchor.rotation.set(0, 0, 0);
   refreshCatPatrolTarget();
+  simAccumulator = 0;
 }
 
 function clearCatJumpTargets(clearAnchor = true) {
@@ -784,7 +1013,10 @@ function clearCatJumpTargets(clearAnchor = true) {
 function clearCatNavPath(resetRepath = false) {
   cat.nav.path.length = 0;
   cat.nav.index = 0;
-  if (resetRepath) cat.nav.repathAt = 0;
+  if (resetRepath) {
+    cat.nav.repathAt = 0;
+    navRuntime.resetDetourCrowd?.();
+  }
 }
 
 function resetCatJumpBypass() {
@@ -865,27 +1097,147 @@ function getElevatedSurfaceDefs(includeDesk = true) {
   const surfaces = [];
   if (includeDesk) {
     surfaces.push({
+      id: "desk",
       name: "desk",
-      minX: desk.pos.x - desk.sizeX * 0.5 + 0.2,
-      maxX: desk.pos.x + desk.sizeX * 0.5 - 0.2,
-      minZ: desk.pos.z - desk.sizeZ * 0.5 + 0.16,
-      maxZ: desk.pos.z + desk.sizeZ * 0.5 - 0.16,
+      // Outer perimeter = real tabletop perimeter.
+      minX: desk.pos.x - desk.sizeX * 0.5,
+      maxX: desk.pos.x + desk.sizeX * 0.5,
+      minZ: desk.pos.z - desk.sizeZ * 0.5,
+      maxZ: desk.pos.z + desk.sizeZ * 0.5,
       y: desk.topY + 0.02,
     });
   }
+  surfaces.push({
+    id: "chair",
+    name: "chair",
+    minX: chair.pos.x - chair.sizeX * 0.5,
+    maxX: chair.pos.x + chair.sizeX * 0.5,
+    minZ: chair.pos.z - chair.sizeZ * 0.5,
+    maxZ: chair.pos.z + chair.sizeZ * 0.5,
+    y: chair.seatY + 0.02,
+  });
+  surfaces.push({
+    id: "shelf",
+    name: "shelf",
+    minX: shelf.pos.x - shelf.width * 0.5,
+    maxX: shelf.pos.x + shelf.width * 0.5,
+    minZ: shelf.pos.z - shelf.depth * 0.5,
+    maxZ: shelf.pos.z + shelf.depth * 0.5,
+    y: shelf.surfaceY + 0.02,
+  });
+  surfaces.push({
+    id: hoverShelf.id,
+    name: hoverShelf.id,
+    minX: hoverShelf.pos.x - hoverShelf.width * 0.5,
+    maxX: hoverShelf.pos.x + hoverShelf.width * 0.5,
+    minZ: hoverShelf.pos.z - hoverShelf.depth * 0.5,
+    maxZ: hoverShelf.pos.z + hoverShelf.depth * 0.5,
+    y: hoverShelf.surfaceY + 0.02,
+  });
+  surfaces.push({
+    id: windowSill.id,
+    name: windowSill.id,
+    minX: windowSill.pos.x - windowSill.width * 0.5,
+    maxX: windowSill.pos.x + windowSill.width * 0.5,
+    minZ: windowSill.pos.z - windowSill.depth * 0.5,
+    maxZ: windowSill.pos.z + windowSill.depth * 0.5,
+    y: windowSill.surfaceY + 0.02,
+  });
   return surfaces;
 }
 
+function computeJumpNoClipMinY(jump, x, z, progressU) {
+  if (!jump || progressU >= 0.96) return null;
+  const surfaces = getElevatedSurfaceDefs(true);
+  if (!Array.isArray(surfaces) || surfaces.length === 0) return null;
+  const pad = Math.max(0.08, CAT_COLLISION.catBodyRadius * 0.9);
+  const jumpArc = Math.max(0.02, Number(jump.arc) || 0);
+  const jumpTopY = Math.max(jump.fromY, jump.toY) + jumpArc;
+  const jumpBottomY = Math.min(jump.fromY, jump.toY) - 0.08;
+  let minY = -Infinity;
+  for (const s of surfaces) {
+    const sy = Number(s?.y);
+    const minX = Number(s?.minX);
+    const maxX = Number(s?.maxX);
+    const minZ = Number(s?.minZ);
+    const maxZ = Number(s?.maxZ);
+    if (![sy, minX, maxX, minZ, maxZ].every(Number.isFinite)) continue;
+    // Ignore surfaces that are clearly outside this jump's vertical travel band.
+    // This prevents a low jump from being clamped up to an unrelated higher platform.
+    if (sy > jumpTopY + 0.14 || sy < jumpBottomY - 0.14) continue;
+    const targetIsThisSurface =
+      Math.abs(sy - jump.toY) <= 0.14 &&
+      jump.to.x >= minX - pad &&
+      jump.to.x <= maxX + pad &&
+      jump.to.z >= minZ - pad &&
+      jump.to.z <= maxZ + pad;
+    if (targetIsThisSurface) continue;
+    const inside =
+      x >= minX - pad &&
+      x <= maxX + pad &&
+      z >= minZ - pad &&
+      z <= maxZ + pad;
+    if (!inside) continue;
+    minY = Math.max(minY, sy + 0.08);
+  }
+  return Number.isFinite(minY) ? minY : null;
+}
+
 function startJump(to, toY, dur, arc, nextState, opts = null) {
+  const fromY = cat.group.position.y;
+  const dropOrLevelJump = toY <= fromY + 0.03;
+  const requestedNextState = nextState || "patrol";
+  const resolvedNextState = dropOrLevelJump ? "landStop" : requestedNextState;
+  let resolvedDur = dur;
+  let preJumpDur = 0;
+  const horizontalDist = Math.hypot(to.x - cat.pos.x, to.z - cat.pos.z);
+  const downVerticalDist = Math.max(0, fromY - toY);
+  const allowClamp = !!(opts && opts.allowClamp);
+  if (dropOrLevelJump && requestedNextState !== "landStop") {
+    cat.landStopNextState = requestedNextState;
+  }
+  if (dropOrLevelJump) {
+    // Distance-aware down-jump timing:
+    // shorter hops get shorter prep/air/land so clips transition earlier and smoother.
+    const jumpSpan = horizontalDist + downVerticalDist * 0.75;
+    const scaledPrepDur = THREE.MathUtils.clamp(0.14 + jumpSpan * 0.22, 0.14, 0.58);
+    const scaledAirDur = THREE.MathUtils.clamp(0.22 + horizontalDist * 0.2 + downVerticalDist * 0.18, 0.2, 0.62);
+    const scaledLandDur = THREE.MathUtils.clamp(0.12 + horizontalDist * 0.06 + downVerticalDist * 0.14, 0.12, 0.3);
+    resolvedDur = scaledAirDur;
+    preJumpDur = scaledPrepDur;
+    cat.landStopDuration = scaledLandDur;
+    // Force a fresh jump-down clip sequence (Edge_to -> Edge_from -> Land_stop)
+    // when the actual drop starts, instead of continuing a stale preview pose.
+    if (cat.clipSpecialAction) {
+      cat.clipSpecialAction.stop();
+      cat.clipSpecialAction = null;
+    }
+    cat.clipSpecialState = "";
+    cat.clipSpecialPhase = "";
+  } else {
+    const disableUpPrep = !!(opts && opts.upPrep === false);
+    if (!disableUpPrep) {
+      const explicitUpPrepDur = Number(opts?.preDur);
+      if (Number.isFinite(explicitUpPrepDur)) {
+        preJumpDur = Math.max(0, explicitUpPrepDur);
+      } else {
+        // Default prep for up-jumps: Aim_U then Incline(40-48) before launch.
+        preJumpDur = THREE.MathUtils.clamp(0.72 + horizontalDist * 0.12, 0.72, 0.95);
+      }
+    }
+  }
   cat.jump = {
     from: cat.pos.clone(),
     to: to.clone(),
-    fromY: cat.group.position.y,
+    fromY,
     toY,
-    dur,
+    dur: resolvedDur,
     t: 0,
+    preDur: preJumpDur,
+    preT: 0,
     arc,
-    nextState,
+    nextState: resolvedNextState,
+    allowClamp,
     easePos: !!(opts && opts.easePos),
     easeY: !!(opts && opts.easeY),
     avoidDeskClip: !!(opts && opts.avoidDeskClip),
@@ -894,22 +1246,66 @@ function startJump(to, toY, dur, arc, nextState, opts = null) {
 
 function updateJump(dt) {
   if (!cat.jump) return false;
-  cat.jump.t += dt;
+  const isDownJump = cat.jump.toY <= cat.jump.fromY + 0.03;
+  // Keep the cat oriented toward the jump destination during prep and airtime.
+  const jumpDx = cat.jump.to.x - cat.jump.from.x;
+  const jumpDz = cat.jump.to.z - cat.jump.from.z;
+  if (jumpDx * jumpDx + jumpDz * jumpDz > 1e-6) {
+    const jumpYaw = Math.atan2(jumpDx, jumpDz);
+    const yawDelta = Math.atan2(
+      Math.sin(jumpYaw - cat.group.rotation.y),
+      Math.cos(jumpYaw - cat.group.rotation.y)
+    );
+    cat.group.rotation.y += yawDelta * Math.min(1, dt * 12.0);
+  }
+  let stepDt = dt;
+  const hasPrep = (cat.jump.preDur || 0) > 1e-5;
+  if (hasPrep && cat.jump.preT < cat.jump.preDur) {
+    const remainPrep = Math.max(0, cat.jump.preDur - cat.jump.preT);
+    const usedPrep = Math.min(stepDt, remainPrep);
+    cat.jump.preT += usedPrep;
+    stepDt -= usedPrep;
+    cat.pos.copy(cat.jump.from);
+    cat.group.position.set(cat.pos.x, cat.jump.fromY, cat.pos.z);
+    if (cat.jump.preT < cat.jump.preDur - 1e-5) return false;
+  }
+
+  cat.jump.t += stepDt;
   const u = Math.min(1, cat.jump.t / cat.jump.dur);
   const uPos = cat.jump.easePos ? THREE.MathUtils.smootherstep(u, 0, 1) : u;
-  const uY = cat.jump.easeY ? Math.pow(u, 0.74) : u;
+  let uY = u;
+  if (cat.jump.easeY) {
+    // Down-jumps need a softer launch so paws do not clip into the source surface.
+    // Up-jumps keep the older snappier easing.
+    uY = isDownJump ? THREE.MathUtils.smoothstep(u, 0, 1) : Math.pow(u, 0.74);
+  }
   cat.pos.lerpVectors(cat.jump.from, cat.jump.to, uPos);
-  const lift = Math.sin(Math.PI * u) * cat.jump.arc;
+  let lift = Math.sin(Math.PI * u) * cat.jump.arc;
+  if (isDownJump) {
+    // Use an asymmetric arc for down-jumps: quick lift-off, faster settle.
+    const apexU = 0.28;
+    if (u <= apexU) {
+      lift = cat.jump.arc * (u / Math.max(1e-5, apexU));
+    } else {
+      const downU = (u - apexU) / Math.max(1e-5, 1 - apexU);
+      lift = cat.jump.arc * Math.pow(Math.max(0, 1 - downU), 1.8);
+    }
+  }
   let y = THREE.MathUtils.lerp(cat.jump.fromY, cat.jump.toY, uY) + lift;
-  if (cat.jump.avoidDeskClip && y < desk.topY + 0.08) {
-    const halfX = desk.sizeX * 0.5 + 0.12;
-    const halfZ = desk.sizeZ * 0.5 + 0.12;
-    if (Math.abs(cat.pos.x - desk.pos.x) <= halfX && Math.abs(cat.pos.z - desk.pos.z) <= halfZ) {
-      y = desk.topY + 0.08;
+  if (cat.jump.allowClamp) {
+    const noClipMinY = computeJumpNoClipMinY(cat.jump, cat.pos.x, cat.pos.z, u);
+    if (Number.isFinite(noClipMinY) && y < noClipMinY) y = noClipMinY;
+    if (cat.jump.avoidDeskClip && y < desk.topY + 0.08) {
+      const halfX = desk.sizeX * 0.5 + 0.12;
+      const halfZ = desk.sizeZ * 0.5 + 0.12;
+      if (Math.abs(cat.pos.x - desk.pos.x) <= halfX && Math.abs(cat.pos.z - desk.pos.z) <= halfZ) {
+        y = desk.topY + 0.08;
+      }
     }
   }
   cat.group.position.set(cat.pos.x, y, cat.pos.z);
-  if (u >= 1) {
+  const downLandingReady = isDownJump && u >= 0.9 && y <= cat.jump.toY + 0.02;
+  if (u >= 1 || downLandingReady) {
     cat.group.position.y = cat.jump.toY;
     const next = cat.jump.nextState;
     cat.jump = null;
@@ -949,6 +1345,7 @@ function updateCat(dt) {
       pickups,
       pickupRadius,
       recoverCatFromPickupTrap: navRuntime.recoverCatFromPickupTrap,
+      nudgeBlockingPickupAwayFromCat: navRuntime.nudgeBlockingPickupAwayFromCat,
       getCurrentGroundGoal: navRuntime.getCurrentGroundGoal,
       ensureCatPath: navRuntime.ensureCatPath,
       findSafeGroundPoint: navRuntime.findSafeGroundPoint,
@@ -958,6 +1355,7 @@ function updateCat(dt) {
       moveCatToward: navRuntime.moveCatToward,
       pickRandomPatrolPoint: navRuntime.pickRandomPatrolPoint,
       bestDeskJumpAnchor: navRuntime.bestDeskJumpAnchor,
+      bestSurfaceJumpAnchor: navRuntime.bestSurfaceJumpAnchor,
       clearCatNavPath,
       resetCatJumpBypass,
       updateDebugJumpDownPlan: debugControlsRuntime.updateDebugJumpDownPlan,
@@ -965,6 +1363,8 @@ function updateCat(dt) {
       canReachGroundTarget: navRuntime.canReachGroundTarget,
       hasClearTravelLine: navRuntime.hasClearTravelLine,
       computeDeskJumpTargets: navRuntime.computeDeskJumpTargets,
+      computeSurfaceJumpTargets: navRuntime.computeSurfaceJumpTargets,
+      getElevatedSurfaceDefs,
       keepCatAwayFromCup: navRuntime.keepCatAwayFromCup,
       knockCup,
       sampleSwipePose: navRuntime.sampleSwipePose,
@@ -972,6 +1372,7 @@ function updateCat(dt) {
       setCatClipSpecialPose: catModelRuntime.setCatClipSpecialPose,
       updateCatClipLocomotion: catModelRuntime.updateCatClipLocomotion,
       setBonePose: catModelRuntime.setBonePose,
+      windowSill,
     },
     dt
   );
@@ -1011,22 +1412,45 @@ function updateMessMeter() {
   }
 }
 
-function animate() {
-  const rawDt = Math.min(clock.getDelta(), 0.05);
-  const dt = rawDt * THREE.MathUtils.clamp(game.timeScale, 0, 2);
-  clockTime += dt;
-
-  controls.target.x = THREE.MathUtils.clamp(controls.target.x, TARGET_BOUNDS.minX, TARGET_BOUNDS.maxX);
-  controls.target.z = THREE.MathUtils.clamp(controls.target.z, TARGET_BOUNDS.minZ, TARGET_BOUNDS.maxZ);
-  controls.target.y = THREE.MathUtils.clamp(controls.target.y, TARGET_BOUNDS.minY, TARGET_BOUNDS.maxY);
+function simulateStep(stepDt, perfSample = null) {
+  const simStartAt = perfSample ? performance.now() : 0;
+  clockTime += stepDt;
+  const openTarget = clockTime < game.windowOpenUntil ? 1 : 0;
+  const openNow = Number(windowSillRuntime?.root?.userData?.openAmount || 0);
+  const nextOpen = THREE.MathUtils.damp(openNow, openTarget, 9.0, stepDt);
+  windowSillRuntime.setOpenAmount(nextOpen);
 
   if (game.state === "playing") {
-    if (dt > 0) physics.world.step(physics.fixedStep, dt, 10);
-    updatePickups(dt);
-    updateEndlessSpawning(dt);
-    updateCat(dt);
-    updateCup(dt);
-    updateShatter(dt);
+    let tStart = perfSample ? performance.now() : 0;
+    physics.world.step(physics.fixedStep, stepDt, 10);
+    if (perfSample) {
+      perfSample.physicsMs += performance.now() - tStart;
+      tStart = performance.now();
+    }
+    updatePickups(stepDt);
+    if (perfSample) {
+      perfSample.pickupsMs += performance.now() - tStart;
+      tStart = performance.now();
+    }
+    updateEndlessSpawning(stepDt);
+    if (perfSample) {
+      perfSample.spawnMs += performance.now() - tStart;
+      tStart = performance.now();
+    }
+    updateCat(stepDt);
+    if (perfSample) {
+      perfSample.catMs += performance.now() - tStart;
+      tStart = performance.now();
+    }
+    updateCup(stepDt);
+    if (perfSample) {
+      perfSample.cupMs += performance.now() - tStart;
+      tStart = performance.now();
+    }
+    updateShatter(stepDt);
+    if (perfSample) {
+      perfSample.shatterMs += performance.now() - tStart;
+    }
     if (game.pendingLoseAt != null && clockTime >= game.pendingLoseAt) {
       lose(game.reason || "A desk item hit the floor.");
       game.pendingLoseAt = null;
@@ -1035,11 +1459,79 @@ function animate() {
       lose("Mess meter overflowed.");
     }
   }
+  if (perfSample) {
+    perfSample.simSteps += 1;
+    perfSample.simulatedDtMs += stepDt * 1000;
+    perfSample.simMs += performance.now() - simStartAt;
+  }
+}
+
+function animate() {
+  const frameStartAt = performance.now();
+  const frameDt = Math.min(clock.getDelta(), MAX_FRAME_DT);
+  const timeScale = THREE.MathUtils.clamp(game.timeScale, 0, 2);
+  const perfSample = {
+    frameDtMs: frameDt * 1000,
+    simSteps: 0,
+    simulatedDtMs: 0,
+    simMs: 0,
+    physicsMs: 0,
+    pickupsMs: 0,
+    spawnMs: 0,
+    catMs: 0,
+    cupMs: 0,
+    shatterMs: 0,
+    drawCalls: 0,
+    triangles: 0,
+    lines: 0,
+    points: 0,
+    geometries: 0,
+    textures: 0,
+    timeScale,
+  };
+
+  if (timeScale <= 1e-6) {
+    simAccumulator = 0;
+  } else {
+    simAccumulator = Math.min(
+      simAccumulator + frameDt,
+      SIMULATION_DT * MAX_SIM_STEPS_PER_FRAME
+    );
+
+    const scaledStepDt = SIMULATION_DT * timeScale;
+    let simSteps = 0;
+    while (simAccumulator >= SIMULATION_DT && simSteps < MAX_SIM_STEPS_PER_FRAME) {
+      simulateStep(scaledStepDt, perfSample);
+      simAccumulator -= SIMULATION_DT;
+      simSteps++;
+    }
+    if (simSteps >= MAX_SIM_STEPS_PER_FRAME) {
+      simAccumulator = 0;
+    }
+  }
+
+  debugCameraRuntime.updateDebugCameraControls(frameDt);
+
+  if (!debugRuntime.isDebugVisible()) {
+    controls.target.x = THREE.MathUtils.clamp(controls.target.x, TARGET_BOUNDS.minX, TARGET_BOUNDS.maxX);
+    controls.target.z = THREE.MathUtils.clamp(controls.target.z, TARGET_BOUNDS.minZ, TARGET_BOUNDS.maxZ);
+    controls.target.y = THREE.MathUtils.clamp(controls.target.y, TARGET_BOUNDS.minY, TARGET_BOUNDS.maxY);
+  }
 
   updateDebugView();
   controls.update();
   updateUI();
   renderer.render(scene, camera);
+  perfSample.frameMs = performance.now() - frameStartAt;
+  perfSample.drawCalls = Number(renderer.info?.render?.calls || 0);
+  perfSample.triangles = Number(renderer.info?.render?.triangles || 0);
+  perfSample.lines = Number(renderer.info?.render?.lines || 0);
+  perfSample.points = Number(renderer.info?.render?.points || 0);
+  perfSample.geometries = Number(renderer.info?.memory?.geometries || 0);
+  perfSample.textures = Number(renderer.info?.memory?.textures || 0);
+  if (typeof debugRuntime.updatePerformanceSample === "function") {
+    debugRuntime.updatePerformanceSample(perfSample, clockTime);
+  }
   requestAnimationFrame(animate);
 }
 window.addEventListener("keydown", (e) => {

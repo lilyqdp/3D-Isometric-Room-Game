@@ -1,4 +1,11 @@
 import { computeCupSwipePlan } from "./cat-plans.js";
+import {
+  formatDebugNumber as formatNum,
+  pushDebugPerfValue as pushPerfValue,
+  debugPerfMean as perfMean,
+  debugPerfMax as perfMax,
+  debugPerfPercentile as perfPercentile,
+} from "./debug-overlay-stats.js";
 
 export function createDebugOverlayRuntime(ctx) {
   const {
@@ -46,6 +53,15 @@ export function createDebugOverlayRuntime(ctx) {
     { key: "showPickupTriggerHits", label: "Pickup active shove hits", default: false },
     { key: "showNavObstacles", label: "Nav obstacles", default: false },
     { key: "showNavObstacleRaw", label: "Nav obstacle cores (raw)", default: false },
+    { key: "showSurfaceBounds", label: "Jump surface bounds", default: false },
+    { key: "showSurfaceAnchors", label: "Jump anchors/latch points", default: false },
+    { key: "showSurfaceProbes", label: "Jump probes", default: false },
+    { key: "showSurfaceLinks", label: "Jump links (valid/blocked)", default: false },
+    { key: "showSurfaceLinkClearance", label: "Jump link clearance volumes", default: false },
+    { key: "showSurfaceVectorBlockers", label: "Jump blocker spaces (red/orange)", default: false },
+    { key: "showSurfaceUpLinksOnly", label: "Jump links: up only", default: false },
+    { key: "showSurfaceDownLinksOnly", label: "Jump links: down only", default: false },
+    { key: "showJumpCatCollision", label: "Cat jump keep-out (active)", default: false },
     { key: "showNavMeshLines", label: "NavMesh edges", default: true },
     { key: "showNavMeshFill", label: "NavMesh fill", default: true },
     { key: "showCurrentPath", label: "Current planned path", default: true },
@@ -56,6 +72,7 @@ export function createDebugOverlayRuntime(ctx) {
     { key: "showAStarEndpoints", label: "A* start/goal markers", default: true },
     { key: "showAStarFinalPath", label: "A* final path", default: true },
     { key: "showNavTelemetry", label: "Live nav telemetry panel", default: false },
+    { key: "showPerfTelemetry", label: "Live perf telemetry panel", default: false },
   ];
   const DEFAULT_ADVANCED_FLAGS = Object.fromEntries(
     ADVANCED_TOGGLE_DEFS.map((def) => [def.key, !!def.default])
@@ -74,6 +91,13 @@ export function createDebugOverlayRuntime(ctx) {
     "showPickupTriggerHits",
     "showNavObstacles",
     "showNavObstacleRaw",
+    "showSurfaceBounds",
+    "showSurfaceAnchors",
+    "showSurfaceProbes",
+    "showSurfaceLinks",
+    "showSurfaceLinkClearance",
+    "showSurfaceVectorBlockers",
+    "showJumpCatCollision",
   ];
 
   const debugView = {
@@ -81,6 +105,7 @@ export function createDebugOverlayRuntime(ctx) {
     staticCollisionGroup: new THREE.Group(),
     dynamicCollisionGroup: new THREE.Group(),
     navObstacleGroup: new THREE.Group(),
+    surfaceJumpGroup: new THREE.Group(),
     astarGroup: new THREE.Group(),
     navMeshLines: null,
     navMeshFill: null,
@@ -89,6 +114,7 @@ export function createDebugOverlayRuntime(ctx) {
     nextNavRefreshAt: 0,
     lastPathPoints: null,
     lastPathAt: 0,
+    lastPathKey: "",
     visible: false,
     advancedPanelVisible: false,
     advancedFlags: { ...DEFAULT_ADVANCED_FLAGS },
@@ -98,6 +124,7 @@ export function createDebugOverlayRuntime(ctx) {
   debugView.staticCollisionGroup.name = "debugStaticCollision";
   debugView.dynamicCollisionGroup.name = "debugDynamicCollision";
   debugView.navObstacleGroup.name = "debugNavObstacles";
+  debugView.surfaceJumpGroup.name = "debugSurfaceJump";
   debugView.astarGroup.name = "debugAStar";
 
   const DEBUG_STATIC_COLLISION_MAT = new THREE.LineBasicMaterial({
@@ -183,6 +210,141 @@ export function createDebugOverlayRuntime(ctx) {
     opacity: 0.55,
     depthTest: false,
   });
+  const DEBUG_SURFACE_OUTER_MAT = new THREE.LineBasicMaterial({
+    color: 0x6bc3ff,
+    transparent: true,
+    opacity: 0.78,
+    depthTest: false,
+  });
+  const DEBUG_SURFACE_INNER_MAT = new THREE.LineBasicMaterial({
+    color: 0x2ee68c,
+    transparent: true,
+    opacity: 0.86,
+    depthTest: false,
+  });
+  const DEBUG_SURFACE_ANCHOR_LINK_MAT = new THREE.LineBasicMaterial({
+    color: 0xb784ff,
+    transparent: true,
+    opacity: 0.8,
+    depthTest: false,
+  });
+  const DEBUG_SURFACE_PROBE_HIT_MAT = new THREE.LineBasicMaterial({
+    color: 0x00ffd1,
+    transparent: true,
+    opacity: 0.9,
+    depthTest: false,
+  });
+  const DEBUG_SURFACE_PROBE_MISS_MAT = new THREE.LineBasicMaterial({
+    color: 0xffa12d,
+    transparent: true,
+    opacity: 0.82,
+    depthTest: false,
+  });
+  const DEBUG_SURFACE_PROBE_DOWN_ONLY_MAT = new THREE.LineBasicMaterial({
+    color: 0x57b7ff,
+    transparent: true,
+    opacity: 0.88,
+    depthTest: false,
+  });
+  const DEBUG_SURFACE_LINK_VALID_MAT = new THREE.LineBasicMaterial({
+    color: 0x00f5a0,
+    transparent: true,
+    opacity: 0.92,
+    depthTest: false,
+  });
+  const DEBUG_SURFACE_LINK_BLOCKED_MAT = new THREE.LineBasicMaterial({
+    color: 0xffa12d,
+    transparent: true,
+    opacity: 0.88,
+    depthTest: false,
+  });
+  const DEBUG_SURFACE_DOWN_LINK_VALID_MAT = new THREE.LineBasicMaterial({
+    color: 0x57b7ff,
+    transparent: true,
+    opacity: 0.9,
+    depthTest: false,
+  });
+  const DEBUG_SURFACE_DOWN_LINK_BLOCKED_MAT = new THREE.LineBasicMaterial({
+    color: 0xffa12d,
+    transparent: true,
+    opacity: 0.84,
+    depthTest: false,
+  });
+  const DEBUG_SURFACE_BLOCKER_OBJECT_SOLID_MAT = new THREE.MeshBasicMaterial({
+    color: 0xff3f3f,
+    transparent: true,
+    opacity: 0.23,
+    depthTest: false,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+  const DEBUG_SURFACE_BLOCKER_SURFACE_SOLID_MAT = new THREE.MeshBasicMaterial({
+    color: 0xff9f2e,
+    transparent: true,
+    opacity: 0.2,
+    depthTest: false,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+  const DEBUG_SURFACE_ANCHOR_OUTER_MAT = new THREE.MeshBasicMaterial({
+    color: 0x8f63ff,
+    depthTest: false,
+  });
+  const DEBUG_SURFACE_ANCHOR_INNER_MAT = new THREE.MeshBasicMaterial({
+    color: 0x00ff95,
+    depthTest: false,
+  });
+  const DEBUG_SURFACE_PROBE_END_HIT_MAT = new THREE.MeshBasicMaterial({
+    color: 0x00ffd1,
+    depthTest: false,
+  });
+  const DEBUG_SURFACE_PROBE_END_DOWN_ONLY_MAT = new THREE.MeshBasicMaterial({
+    color: 0x57b7ff,
+    depthTest: false,
+  });
+  const DEBUG_SURFACE_PROBE_END_MISS_MAT = new THREE.MeshBasicMaterial({
+    color: 0xffa12d,
+    depthTest: false,
+  });
+  const DEBUG_SURFACE_LINK_POINT_MAT = new THREE.MeshBasicMaterial({
+    color: 0x9cf7ff,
+    depthTest: false,
+  });
+  const DEBUG_SURFACE_LINK_BLOCKED_POINT_MAT = new THREE.MeshBasicMaterial({
+    color: 0xffa12d,
+    depthTest: false,
+  });
+  const DEBUG_JUMP_CAT_HALF_RING_MAT = new THREE.LineBasicMaterial({
+    color: 0x56e8ff,
+    transparent: true,
+    opacity: 0.95,
+    depthTest: false,
+  });
+  const DEBUG_JUMP_CAT_HALF_SOLID_MAT = new THREE.MeshBasicMaterial({
+    color: 0x56e8ff,
+    transparent: true,
+    opacity: 0.24,
+    depthTest: false,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+  const DEBUG_SURFACE_LINK_CLEARANCE_VALID_MAT = new THREE.MeshBasicMaterial({
+    color: 0x40ffd6,
+    transparent: true,
+    opacity: 0.14,
+    depthTest: false,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+  const DEBUG_SURFACE_LINK_CLEARANCE_BLOCKED_MAT = new THREE.MeshBasicMaterial({
+    color: 0xff8d4d,
+    transparent: true,
+    opacity: 0.16,
+    depthTest: false,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+  const DEBUG_UP_AXIS = new THREE.Vector3(0, 1, 0);
   const DEBUG_NAV_MAT = new THREE.LineBasicMaterial({
     color: DEBUG_VIEW.navColor,
     transparent: true,
@@ -225,6 +387,30 @@ export function createDebugOverlayRuntime(ctx) {
   let debugTelemetryWrap = null;
   let debugTelemetryPre = null;
   const debugAdvancedInputs = new Map();
+  const PERF_HISTORY_LIMIT = 300;
+  const TELEMETRY_UPDATE_INTERVAL = 0.25;
+  const perfTelemetry = {
+    nextUpdateAt: 0,
+    hasSample: false,
+    lastSample: null,
+    frameMs: [],
+    simMs: [],
+    simulatedDtMs: [],
+    simSteps: [],
+    physicsMs: [],
+    pickupsMs: [],
+    spawnMs: [],
+    catMs: [],
+    cupMs: [],
+    shatterMs: [],
+    drawCalls: [],
+    triangles: [],
+    geometries: [],
+    textures: [],
+    repathPerSec: [],
+    lastRepathCount: null,
+    lastRepathAt: 0,
+  };
 
   function clampTimeScale(value) {
     const v = Number.isFinite(value) ? value : 1;
@@ -301,6 +487,7 @@ export function createDebugOverlayRuntime(ctx) {
     rebuildStaticCollisionDebug();
     rebuildDynamicCollisionDebug(clockTime);
     rebuildNavObstacleDebug();
+    rebuildSurfaceJumpDebug();
     rebuildNavMeshDebug();
     rebuildCurrentPathDebug(clockTime);
     rebuildTargetMarkerDebug();
@@ -323,7 +510,11 @@ export function createDebugOverlayRuntime(ctx) {
     debugAdvancedWrap.style.display = debugView.visible && debugView.advancedPanelVisible ? "grid" : "none";
     if (debugTelemetryWrap) {
       debugTelemetryWrap.style.display =
-        debugView.visible && debugView.advancedPanelVisible && isFlagOn("showNavTelemetry") ? "block" : "none";
+        debugView.visible &&
+        debugView.advancedPanelVisible &&
+        (isFlagOn("showNavTelemetry") || isFlagOn("showPerfTelemetry"))
+          ? "block"
+          : "none";
     }
   }
 
@@ -432,37 +623,190 @@ export function createDebugOverlayRuntime(ctx) {
     return !!debugView.advancedFlags[key];
   }
 
-  function formatNum(v, digits = 3) {
-    if (!Number.isFinite(v)) return "na";
-    return v.toFixed(digits);
+  function updatePerformanceSample(sample, clockTime = 0) {
+    if (!sample || typeof sample !== "object") return;
+    perfTelemetry.hasSample = true;
+    perfTelemetry.lastSample = { ...sample };
+    pushPerfValue(perfTelemetry.frameMs, sample.frameMs);
+    pushPerfValue(perfTelemetry.simMs, sample.simMs);
+    pushPerfValue(perfTelemetry.simulatedDtMs, sample.simulatedDtMs);
+    pushPerfValue(perfTelemetry.simSteps, sample.simSteps);
+    pushPerfValue(perfTelemetry.physicsMs, sample.physicsMs);
+    pushPerfValue(perfTelemetry.pickupsMs, sample.pickupsMs);
+    pushPerfValue(perfTelemetry.spawnMs, sample.spawnMs);
+    pushPerfValue(perfTelemetry.catMs, sample.catMs);
+    pushPerfValue(perfTelemetry.cupMs, sample.cupMs);
+    pushPerfValue(perfTelemetry.shatterMs, sample.shatterMs);
+    pushPerfValue(perfTelemetry.drawCalls, sample.drawCalls);
+    pushPerfValue(perfTelemetry.triangles, sample.triangles);
+    pushPerfValue(perfTelemetry.geometries, sample.geometries);
+    pushPerfValue(perfTelemetry.textures, sample.textures);
+
+    const repathCount = cat.nav?.debugCounters?.repath;
+    const now = Number.isFinite(clockTime) ? clockTime : 0;
+    if (Number.isFinite(repathCount)) {
+      if (
+        Number.isFinite(perfTelemetry.lastRepathCount) &&
+        Number.isFinite(perfTelemetry.lastRepathAt) &&
+        now > perfTelemetry.lastRepathAt + 1e-4
+      ) {
+        const dt = now - perfTelemetry.lastRepathAt;
+        const delta = repathCount - perfTelemetry.lastRepathCount;
+        if (delta >= 0) pushPerfValue(perfTelemetry.repathPerSec, delta / dt);
+      }
+      perfTelemetry.lastRepathCount = repathCount;
+      perfTelemetry.lastRepathAt = now;
+    }
   }
 
-  function updateNavTelemetry(clockTime = 0) {
-    if (!debugTelemetryPre) return;
-    if (!debugView.visible || !debugView.advancedPanelVisible || !isFlagOn("showNavTelemetry")) {
-      debugTelemetryPre.textContent = "";
-      return;
-    }
+  function buildNavTelemetryLines(clockTime = 0) {
+    if (!isFlagOn("showNavTelemetry")) return [];
     const counters = cat.nav?.debugCounters || {};
     const step = cat.nav?.debugStep || {};
+    const repathReasons = cat.nav?.debugRepathReasons || {};
+    const lastRepathCause = cat.nav?.lastRepathCause || null;
     const events = Array.isArray(cat.nav?.debugEvents) ? cat.nav.debugEvents : [];
     const recent = events.slice(-8);
+    const topRepathReasons = Object.entries(repathReasons)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 4);
+    const recentRepathEvents = events
+      .filter((e) => typeof e?.kind === "string" && e.kind.startsWith("repath-cause:"))
+      .slice(-4);
+    const jumpDown = cat.nav?.jumpDownDebug || null;
     const lines = [];
     lines.push(`state=${cat.state} status=${cat.status}`);
+    if (cat.useClipLocomotion) {
+      const activeSpecialClip = cat.clipSpecialAction?.getClip?.()?.name || "none";
+      lines.push(`anim specialState=${cat.clipSpecialState || "none"} specialClip=${activeSpecialClip}`);
+    }
     lines.push(`pos=(${formatNum(cat.pos.x, 2)}, ${formatNum(cat.group.position.y, 2)}, ${formatNum(cat.pos.z, 2)}) onTable=${cat.onTable ? "yes" : "no"}`);
     lines.push(`path len=${cat.nav?.path?.length || 0} idx=${cat.nav?.index || 0} stuckT=${formatNum(cat.nav?.stuckT || 0, 3)} repathAt=${formatNum((cat.nav?.repathAt || 0) - clockTime, 2)}s`);
-    lines.push(`step reason=${step.reason || "na"} phase=${step.phase || "na"} direct=${step.direct ? "y" : "n"} dynIgnore=${step.ignoreDynamic ? "y" : "n"} turnOnly=${step.turnOnly ? "y" : "n"} turnOnlyT=${formatNum(step.turnOnlyT || 0, 2)} noSteerFrames=${step.noSteerFrames || 0}`);
+    lines.push(`step reason=${step.reason || "na"} phase=${step.phase || "na"} direct=${step.direct ? "y" : "n"} dynIgnore=${step.ignoreDynamic ? "y" : "n"} turnOnly=${step.turnOnly ? "y" : "n"} turnOnlyT=${formatNum(step.turnOnlyT || 0, 2)} noSteerFrames=${step.noSteerFrames || 0} segBlockedFrames=${cat.nav?.segmentBlockedFrames || 0} staleInvalidFrames=${cat.nav?.staleInvalidFrames || 0}`);
     lines.push(`target=(${formatNum(step.targetX, 2)}, ${formatNum(step.targetZ, 2)}) chase=(${formatNum(step.chaseX, 2)}, ${formatNum(step.chaseZ, 2)}) d=${formatNum(step.distToChase || 0, 3)}`);
     lines.push(`yawDelta=${formatNum(step.rawYawDelta || 0, 3)} overlapDynamic=${formatNum(step.overlapDynamic || 0, 3)} overlapStatic=${formatNum(step.overlapStatic || 0, 3)} blockedPosS=${step.posBlockedStatic ? "y" : "n"} blockedPosD=${step.posBlockedDynamic ? "y" : "n"} speed=${formatNum(cat.nav?.lastSpeed || 0, 3)} cmd=${formatNum(cat.nav?.commandedSpeed || 0, 3)}`);
+    lines.push(`segmentBlock obstacle=${step.blockedObstacle || "none"} kind=${step.blockedObstacleKind || "na"} at=(${formatNum(step.blockedAtX, 2)}, ${formatNum(step.blockedAtZ, 2)})`);
+    if (jumpDown) {
+      lines.push(
+        `jumpDown phase=${jumpDown.phase || "na"} planPhase=${jumpDown.planPhase || "na"} planValid=${jumpDown.planValid ? "y" : "n"} refreshOk=${jumpDown.refreshOk ? "y" : "n"} fail=${jumpDown.failReason || jumpDown.planFailure || "none"}`
+      );
+      lines.push(
+        `jumpDown dist=${formatNum(jumpDown.distToDrop, 3)} near=${jumpDown.nearDrop ? "y" : "n"} reached=${jumpDown.reachedJumpOff ? "y" : "n"} stallReady=${jumpDown.stallReady ? "y" : "n"} noMoveT=${formatNum(jumpDown.noMoveT, 2)} ready=${jumpDown.readyToDrop ? "y" : "n"} navReason=${jumpDown.navReason || "na"}`
+      );
+      lines.push(
+        `jumpDown jumpOff=(${formatNum(jumpDown.jumpOffX, 2)}, ${formatNum(jumpDown.jumpOffY, 2)}, ${formatNum(jumpDown.jumpOffZ, 2)}) jumpTo=(${formatNum(jumpDown.jumpDownX, 2)}, ${formatNum(jumpDown.jumpDownY, 2)}, ${formatNum(jumpDown.jumpDownZ, 2)})`
+      );
+      lines.push(
+        `jumpDown sourceSurface=${jumpDown.planSourceSurfaceId || "na"} desiredLanding=${jumpDown.desiredLandingSurfaceId || jumpDown.planDesiredLandingSurfaceId || "na"} toward=(${formatNum(jumpDown.preferredTowardX ?? jumpDown.planTowardX, 2)}, ${formatNum(jumpDown.preferredTowardZ ?? jumpDown.planTowardZ, 2)}) topClamped=${jumpDown.planTopWasClamped ? "y" : "n"}`
+      );
+    }
     lines.push(`counters noPath=${counters.noPath || 0} noSteer=${counters.noSteer || 0} repath=${counters.repath || 0} turnOnlyRepath=${counters.turnOnlyRepath || 0} segmentRescue=${counters.segmentRescue || 0} escape=${counters.escape || 0} rollback=${counters.rollback || 0} rescue=${counters.rescueSnap || 0}`);
+    if (lastRepathCause && lastRepathCause.kind && lastRepathCause.kind !== "none") {
+      lines.push(`last repath cause=${lastRepathCause.kind} dt=${formatNum(clockTime - (lastRepathCause.t || clockTime), 2)}s ago ignoreDyn=${lastRepathCause.ignoreDynamic ? "y" : "n"}`);
+    }
+    if (topRepathReasons.length) {
+      lines.push(`repath causes total: ${topRepathReasons.map(([k, v]) => `${k}=${v}`).join(" | ")}`);
+    }
+    if (recentRepathEvents.length) {
+      lines.push("recent repath triggers:");
+      for (const e of recentRepathEvents) {
+        const obs = e.obstacleLabel ? ` obs=${e.obstacleLabel}` : "";
+        lines.push(`  - ${formatNum(clockTime - (e.t || clockTime), 2)}s ago | ${e.kind.replace("repath-cause:", "")}${obs}`);
+      }
+    }
     if (recent.length) {
       lines.push("events:");
       for (let i = 0; i < recent.length; i++) {
         const e = recent[i];
         const dt = clockTime - (e.t || clockTime);
-        lines.push(`  - ${formatNum(dt, 2)}s ago | ${e.kind || "evt"} | state=${e.state || "?"}`);
+        const obs = e.obstacleLabel ? ` | obs=${e.obstacleLabel}` : "";
+        const sb = Number.isFinite(e.segmentBlockedFrames) ? ` | segF=${e.segmentBlockedFrames}` : "";
+        lines.push(`  - ${formatNum(dt, 2)}s ago | ${e.kind || "evt"} | state=${e.state || "?"}${obs}${sb}`);
       }
     }
+    return lines;
+  }
+
+  function buildPerfTelemetryLines() {
+    if (!isFlagOn("showPerfTelemetry")) return [];
+    const lines = [];
+    if (!perfTelemetry.hasSample) {
+      lines.push("perf: waiting for samples...");
+      return lines;
+    }
+
+    const sample = perfTelemetry.lastSample || {};
+    const frameAvg = perfMean(perfTelemetry.frameMs);
+    const frameP95 = perfPercentile(perfTelemetry.frameMs, 0.95);
+    const frameMax = perfMax(perfTelemetry.frameMs);
+    const fpsAvg = Number.isFinite(frameAvg) && frameAvg > 0 ? 1000 / frameAvg : NaN;
+    const simStepAvg = perfMean(perfTelemetry.simSteps);
+    const simStepMax = perfMax(perfTelemetry.simSteps);
+    const simOpsSec =
+      Number.isFinite(frameAvg) && frameAvg > 0 && Number.isFinite(simStepAvg)
+        ? (simStepAvg * 1000) / frameAvg
+        : NaN;
+
+    lines.push(`perf (rolling ${perfTelemetry.frameMs.length}f):`);
+    lines.push(
+      `frame ms avg=${formatNum(frameAvg, 2)} p95=${formatNum(frameP95, 2)} max=${formatNum(frameMax, 2)} | fps avg=${formatNum(fpsAvg, 1)}`
+    );
+    lines.push(
+      `sim steps/frame avg=${formatNum(simStepAvg, 2)} max=${formatNum(simStepMax, 0)} | sim steps/sec=${formatNum(simOpsSec, 1)}`
+    );
+    lines.push(
+      `sim ms avg=${formatNum(perfMean(perfTelemetry.simMs), 2)} | simulated dt/frame avg=${formatNum(perfMean(perfTelemetry.simulatedDtMs), 2)}`
+    );
+    lines.push(
+      `subsystem ms avg: physics=${formatNum(perfMean(perfTelemetry.physicsMs), 2)} pickups=${formatNum(perfMean(perfTelemetry.pickupsMs), 2)} spawn=${formatNum(perfMean(perfTelemetry.spawnMs), 2)} cat=${formatNum(perfMean(perfTelemetry.catMs), 2)} cup=${formatNum(perfMean(perfTelemetry.cupMs), 2)} shatter=${formatNum(perfMean(perfTelemetry.shatterMs), 2)}`
+    );
+    lines.push(
+      `render last: drawCalls=${formatNum(sample.drawCalls, 0)} tris=${formatNum(sample.triangles, 0)} geo=${formatNum(sample.geometries, 0)} tex=${formatNum(sample.textures, 0)}`
+    );
+    lines.push(
+      `render avg: drawCalls=${formatNum(perfMean(perfTelemetry.drawCalls), 1)} tris=${formatNum(perfMean(perfTelemetry.triangles), 0)}`
+    );
+    lines.push(
+      `repath/sec avg=${formatNum(perfMean(perfTelemetry.repathPerSec), 2)} max=${formatNum(perfMax(perfTelemetry.repathPerSec), 2)}`
+    );
+    lines.push(`timeScale=${formatNum(sample.timeScale, 2)}x`);
+
+    const mem = globalThis?.performance?.memory;
+    if (
+      mem &&
+      Number.isFinite(mem.usedJSHeapSize) &&
+      Number.isFinite(mem.jsHeapSizeLimit)
+    ) {
+      const usedMb = mem.usedJSHeapSize / (1024 * 1024);
+      const limitMb = mem.jsHeapSizeLimit / (1024 * 1024);
+      const pct = limitMb > 0 ? (usedMb / limitMb) * 100 : NaN;
+      lines.push(`heap: used=${formatNum(usedMb, 1)}MB / limit=${formatNum(limitMb, 1)}MB (${formatNum(pct, 1)}%)`);
+    } else {
+      lines.push("heap: unavailable (browser does not expose performance.memory)");
+    }
+
+    return lines;
+  }
+
+  function updateTelemetryPanel(clockTime = 0) {
+    if (!debugTelemetryPre) return;
+    if (
+      !debugView.visible ||
+      !debugView.advancedPanelVisible ||
+      (!isFlagOn("showNavTelemetry") && !isFlagOn("showPerfTelemetry"))
+    ) {
+      debugTelemetryPre.textContent = "";
+      return;
+    }
+    if (clockTime < perfTelemetry.nextUpdateAt) return;
+    perfTelemetry.nextUpdateAt = clockTime + TELEMETRY_UPDATE_INTERVAL;
+
+    const lines = [];
+    const navLines = buildNavTelemetryLines(clockTime);
+    const perfLines = buildPerfTelemetryLines();
+    if (navLines.length) lines.push(...navLines);
+    if (navLines.length && perfLines.length) lines.push("", "--------------------", "");
+    if (perfLines.length) lines.push(...perfLines);
     debugTelemetryPre.textContent = lines.join("\n");
   }
 
@@ -484,6 +828,25 @@ export function createDebugOverlayRuntime(ctx) {
     }
     const geo = new THREE.BufferGeometry().setFromPoints(verts);
     return new THREE.LineLoop(geo, material);
+  }
+
+  function makeDebugHalfCircleLoop(
+    radius,
+    y = 0,
+    segments = 24,
+    material = DEBUG_JUMP_CAT_HALF_RING_MAT,
+    thetaStart = -Math.PI * 0.5,
+    thetaLength = Math.PI
+  ) {
+    const segs = Math.max(6, segments | 0);
+    const verts = [];
+    for (let i = 0; i <= segs; i++) {
+      const t = i / segs;
+      const theta = thetaStart + t * thetaLength;
+      verts.push(new THREE.Vector3(Math.cos(theta) * radius, y, Math.sin(theta) * radius));
+    }
+    const geo = new THREE.BufferGeometry().setFromPoints(verts);
+    return new THREE.Line(geo, material);
   }
 
   function makeDebugRectLoop(hx, hz, y = 0, material = DEBUG_STATIC_COLLISION_MAT) {
@@ -533,8 +896,59 @@ export function createDebugOverlayRuntime(ctx) {
     return new THREE.Mesh(geo, material);
   }
 
+  function makeDebugHalfCylinderSolid(
+    radius,
+    height = 0.12,
+    segments = 28,
+    material = DEBUG_JUMP_CAT_HALF_SOLID_MAT,
+    thetaStart = -Math.PI * 0.5,
+    thetaLength = Math.PI
+  ) {
+    const geo = new THREE.CylinderGeometry(
+      Math.max(0.001, radius),
+      Math.max(0.001, radius),
+      Math.max(0.01, height),
+      Math.max(8, segments | 0),
+      1,
+      false,
+      thetaStart,
+      thetaLength
+    );
+    return new THREE.Mesh(geo, material);
+  }
+
   function makeDebugCenterMarker(size = 0.025, material = DEBUG_CAT_CENTER_MAT) {
     return new THREE.Mesh(new THREE.SphereGeometry(size, 10, 8), material);
+  }
+
+  function addLine(group, from, to, material, renderOrder = 15) {
+    if (!from || !to || !material) return;
+    const geo = new THREE.BufferGeometry().setFromPoints([from, to]);
+    const line = new THREE.Line(geo, material);
+    line.renderOrder = renderOrder;
+    group.add(line);
+  }
+
+  function addClearanceTube(group, from, to, radius, material, renderOrder = 21) {
+    if (!from || !to || !material) return;
+    const dir = new THREE.Vector3().subVectors(to, from);
+    const len = dir.length();
+    if (len <= 1e-5) return;
+    const tube = new THREE.Mesh(
+      new THREE.CylinderGeometry(
+        Math.max(0.004, radius),
+        Math.max(0.004, radius),
+        len,
+        12,
+        1,
+        true
+      ),
+      material
+    );
+    tube.position.copy(from).addScaledVector(dir, 0.5);
+    tube.quaternion.setFromUnitVectors(DEBUG_UP_AXIS, dir.normalize());
+    tube.renderOrder = renderOrder;
+    group.add(tube);
   }
 
   function rebuildStaticCollisionDebug() {
@@ -575,6 +989,7 @@ export function createDebugOverlayRuntime(ctx) {
       !isFlagOn("showCatBodySolid") &&
       !isFlagOn("showCatPathClearance") &&
       !isFlagOn("showCatShoveVolume") &&
+      !isFlagOn("showJumpCatCollision") &&
       !isFlagOn("showCatCenter") &&
       !isFlagOn("showCatPickupLinks") &&
       !isFlagOn("showPickupTriggerHits") &&
@@ -645,6 +1060,39 @@ export function createDebugOverlayRuntime(ctx) {
       shoveWire.position.set(cat.pos.x, catBaseY + triggerHeight * 0.5, cat.pos.z);
       shoveWire.renderOrder = 13;
       debugView.dynamicCollisionGroup.add(shoveWire);
+    }
+
+    if (isFlagOn("showJumpCatCollision") && cat.jump) {
+      const jumpDir = new THREE.Vector3(
+        (cat.jump.to?.x ?? cat.pos.x) - (cat.jump.from?.x ?? cat.pos.x),
+        0,
+        (cat.jump.to?.z ?? cat.pos.z) - (cat.jump.from?.z ?? cat.pos.z)
+      );
+      if (jumpDir.lengthSq() < 1e-6) {
+        jumpDir.set(Math.sin(cat.group.rotation.y), 0, Math.cos(cat.group.rotation.y));
+      } else {
+        jumpDir.normalize();
+      }
+      const jumpYaw = Math.atan2(jumpDir.x, jumpDir.z);
+      const keepOutRadius = Math.max(catCollisionRadius, CAT_NAV.clearance * 0.9);
+      const keepOutHeight = Math.max(0.12, CAT_COLLISION.catBodyRadius * 1.45);
+
+      const jumpHalfSolid = makeDebugHalfCylinderSolid(
+        keepOutRadius,
+        keepOutHeight,
+        30,
+        DEBUG_JUMP_CAT_HALF_SOLID_MAT
+      );
+      jumpHalfSolid.position.set(cat.pos.x, catBaseY + keepOutHeight * 0.5, cat.pos.z);
+      jumpHalfSolid.rotation.y = jumpYaw;
+      jumpHalfSolid.renderOrder = 15;
+      debugView.dynamicCollisionGroup.add(jumpHalfSolid);
+
+      const jumpHalfRing = makeDebugHalfCircleLoop(keepOutRadius, 0, 28, DEBUG_JUMP_CAT_HALF_RING_MAT);
+      jumpHalfRing.position.set(cat.pos.x, catBaseY + 0.03, cat.pos.z);
+      jumpHalfRing.rotation.y = jumpYaw;
+      jumpHalfRing.renderOrder = 16;
+      debugView.dynamicCollisionGroup.add(jumpHalfRing);
     }
 
     if (isFlagOn("showCatPickupLinks") || isFlagOn("showCatCenter")) {
@@ -767,6 +1215,204 @@ export function createDebugOverlayRuntime(ctx) {
     }
   }
 
+  function rebuildSurfaceJumpDebug() {
+    clearDebugChildren(debugView.surfaceJumpGroup);
+    const showBounds = isFlagOn("showSurfaceBounds");
+    const showAnchors = isFlagOn("showSurfaceAnchors");
+    const showProbes = isFlagOn("showSurfaceProbes");
+    const showLinks = isFlagOn("showSurfaceLinks");
+    const showLinkClearance = isFlagOn("showSurfaceLinkClearance");
+    const showBlockers = isFlagOn("showSurfaceVectorBlockers");
+    if (!showBounds && !showAnchors && !showProbes && !showLinks && !showLinkClearance && !showBlockers) return;
+    if (typeof ctx.getSurfaceJumpDebugData !== "function") return;
+
+    const data = ctx.getSurfaceJumpDebugData();
+    if (!data) return;
+
+    const addRectLoop = (rect, y, mat, yLift = 0.02, renderOrder = 16) => {
+      const hx = Math.max(0.01, (rect.maxX - rect.minX) * 0.5);
+      const hz = Math.max(0.01, (rect.maxZ - rect.minZ) * 0.5);
+      const cx = (rect.minX + rect.maxX) * 0.5;
+      const cz = (rect.minZ + rect.maxZ) * 0.5;
+      const loop = makeDebugRectLoop(hx, hz, 0, mat);
+      loop.position.set(cx, y + yLift, cz);
+      loop.renderOrder = renderOrder;
+      debugView.surfaceJumpGroup.add(loop);
+    };
+    const addObstacleSolid = (obs, material, renderOrder = 21) => {
+      const oy = Number.isFinite(obs?.y) ? obs.y : 0;
+      const h = Number.isFinite(obs?.h) ? Math.max(0.01, obs.h) : 0.02;
+      const y = oy;
+      let solid = null;
+      if (obs?.kind === "circle") {
+        solid = makeDebugCylinderSolid(Math.max(0.01, obs.r || 0.01), h, 24, material);
+      } else {
+        solid = makeDebugBoxSolid(
+          Math.max(0.01, obs.hx || 0.01),
+          h * 0.5,
+          Math.max(0.01, obs.hz || 0.01),
+          material
+        );
+        if (obs?.kind === "obb" && Number.isFinite(obs?.yaw)) solid.rotation.y = obs.yaw;
+      }
+      if (!solid) return;
+      solid.position.set(obs.x || 0, y, obs.z || 0);
+      solid.renderOrder = renderOrder;
+      debugView.surfaceJumpGroup.add(solid);
+    };
+
+    if (showBounds || showAnchors) {
+      const surfaces = Array.isArray(data.surfaces) ? data.surfaces : [];
+      for (const surface of surfaces) {
+        const surfaceY = Number.isFinite(surface?.y) ? surface.y : 0;
+        if (showBounds) {
+          if (surface?.outer) addRectLoop(surface.outer, surfaceY, DEBUG_SURFACE_OUTER_MAT, 0.02, 16);
+          if (surface?.inner) addRectLoop(surface.inner, surfaceY, DEBUG_SURFACE_INNER_MAT, 0.024, 17);
+        }
+        if (!showAnchors || !Array.isArray(surface?.anchors)) continue;
+        for (const anchor of surface.anchors) {
+          const outer = anchor?.outer;
+          const inner = anchor?.inner;
+          if (!outer || !inner) continue;
+          const y = surfaceY + 0.026;
+          const outerPt = new THREE.Vector3(outer.x, y, outer.z);
+          const innerPt = new THREE.Vector3(inner.x, y, inner.z);
+          addLine(debugView.surfaceJumpGroup, outerPt, innerPt, DEBUG_SURFACE_ANCHOR_LINK_MAT, 17);
+
+          const outerMarker = makeDebugCenterMarker(0.018, DEBUG_SURFACE_ANCHOR_OUTER_MAT);
+          outerMarker.position.copy(outerPt);
+          outerMarker.renderOrder = 18;
+          debugView.surfaceJumpGroup.add(outerMarker);
+
+          const innerMarker = makeDebugCenterMarker(0.018, DEBUG_SURFACE_ANCHOR_INNER_MAT);
+          innerMarker.position.copy(innerPt);
+          innerMarker.renderOrder = 18;
+          debugView.surfaceJumpGroup.add(innerMarker);
+        }
+      }
+    }
+
+    if (showProbes) {
+      const probes = Array.isArray(data.probes) ? data.probes : [];
+      for (const probe of probes) {
+        const origin = probe?.origin;
+        const end = probe?.end;
+        if (!origin || !end) continue;
+        const upValid = !!probe?.validUp;
+        const downValid = !!probe?.validDown;
+        const isHit = !!probe?.hit;
+        const isDownOnly = isHit && !upValid && downValid;
+        const mat = isHit
+          ? (upValid ? DEBUG_SURFACE_PROBE_HIT_MAT : (isDownOnly ? DEBUG_SURFACE_PROBE_DOWN_ONLY_MAT : DEBUG_SURFACE_PROBE_MISS_MAT))
+          : DEBUG_SURFACE_PROBE_MISS_MAT;
+        addLine(debugView.surfaceJumpGroup, origin, end, mat, 18);
+
+        const endMarker = makeDebugCenterMarker(
+          isHit ? 0.014 : 0.012,
+          isHit
+            ? (upValid ? DEBUG_SURFACE_PROBE_END_HIT_MAT : (isDownOnly ? DEBUG_SURFACE_PROBE_END_DOWN_ONLY_MAT : DEBUG_SURFACE_PROBE_END_MISS_MAT))
+            : DEBUG_SURFACE_PROBE_END_MISS_MAT
+        );
+        endMarker.position.copy(end);
+        endMarker.renderOrder = 19;
+        debugView.surfaceJumpGroup.add(endMarker);
+      }
+    }
+
+    if (showLinks || showLinkClearance) {
+      const downOnly = isFlagOn("showSurfaceDownLinksOnly");
+      const upOnly = isFlagOn("showSurfaceUpLinksOnly");
+      const showUp = !downOnly || upOnly;
+      const showDown = !upOnly || downOnly;
+      const links = Array.isArray(data.links) ? data.links : [];
+      for (const link of links) {
+        const jumpFrom = link?.jumpFrom;
+        const hook = link?.hook;
+        const top = link?.top;
+        if (!jumpFrom || !hook || !top) continue;
+        const fromY = Number.isFinite(link?.fromY) ? link.fromY : (Number.isFinite(jumpFrom.y) ? jumpFrom.y : 0);
+        const toY = Number.isFinite(link?.toY) ? link.toY : (Number.isFinite(top.y) ? top.y : fromY);
+        const launchStart = link?.upLaunchStart || new THREE.Vector3(jumpFrom.x, fromY, jumpFrom.z);
+        const launchFullEnd = link?.upHookStart || new THREE.Vector3(hook.x, toY, hook.z);
+        const launchEnd = link?.upLaunchEnd || launchFullEnd;
+        const hookStart = launchFullEnd;
+        const hookFullEnd = new THREE.Vector3(top.x, toY, top.z);
+        const hookEnd = link?.upHookEnd || hookFullEnd;
+        const jumpFromDown = new THREE.Vector3(jumpFrom.x, fromY, jumpFrom.z);
+        const downStart = link?.downStart || hookFullEnd;
+        const downEnd = link?.downEnd || jumpFromDown;
+        const upMat = link.validUp ? DEBUG_SURFACE_LINK_VALID_MAT : DEBUG_SURFACE_LINK_BLOCKED_MAT;
+        const downMat = link.validDown ? DEBUG_SURFACE_DOWN_LINK_VALID_MAT : DEBUG_SURFACE_DOWN_LINK_BLOCKED_MAT;
+        if (showLinks && showUp) {
+          addLine(debugView.surfaceJumpGroup, launchStart, launchEnd, upMat, 19);
+          if (!link?.upLaunchBlocked) {
+            addLine(debugView.surfaceJumpGroup, hookStart, hookEnd, upMat, 19);
+          }
+          if (!link.validUp && (link?.upLaunchBlocked || link?.upHookBlocked)) {
+            const blockedAt = link?.upLaunchBlocked ? launchEnd : hookEnd;
+            const blockedMarker = makeDebugCenterMarker(0.014, DEBUG_SURFACE_LINK_BLOCKED_POINT_MAT);
+            blockedMarker.position.copy(blockedAt);
+            blockedMarker.renderOrder = 20;
+            debugView.surfaceJumpGroup.add(blockedMarker);
+          }
+        }
+        if (showLinks && showDown) addLine(debugView.surfaceJumpGroup, downStart, downEnd, downMat, 20);
+        if (showLinks && showDown && !showUp && !link.validDown && link?.downBlocked) {
+          const blockedMarker = makeDebugCenterMarker(0.014, DEBUG_SURFACE_LINK_BLOCKED_POINT_MAT);
+          blockedMarker.position.copy(downEnd);
+          blockedMarker.renderOrder = 20;
+          debugView.surfaceJumpGroup.add(blockedMarker);
+        }
+
+        if (showLinks && showUp) {
+          const jumpFromMarker = makeDebugCenterMarker(0.016, DEBUG_SURFACE_LINK_POINT_MAT);
+          jumpFromMarker.position.copy(jumpFromDown);
+          jumpFromMarker.renderOrder = 20;
+          debugView.surfaceJumpGroup.add(jumpFromMarker);
+        } else if (showLinks && showDown) {
+          const topMarker = makeDebugCenterMarker(0.016, DEBUG_SURFACE_LINK_POINT_MAT);
+          topMarker.position.copy(hookFullEnd);
+          topMarker.renderOrder = 20;
+          debugView.surfaceJumpGroup.add(topMarker);
+        }
+
+        if (showLinkClearance) {
+          const launchClearance = Math.max(
+            0.02,
+            Number.isFinite(link?.launchClearance) ? link.launchClearance : Math.max(CAT_COLLISION.catBodyRadius, CAT_NAV.clearance * 0.9)
+          );
+          const landingClearance = Math.max(
+            0.02,
+            Number.isFinite(link?.landingClearance) ? link.landingClearance : Math.max(CAT_COLLISION.catBodyRadius, CAT_COLLISION.catBodyRadius * 1.5)
+          );
+          const upClearMat = link.validUp ? DEBUG_SURFACE_LINK_CLEARANCE_VALID_MAT : DEBUG_SURFACE_LINK_CLEARANCE_BLOCKED_MAT;
+          const downClearMat = link.validDown ? DEBUG_SURFACE_LINK_CLEARANCE_VALID_MAT : DEBUG_SURFACE_LINK_CLEARANCE_BLOCKED_MAT;
+
+          if (showUp) {
+            addClearanceTube(debugView.surfaceJumpGroup, launchStart, launchFullEnd, launchClearance, upClearMat, 21);
+            addClearanceTube(debugView.surfaceJumpGroup, hookStart, hookFullEnd, landingClearance, upClearMat, 21);
+          }
+          if (showDown) {
+            addClearanceTube(debugView.surfaceJumpGroup, downStart, jumpFromDown, launchClearance, downClearMat, 21);
+          }
+        }
+      }
+    }
+
+    if (showBlockers) {
+      const blockers = Array.isArray(data.vectorBlockers) ? data.vectorBlockers : [];
+      for (const blocker of blockers) {
+        const ignoredForSomeSurface =
+          Array.isArray(blocker?.jumpIgnoreSurfaceIds) && blocker.jumpIgnoreSurfaceIds.length > 0;
+        const mat =
+          blocker?.blockerClass === "surface" || ignoredForSomeSurface
+            ? DEBUG_SURFACE_BLOCKER_SURFACE_SOLID_MAT
+            : DEBUG_SURFACE_BLOCKER_OBJECT_SOLID_MAT;
+        addObstacleSolid(blocker, mat, 21);
+      }
+    }
+  }
+
   function rebuildNavMeshDebug() {
     if (!DEBUG_VIEW.enabled) return;
     if (debugView.navMeshLines) {
@@ -843,6 +1489,7 @@ export function createDebugOverlayRuntime(ctx) {
     debugView.staticCollisionGroup.visible = true;
     debugView.dynamicCollisionGroup.visible = true;
     debugView.navObstacleGroup.visible = true;
+    debugView.surfaceJumpGroup.visible = true;
     debugView.astarGroup.visible = true;
   }
 
@@ -887,16 +1534,63 @@ export function createDebugOverlayRuntime(ctx) {
     }
   }
 
-  function appendGroundNavPath(points) {
-    // Ground nav paths become stale/incorrect once the cat is on elevated surfaces.
-    if (cat.group.position.y > 0.12) return false;
+  function appendGroundNavPath(points, options = {}) {
+    const preferStable = !!options.preferStable;
+    const targetOverride = options.targetOverride || null;
+    const planeY = Number.isFinite(cat.nav?.debugDestination?.y)
+      ? cat.nav.debugDestination.y
+      : (cat.group.position.y > 0.12 ? cat.group.position.y : 0);
+    const step = cat.nav?.debugStep || {};
+    const hasChase =
+      Number.isFinite(step.chaseX) &&
+      Number.isFinite(step.chaseZ);
+    const chaseY = Number.isFinite(step.chaseY) ? step.chaseY : planeY;
+    const chasePoint = hasChase
+      ? new THREE.Vector3(step.chaseX, chaseY, step.chaseZ)
+      : null;
+
+    // If steering is currently direct, ignore stale cached path nodes and let caller draw direct line.
+    if (step.direct) {
+      if (chasePoint) {
+        const chaseY = Number.isFinite(chasePoint.y) ? chasePoint.y : planeY;
+        pushPathPoint(points, chasePoint.x, liftedY(chaseY), chasePoint.z);
+        return true;
+      }
+      return false;
+    }
+
     const path = cat.nav.path;
-    if (!Array.isArray(path) || path.length < 2) return false;
+    if (!Array.isArray(path) || path.length < 2) {
+      if (chasePoint) {
+        const chaseY = Number.isFinite(chasePoint.y) ? chasePoint.y : planeY;
+        pushPathPoint(points, chasePoint.x, liftedY(chaseY), chasePoint.z);
+        return true;
+      }
+      return false;
+    }
+
     const maxIdx = path.length - 1;
-    const startIdx = Math.min(maxIdx, Math.max(1, cat.nav.index || 1));
+    let startIdx = Math.min(maxIdx, Math.max(1, cat.nav.index || 1));
+
+    // First segment should match the actual active chase point used by steering.
+    if (chasePoint && !preferStable) {
+      const chaseY = Number.isFinite(chasePoint.y) ? chasePoint.y : planeY;
+      pushPathPoint(points, chasePoint.x, liftedY(chaseY), chasePoint.z);
+      while (startIdx < maxIdx && path[startIdx].distanceToSquared(chasePoint) < 0.12 * 0.12) {
+        startIdx++;
+      }
+    }
+
     for (let i = startIdx; i < path.length; i++) {
       const p = path[i];
-      pushPathPoint(points, p.x, liftedY(0), p.z);
+      const py = Number.isFinite(p.y) ? p.y : planeY;
+      pushPathPoint(points, p.x, liftedY(py), p.z);
+    }
+
+    const target = targetOverride || cat.nav?.debugDestination;
+    if (target && Number.isFinite(target.x) && Number.isFinite(target.z)) {
+      const targetY = Number.isFinite(target.y) ? target.y : planeY;
+      pushPathPoint(points, target.x, liftedY(targetY), target.z);
     }
     return true;
   }
@@ -952,28 +1646,41 @@ export function createDebugOverlayRuntime(ctx) {
     if ((cat.state === "toCup" || cat.state === "swipe") && cat.group.position.y > 0.12 && !cup.broken && !cup.falling) {
       const swipePlan = computeCupSwipePlan(THREE, desk, cup.group.position);
       const deskY = desk.topY + 0.02;
-      appendSurfaceLine(points, cat.pos, swipePlan.point, deskY);
+      const hasNav = appendGroundNavPath(points, {
+        preferStable: false,
+        targetOverride: new THREE.Vector3(swipePlan.point.x, deskY, swipePlan.point.z),
+      });
+      if (!hasNav) appendSurfaceLine(points, cat.pos, swipePlan.point, deskY);
       appendSurfaceLine(points, swipePlan.point, cup.group.position, deskY);
       return points;
     }
 
     const isDeskJumpPlanState = cat.state === "toDesk" || cat.state === "prepareJump";
     if (isDeskJumpPlanState && cat.jumpAnchor) {
-      const hasNav = appendGroundNavPath(points);
+      const hasNav = appendGroundNavPath(points, {
+        preferStable: false,
+        targetOverride: cat.jumpAnchor,
+      });
       if (!hasNav) appendSurfaceLine(points, cat.pos, cat.jumpAnchor, 0);
       else pushPathPoint(points, cat.jumpAnchor.x, liftedY(0), cat.jumpAnchor.z);
 
-      let jumpTargets = cat.jumpTargets;
-      if (!jumpTargets && typeof ctx.computeDeskJumpTargets === "function") {
-        const desiredTarget = typeof ctx.getDeskDesiredTarget === "function" ? ctx.getDeskDesiredTarget() : null;
-        jumpTargets = ctx.computeDeskJumpTargets(cat.jumpAnchor, desiredTarget);
-      }
+      // Use the runtime-cached jump targets only; avoid recomputing here because
+      // planner fallback sampling is stochastic and causes debug-line jitter.
+      const jumpTargets = cat.jumpTargets;
       if (jumpTargets?.hook) appendSurfaceLine(points, cat.jumpAnchor, jumpTargets.hook, 0);
       if (jumpTargets?.top) {
         const jumpFrom = jumpTargets.hook || cat.jumpAnchor;
         appendJumpArc(points, jumpFrom, 0, jumpTargets.top, desk.topY + 0.02, 0.46, 16);
+        const desired = typeof ctx.getDeskDesiredTarget === "function" ? ctx.getDeskDesiredTarget() : null;
+        if (desired && Number.isFinite(desired.x) && Number.isFinite(desired.z)) {
+          appendSurfaceLine(points, jumpTargets.top, desired, desk.topY + 0.02);
+        }
       }
       return points;
+    }
+
+    if (cat.state === "toCatnip" && !cat.onTable && cat.group.position.y <= 0.12) {
+      if (appendGroundNavPath(points, { preferStable: false })) return points;
     }
 
     if (cat.debugMoveActive && cat.debugMoveSurface === "elevated" && !cat.onTable) {
@@ -1000,7 +1707,11 @@ export function createDebugOverlayRuntime(ctx) {
 
     if (cat.debugMoveActive && cat.debugMoveSurface === "elevated" && cat.onTable) {
       const y = Math.max(0.02, cat.debugMoveY || desk.topY + 0.02);
-      appendSurfaceLine(points, cat.pos, cat.debugMoveTarget, y);
+      const hasNav = appendGroundNavPath(points, {
+        preferStable: false,
+        targetOverride: new THREE.Vector3(cat.debugMoveTarget.x, y, cat.debugMoveTarget.z),
+      });
+      if (!hasNav) appendSurfaceLine(points, cat.pos, cat.debugMoveTarget, y);
       return points;
     }
 
@@ -1024,6 +1735,22 @@ export function createDebugOverlayRuntime(ctx) {
     return points;
   }
 
+  function buildPathKey() {
+    const step = cat.nav?.debugStep || {};
+    const dst = cat.nav?.debugDestination || {};
+    const q = (v) => (Number.isFinite(v) ? Math.round(v * 100) / 100 : "na");
+    return [
+      `state:${cat.state || "na"}`,
+      `jump:${cat.jump ? 1 : 0}`,
+      `onTable:${cat.onTable ? 1 : 0}`,
+      `dbgMove:${cat.debugMoveActive ? 1 : 0}`,
+      `dst:${q(dst.x)},${q(dst.y)},${q(dst.z)}`,
+      `chase:${q(step.chaseX)},${q(step.chaseZ)}`,
+      `pi:${Number.isFinite(cat.nav?.index) ? cat.nav.index : "na"}`,
+      `plen:${Array.isArray(cat.nav?.path) ? cat.nav.path.length : 0}`,
+    ].join("|");
+  }
+
   function rebuildCurrentPathDebug(clockTime) {
     if (!DEBUG_VIEW.enabled) return;
     if (!isFlagOn("showCurrentPath")) {
@@ -1031,15 +1758,23 @@ export function createDebugOverlayRuntime(ctx) {
       return;
     }
 
+    const pathKey = buildPathKey();
     let path = buildPlannedPath();
     if (!path || path.length < 2) {
       const airborne = !!cat.jump || (!cat.onTable && cat.group.position.y > 0.08);
-      if (airborne && Array.isArray(debugView.lastPathPoints) && debugView.lastPathPoints.length >= 2 && clockTime - debugView.lastPathAt <= 0.4) {
+      if (
+        airborne &&
+        debugView.lastPathKey === pathKey &&
+        Array.isArray(debugView.lastPathPoints) &&
+        debugView.lastPathPoints.length >= 2 &&
+        clockTime - debugView.lastPathAt <= 0.4
+      ) {
         path = debugView.lastPathPoints;
       }
     } else {
       debugView.lastPathPoints = path.map((p) => p.clone());
       debugView.lastPathAt = clockTime;
+      debugView.lastPathKey = pathKey;
     }
 
     if (!path || path.length < 2) {
@@ -1097,7 +1832,8 @@ export function createDebugOverlayRuntime(ctx) {
 
     const x = cat.nav.debugDestination.x;
     const z = cat.nav.debugDestination.z;
-    const y = Math.max(0.08, cat.nav.debugDestination.y + 0.08);
+    const baseY = cat.nav.debugDestination.y;
+    const y = Math.max(0.08, (Number.isFinite(baseY) ? baseY : 0) + 0.08);
 
     const group = new THREE.Group();
     group.position.set(x, y, z);
@@ -1209,12 +1945,14 @@ export function createDebugOverlayRuntime(ctx) {
     if (!debugView.staticCollisionGroup.parent) debugView.root.add(debugView.staticCollisionGroup);
     if (!debugView.dynamicCollisionGroup.parent) debugView.root.add(debugView.dynamicCollisionGroup);
     if (!debugView.navObstacleGroup.parent) debugView.root.add(debugView.navObstacleGroup);
+    if (!debugView.surfaceJumpGroup.parent) debugView.root.add(debugView.surfaceJumpGroup);
     if (!debugView.astarGroup.parent) debugView.root.add(debugView.astarGroup);
     applyRenderModeVisibility();
     debugView.root.visible = debugView.visible;
     rebuildStaticCollisionDebug();
     rebuildDynamicCollisionDebug(clockTime);
     rebuildNavObstacleDebug();
+    rebuildSurfaceJumpDebug();
     rebuildNavMeshDebug();
     rebuildCurrentPathDebug(clockTime);
     rebuildTargetMarkerDebug();
@@ -1233,7 +1971,8 @@ export function createDebugOverlayRuntime(ctx) {
     rebuildCurrentPathDebug(clockTime);
     rebuildTargetMarkerDebug();
     rebuildAStarDebug();
-    updateNavTelemetry(clockTime);
+    rebuildSurfaceJumpDebug();
+    updateTelemetryPanel(clockTime);
     if (DEBUG_VIEW.navRefreshInterval <= 0 || clockTime >= debugView.nextNavRefreshAt || !debugView.navMeshLines) {
       rebuildNavObstacleDebug();
       rebuildNavMeshDebug();
@@ -1245,7 +1984,7 @@ export function createDebugOverlayRuntime(ctx) {
     if (!debugBtnEl) return;
     const modeLabel = debugView.advancedFlags.fullOverlayMode ? "Full" : "Clean";
     debugBtnEl.textContent = debugView.visible
-      ? `Debug: On ${modeLabel} (B, N mode, A advanced, Right-click walk, T teleport)`
+      ? `Debug: On ${modeLabel} (B, N mode, A advanced, Right-click walk, T teleport, WASD move, Arrows rotate)`
       : "Debug: Off (B)";
   }
 
@@ -1301,5 +2040,6 @@ export function createDebugOverlayRuntime(ctx) {
     toggleDebugView,
     onKeyDown,
     isDebugVisible,
+    updatePerformanceSample,
   };
 }

@@ -1,4 +1,13 @@
-export function setupPhysicsWorld({ CANNON, physics, DESK_LEGS, ROOM, desk, hamper, trashCan }) {
+export function setupPhysicsWorld({
+  CANNON,
+  physics,
+  DESK_LEGS,
+  ROOM,
+  desk,
+  hamper,
+  trashCan,
+  EXTRA_STATIC_BOXES = [],
+}) {
   const world = physics.world;
   physics.staticBoxes = [];
   world.broadphase = new CANNON.SAPBroadphase(world);
@@ -67,5 +76,19 @@ export function setupPhysicsWorld({ CANNON, physics, DESK_LEGS, ROOM, desk, hamp
     const rx = trashCan.pos.x + Math.cos(t) * (trashCan.outerRadius + 0.02);
     const rz = trashCan.pos.z + Math.sin(t) * (trashCan.outerRadius + 0.02);
     addStaticBox(rx, trashCan.rimY + 0.015, rz, 0.14, 0.025, 0.06, t, rimMat);
+  }
+
+  for (const box of EXTRA_STATIC_BOXES) {
+    if (!box) continue;
+    addStaticBox(
+      box.x,
+      box.y,
+      box.z,
+      box.hx,
+      box.hy,
+      box.hz,
+      box.rotY || 0,
+      box.material === "rim" ? rimMat : shellMat
+    );
   }
 }

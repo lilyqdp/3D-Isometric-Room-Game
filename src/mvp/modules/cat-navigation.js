@@ -16,7 +16,7 @@ export function createCatNavigationRuntime(ctx) {
     hamper,
     trashCan,
     DESK_LEGS,
-    DESK_JUMP_ANCHORS,
+    EXTRA_NAV_OBSTACLES,
     CUP_COLLISION,
     pickups,
     cat,
@@ -24,6 +24,7 @@ export function createCatNavigationRuntime(ctx) {
     game,
     pickupRadius,
     isDraggingPickup,
+    getElevatedSurfaceDefs,
     clearCatNavPath,
     resetCatUnstuckTracking,
     getClockTime,
@@ -37,9 +38,11 @@ export function createCatNavigationRuntime(ctx) {
     ASTAR_NEIGHBOR_OFFSETS,
     ROOM,
     desk,
+    getElevatedSurfaceDefs,
     hamper,
     trashCan,
     DESK_LEGS,
+    EXTRA_NAV_OBSTACLES,
     CUP_COLLISION,
     pickups,
     cat,
@@ -84,8 +87,8 @@ export function createCatNavigationRuntime(ctx) {
     return pathRuntime.getLastAStarDebugData();
   }
 
-  function computeCatPath(start, goal, obstacles) {
-    return pathRuntime.computeCatPath(start, goal, obstacles);
+  function computeCatPath(start, goal, obstacles, queryY = null) {
+    return pathRuntime.computeCatPath(start, goal, obstacles, queryY);
   }
 
   function isPathTraversable(path, obstacles, clearance = CAT_NAV.clearance) {
@@ -96,16 +99,25 @@ export function createCatNavigationRuntime(ctx) {
     return pathRuntime.canReachGroundTarget(start, goal, obstacles);
   }
 
-  function ensureCatPath(target, force = false, useDynamic = false) {
-    return pathRuntime.ensureCatPath(target, force, useDynamic);
+  function ensureCatPath(target, force = false, useDynamic = false, queryY = null) {
+    return pathRuntime.ensureCatPath(target, force, useDynamic, queryY);
+  }
+
+  function stepDetourCrowdToward(target, dt, useDynamicPlan = true, desiredSpeed = null) {
+    return pathRuntime.stepDetourCrowdToward(target, dt, useDynamicPlan, desiredSpeed);
+  }
+
+  function resetDetourCrowd() {
+    return pathRuntime.resetDetourCrowd();
   }
 
   const jumpRuntime = createCatJumpPlanningRuntime({
     THREE,
     CAT_NAV,
     CAT_COLLISION,
+    ROOM,
     desk,
-    DESK_JUMP_ANCHORS,
+    getElevatedSurfaceDefs,
     CUP_COLLISION,
     pickups,
     cup,
@@ -147,6 +159,7 @@ export function createCatNavigationRuntime(ctx) {
     SWIPE_TIMING,
     ROOM,
     desk,
+    getElevatedSurfaceDefs,
     cat,
     getClockTime,
     clearCatNavPath,
@@ -155,6 +168,7 @@ export function createCatNavigationRuntime(ctx) {
     getCatPathClearance,
     hasClearTravelLine,
     ensureCatPath,
+    stepDetourCrowdToward,
     canReachGroundTarget,
   });
 
@@ -170,8 +184,15 @@ export function createCatNavigationRuntime(ctx) {
     computeCatPath,
     canReachGroundTarget,
     ensureCatPath,
+    stepDetourCrowdToward,
+    resetDetourCrowd,
+    bestSurfaceJumpAnchor: jumpRuntime.bestSurfaceJumpAnchor,
+    computeSurfaceJumpTargets: jumpRuntime.computeSurfaceJumpTargets,
+    computeSurfaceJumpDownTargets: jumpRuntime.computeSurfaceJumpDownTargets,
     bestDeskJumpAnchor: jumpRuntime.bestDeskJumpAnchor,
     computeDeskJumpTargets: jumpRuntime.computeDeskJumpTargets,
+    computeDeskJumpDownTargets: jumpRuntime.computeDeskJumpDownTargets,
+    getSurfaceJumpDebugData: jumpRuntime.getSurfaceJumpDebugData,
     moveCatToward: steeringRuntime.moveCatToward,
     findSafeGroundPoint: steeringRuntime.findSafeGroundPoint,
     pickRandomPatrolPoint: steeringRuntime.pickRandomPatrolPoint,

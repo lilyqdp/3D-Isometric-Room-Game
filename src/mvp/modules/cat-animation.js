@@ -57,23 +57,82 @@ function animateCatPose(dt, moving) {
       isSit ||
       !!cat.jump;
     if (cat.useClipLocomotion && cat.clipMixer) {
+      const pickJumpUpClipState = () => {
+        if (isPrepareJump) return "jumpPrepare";
+        if (!cat.jump) return "jumpUp";
+        const prepDur = Number(cat.jump.preDur || 0);
+        const prepT = Number(cat.jump.preT || 0);
+        if (prepDur > 1e-5 && prepT < prepDur - 1e-5) return "jumpPrepare";
+        // Keep airborne up-jumps to a single clip after prep.
+        return "jumpUp";
+      };
+      const pickJumpDownClipState = () => {
+        if (!cat.jump) return "";
+        const prepDur = Number(cat.jump.preDur || 0);
+        const prepT = Number(cat.jump.preT || 0);
+        if (prepDur > 1e-5 && prepT < prepDur - 1e-5) return "jumpDownPrepare";
+        return "jumpDown";
+      };
+
+      cat.clipSpecialSpeedOverrides = null;
+      if (cat.jump) {
+        const speedOverrides = {};
+        const prepDur = Math.max(0, Number(cat.jump.preDur || 0));
+        const airDur = Math.max(1e-5, Number(cat.jump.dur || 0));
+        const isDownJumpClip = cat.jump.toY <= cat.jump.fromY + 0.03;
+        if (isDownJumpClip) {
+          const prepAction = cat.stateClipActions?.jumpDownPrepare?.action;
+          const downAction = cat.stateClipActions?.jumpDown?.action;
+          const prepClipDur = prepAction?.getClip?.()?.duration;
+          const downClipDur = downAction?.getClip?.()?.duration;
+          if (Number.isFinite(prepClipDur) && prepClipDur > 1e-5 && prepDur > 1e-5) {
+            speedOverrides.jumpDownPrepare = THREE.MathUtils.clamp(prepClipDur / prepDur, 0.2, 2.5);
+          }
+          if (Number.isFinite(downClipDur) && downClipDur > 1e-5 && airDur > 1e-5) {
+            speedOverrides.jumpDown = THREE.MathUtils.clamp(downClipDur / airDur, 0.2, 2.5);
+          }
+        } else {
+          const prepSeq = cat.stateClipActions?.jumpPrepare?.sequenceActions;
+          const prepAction =
+            (Array.isArray(prepSeq) && prepSeq.length ? prepSeq[0] : null) ||
+            cat.stateClipActions?.jumpPrepare?.introAction ||
+            cat.stateClipActions?.jumpPrepare?.loopAction;
+          const upAction = cat.stateClipActions?.jumpUp?.action;
+          const prepClipDur = Array.isArray(prepSeq) && prepSeq.length
+            ? prepSeq.reduce((sum, action) => sum + Math.max(action?.getClip?.()?.duration || 0, 0), 0)
+            : prepAction?.getClip?.()?.duration;
+          const upClipDur = upAction?.getClip?.()?.duration;
+          if (Number.isFinite(prepClipDur) && prepClipDur > 1e-5 && prepDur > 1e-5) {
+            speedOverrides.jumpPrepare = THREE.MathUtils.clamp(prepClipDur / prepDur, 0.2, 2.5);
+          }
+          if (Number.isFinite(upClipDur) && upClipDur > 1e-5 && airDur > 1e-5) {
+            speedOverrides.jumpUp = THREE.MathUtils.clamp(upClipDur / airDur, 0.2, 2.5);
+          }
+        }
+        if (Object.keys(speedOverrides).length > 0) {
+          cat.clipSpecialSpeedOverrides = speedOverrides;
+        }
+      }
+
       let clipSpecialState = "";
       if (cat.state === "swipe") clipSpecialState = "swipe";
       else if (cat.state === "sit") clipSpecialState = "sit";
       else if (cat.state === "distracted") clipSpecialState = "eat";
-      else if (cat.state === "jumpDown") clipSpecialState = "jumpDown";
+      else if (cat.state === "jumpDown" && cat.jump) clipSpecialState = pickJumpDownClipState();
       else if (cat.state === "landStop") clipSpecialState = "landStop";
       else if (cat.state === "jumpSettle") clipSpecialState = "jumpSettle";
-      else if (isPrepareJump || isLaunchUp || isForepawHook || isPullUp) clipSpecialState = "jumpUp";
-      else if (cat.jump) clipSpecialState = cat.jump.toY > cat.jump.fromY + 0.03 ? "jumpUp" : "jumpDown";
+      else if (isPrepareJump || isLaunchUp || isForepawHook || isPullUp) clipSpecialState = pickJumpUpClipState();
+      else if (cat.jump) {
+        clipSpecialState = cat.jump.toY > cat.jump.fromY + 0.03 ? pickJumpUpClipState() : pickJumpDownClipState();
+      }
 
       const handledByClip = setCatClipSpecialPose(cat, clipSpecialState, dt);
       if (handledByClip) {
         cat.modelAnchor.position.y = THREE.MathUtils.damp(cat.modelAnchor.position.y, 0, 10, dt);
-        cat.modelAnchor.rotation.x = THREE.MathUtils.damp(cat.modelAnchor.rotation.x, 0, 10, dt);
+        cat.modelAnchor.rotation.x = THREE.MathUtils.damp(cat.modelAnchor.rotation.x, 0, 14, dt);
         cat.modelAnchor.rotation.z = THREE.MathUtils.damp(cat.modelAnchor.rotation.z, 0, 10, dt);
-        // Blend procedural jump posing on top of clip animation for a cleaner jump silhouette.
-        if (!isJumpState) return;
+        // When a clip is active, avoid layering procedural pose edits to prevent visual pops.
+        return;
       }
       if (!usesSpecialPose) {
         const clipMoving = !forceStill && (moving || worldSpeed > 0.12 || navSpeedNorm > 0.16);

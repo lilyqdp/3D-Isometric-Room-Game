@@ -130,6 +130,11 @@
         color: #101726;
       }
 
+      #windowBtn {
+        background: #8ec7de;
+        color: #0f2430;
+      }
+
       #result {
         margin-top: 8px;
         font-weight: 800;
@@ -182,6 +187,11 @@
       </div>
 
       <div class="row">
+        <span class="label">Window</span>
+        <span class="value" id="windowStat">Closed</span>
+      </div>
+
+      <div class="row">
         <span class="label">Mode</span>
         <span class="value" id="modeStat">Casual</span>
       </div>
@@ -203,6 +213,7 @@
 
       <div id="hudButtons">
         <button id="catnipBtn" type="button">Place Catnip</button>
+        <button id="windowBtn" type="button">Open Window</button>
         <button id="restartBtn" type="button">Restart</button>
         <button id="modeBtn" type="button">Switch To Casual</button>
         <button id="debugBtn" type="button">Debug: Off (B)</button>

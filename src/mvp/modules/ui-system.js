@@ -4,6 +4,8 @@ export function createUIRuntime(ctx) {
     catStateStatEl,
     cupStatEl,
     catnipStatEl,
+    windowStatEl,
+    windowBtnEl,
     resultEl,
     game,
     cat,
@@ -26,10 +28,25 @@ export function createUIRuntime(ctx) {
       catnipStatEl.textContent = clockTime < game.invalidCatnipUntil ? "Invalid spot" : "Click floor to place";
     } else if (game.catnip) {
       catnipStatEl.textContent = `Active (${Math.max(0, Math.ceil(game.catnip.expiresAt - clockTime))}s)`;
+    } else if (clockTime < (game.catnipNoRouteUntil || 0)) {
+      catnipStatEl.textContent = "No route to catnip";
     } else if (clockTime < game.catnipCooldownUntil) {
       catnipStatEl.textContent = `Cooldown (${Math.ceil(game.catnipCooldownUntil - clockTime)}s)`;
     } else {
       catnipStatEl.textContent = "Ready";
+    }
+
+    if (windowStatEl) {
+      if (clockTime < (game.windowOpenUntil || 0)) {
+        windowStatEl.textContent = `Open (${Math.max(0, Math.ceil(game.windowOpenUntil - clockTime))}s)`;
+      } else {
+        windowStatEl.textContent = "Closed";
+      }
+    }
+    if (windowBtnEl) {
+      const active = clockTime < (game.windowOpenUntil || 0);
+      windowBtnEl.textContent = active ? "Window Open" : "Open Window";
+      windowBtnEl.disabled = active;
     }
 
     if (game.state === "lost") {

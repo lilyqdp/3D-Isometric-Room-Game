@@ -82,6 +82,7 @@ export function createCatModelRuntime(ctx) {
       clipSpecialAction: null,
       clipSpecialState: "",
       clipSpecialPhase: "",
+      clipSpecialSeqIndex: 0,
       useClipLocomotion: false,
       clipWalkActive: false,
       clipWalkScale: 0,
@@ -111,13 +112,18 @@ export function createCatModelRuntime(ctx) {
       onTable: false,
       debugMoveActive: false,
       debugMoveSurface: "floor", // floor | elevated
+      debugMoveFinalSurfaceId: "floor",
       debugMoveY: 0,
+      debugMoveFinalY: 0,
       debugMoveJumpAnchor: new THREE.Vector3(0, 0, 0),
       debugMoveLanding: new THREE.Vector3(0, 0, 0),
       debugMoveJumpOff: new THREE.Vector3(0, 0, 0),
       debugMoveJumpDown: new THREE.Vector3(0, 0, 0),
+      debugMoveJumpDownY: 0,
+      debugMoveDirectJump: false,
       debugMoveSitSeconds: 0,
       debugMoveTarget: new THREE.Vector3(0, 0, 0),
+      debugMoveFinalTarget: new THREE.Vector3(0, 0, 0),
       tableRoamTarget: new THREE.Vector3(0, 0, 0),
       nextTableRoamAt: 0,
       speed: 1.0,
@@ -132,6 +138,7 @@ export function createCatModelRuntime(ctx) {
       swipeHitDone: false,
       jump: null, // {from,to,fromY,toY,dur,t,arc,next}
       landStopNextState: "patrol",
+      landStopDuration: 0.22,
       jumpAnchor: null,
       jumpTargets: null, // {hook, top}
       jumpApproachLock: false,
@@ -150,13 +157,25 @@ export function createCatModelRuntime(ctx) {
         repathAt: 0,
         anchorReplanAt: 0,
         anchorLandingCheckAt: 0,
+        jumpDownPlanAt: 0,
+        jumpDownPlanValid: false,
+        jumpDownNoMoveT: 0,
+        jumpDownDebug: {},
         jumpNoClip: false,
         jumpBypassCheckAt: 0,
+        lastSurfaceHopFrom: "",
+        lastSurfaceHopTo: "",
+        lastSurfaceHopAt: 0,
+        surfaceHopTrail: [],
         steerYaw: NaN,
         pickupTrapT: 0,
         unstuckCheckAt: 0,
         unstuckCheckPos: new THREE.Vector3(1.5, 0, 1.7),
         patrolPathCheckAt: 0,
+        catnipPathCheckAt: 0,
+        catnipUseExactTarget: false,
+        windowPathCheckAt: 0,
+        windowHoldActive: false,
         stuckT: 0,
         lastSpeed: 0,
       },
@@ -327,8 +346,25 @@ export function createCatModelRuntime(ctx) {
     return false;
   }
 
-  function makeInPlaceClip(clip) {
-    const tracks = clip.tracks.filter((track) => !isRootMotionTrack(track.name));
+  function isRootRotationTrack(trackName) {
+    const dot = trackName.lastIndexOf(".");
+    if (dot === -1) return false;
+    const prop = trackName.slice(dot + 1).toLowerCase();
+    if (prop !== "quaternion") return false;
+    return isRootMotionTrack(trackName);
+  }
+
+  function isJumpSpecialClipName(name = "") {
+    return /edge_to|edge_from|land_stop|fall_low|fall_high/i.test(name);
+  }
+
+  function makeInPlaceClip(clip, options = {}) {
+    const keepRootRotation = !!options.keepRootRotation;
+    const tracks = clip.tracks.filter((track) => {
+      if (!isRootMotionTrack(track.name)) return true;
+      if (keepRootRotation && isRootRotationTrack(track.name)) return true;
+      return false;
+    });
     if (tracks.length === clip.tracks.length) return clip;
     return new THREE.AnimationClip(clip.name, clip.duration, tracks);
   }
@@ -530,6 +566,31 @@ export function createCatModelRuntime(ctx) {
     }
 
     const lookDownClip = pickAnimationClip(inPlaceClips, [/lookdown/i]);
+    const lookUpClip = pickAnimationClip(inPlaceClips, [
+      /^look_up$/i,
+      /^lookup$/i,
+      /look[-_. ]?up/i,
+      /head[-_. ]?up/i,
+      /up[-_. ]?look/i,
+    ]);
+    const rearUpPrepClip = pickAnimationClip(inPlaceClips, [
+      /^edge_to$/i,
+      /^edge_idle$/i,
+      /edge_to/i,
+      /edge/i,
+      /^crouch_f$/i,
+      /^crouch_idle$/i,
+      /crouch_f/i,
+      /crouch/i,
+    ]);
+    const inclineClip = pickAnimationClip(inPlaceClips, [/^incline$/i, /incline/i]);
+    const inclineJumpPrepClip =
+      makeFrameRangeClip(inclineClip, "Incline__jumpPrep", 40, 48, 30) ||
+      rearUpPrepClip;
+    const jumpPrepareSequenceClips = [lookUpClip, inclineJumpPrepClip].filter(Boolean);
+    if (jumpPrepareSequenceClips.length === 0 && rearUpPrepClip) {
+      jumpPrepareSequenceClips.push(rearUpPrepClip);
+    }
     const eatIntroClip =
       makeFrameRangeClip(lookDownClip, "LookDown__eatIntro", 1, 28, 30) ||
       pickAnimationClip(inPlaceClips, [/eat_/i, /look/i, /licking_sit/i, /drink_/i, /sit_idle/i]);
@@ -538,25 +599,50 @@ export function createCatModelRuntime(ctx) {
       pickAnimationClip(inPlaceClips, [/licking_sit/i, /eat_/i, /drink_/i, /sit_idle/i, /look/i]);
 
     const clipStates = {
-      jumpUp: {
-        clip: pickAnimationClip(inPlaceClips, [/inplace/i, /jump/i, /crouch_f/i]),
+      jumpPrepare: {
+        sequenceClips: jumpPrepareSequenceClips,
+        sequenceSpeeds: jumpPrepareSequenceClips.map(() => 1.0),
+      },
+      jumpLaunch: {
+        clip: pickAnimationClip(inPlaceClips, [/^inplace$/i, /^jump/i, /inplace/i, /jump/i, /crouch_f/i]),
+        loop: false,
+        speed: 1.18,
+      },
+      jumpHook: {
+        clip: pickAnimationClip(inPlaceClips, [/^edge_to$/i, /^edge_idle$/i, /edge_to/i, /edge/i, /inplace/i]),
+        loop: false,
+        speed: 1.04,
+      },
+      jumpPull: {
+        clip: pickAnimationClip(inPlaceClips, [/^edge_from$/i, /^edge_to$/i, /edge_from/i, /edge_to/i, /land_run/i]),
+        loop: false,
+        speed: 1.08,
+      },
+      jumpSettle: {
+        clip: pickAnimationClip(inPlaceClips, [/^land_stop$/i, /^land_run$/i, /land_stop/i, /land/i, /^idle$/i, /base/i]),
         loop: false,
         speed: 1.0,
       },
-      jumpSettle: {
-        clip: pickAnimationClip(inPlaceClips, [/land_stop/i, /^idle$/i, /base/i]),
+      jumpDownPrepare: {
+        clip: pickAnimationClip(inPlaceClips, [/^edge_to$/i]),
         loop: false,
         speed: 1.0,
       },
       jumpDown: {
-        clip: pickAnimationClip(inPlaceClips, [/fall_low/i, /fall_high/i, /jump/i]),
+        clip: pickAnimationClip(inPlaceClips, [/^edge_from$/i]),
+        loop: false,
+        speed: 1.08,
+      },
+      landStop: {
+        clip: pickAnimationClip(inPlaceClips, [/^land_stop$/i]),
         loop: false,
         speed: 1.0,
       },
-      landStop: {
-        clip: pickAnimationClip(inPlaceClips, [/land_stop/i, /land_run/i, /sit_to/i]),
+      // Backward compatibility fallback if older state logic still asks for jumpUp.
+      jumpUp: {
+        clip: pickAnimationClip(inPlaceClips, [/^inplace$/i, /^jump/i, /inplace/i, /jump/i, /crouch_f/i]),
         loop: false,
-        speed: 1.0,
+        speed: 1.08,
       },
       swipe: {
         clip: pickAnimationClip(inPlaceClips, [/paw_r/i, /^paw_/i, /bite_r/i, /bite_l/i]),
@@ -576,6 +662,17 @@ export function createCatModelRuntime(ctx) {
       },
     };
     for (const [stateKey, def] of Object.entries(clipStates)) {
+      if (Array.isArray(def.sequenceClips) && def.sequenceClips.length > 0) {
+        const sequenceActions = def.sequenceClips
+          .map((clip) => (clip ? mixer.clipAction(clip) : null))
+          .filter(Boolean);
+        if (!sequenceActions.length) continue;
+        clipStates[stateKey] = {
+          sequenceActions,
+          sequenceSpeeds: Array.isArray(def.sequenceSpeeds) ? def.sequenceSpeeds : [],
+        };
+        continue;
+      }
       if (def.introClip || def.loopClip) {
         const introAction = def.introClip ? mixer.clipAction(def.introClip) : null;
         const loopAction = def.loopClip ? mixer.clipAction(def.loopClip) : null;
@@ -602,40 +699,74 @@ export function createCatModelRuntime(ctx) {
     if (!catObject.useClipLocomotion || !catObject.walkAction || !catObject.idleAction) return false;
     const def = specialState ? catObject.stateClipActions?.[specialState] : null;
     if (!def || !catObject.clipMixer) return false;
+    const hasSequenceList = Array.isArray(def.sequenceActions) && def.sequenceActions.length > 0;
     const hasSequence = !!(def.introAction || def.loopAction);
-    if (!hasSequence && !def.action) return false;
+    if (!hasSequenceList && !hasSequence && !def.action) return false;
     const mixer = catObject.clipMixer;
 
-    const startAction = (action, loop, speed, crossFade = true) => {
+    const resolveSpecialSpeed = (stateName, fallbackSpeed) => {
+      const overrides = catObject.clipSpecialSpeedOverrides;
+      if (overrides && Number.isFinite(overrides[stateName])) return overrides[stateName];
+      return fallbackSpeed;
+    };
+
+    const startAction = (action, loop, speed, crossFade = 0.1) => {
+      const resolvedSpeed = resolveSpecialSpeed(specialState, speed ?? 1);
       action.enabled = true;
+      action.paused = false;
       action.clampWhenFinished = true;
       action.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, loop ? Infinity : 1);
-      action.setEffectiveTimeScale(speed ?? 1);
+      action.setEffectiveTimeScale(resolvedSpeed ?? 1);
       if (catObject.clipSpecialAction !== action) {
         action.reset().play();
         action.setEffectiveWeight(1);
-        if (crossFade && catObject.clipSpecialAction && catObject.clipSpecialAction !== action) {
-          catObject.clipSpecialAction.crossFadeTo(action, 0.1, false);
+        const fadeFromAction = catObject.clipSpecialAction || catObject.activeClipAction;
+        if (crossFade && fadeFromAction && fadeFromAction !== action) {
+          const fadeDur = typeof crossFade === "number" ? Math.max(0.01, crossFade) : 0.1;
+          fadeFromAction.crossFadeTo(action, fadeDur, false);
         }
         catObject.clipSpecialAction = action;
       } else {
         action.play();
         action.setEffectiveWeight(1);
+        action.setEffectiveTimeScale(resolvedSpeed ?? 1);
       }
     };
 
-    if (hasSequence) {
+    const resolveSpecialCrossFade = (fromState, toState) => {
+      if (!fromState || !toState) return 0.1;
+      if (fromState === toState) return 0.08;
+      if (fromState === "jumpPrepare" && toState === "jumpUp") return 0.14;
+      if (fromState === "jumpDownPrepare" && toState === "jumpDown") return 0.08;
+      if (fromState === "jumpDown" && toState === "landStop") return 0.1;
+      if (fromState === "jumpDownPrepare" && toState === "landStop") return 0.1;
+      return 0.12;
+    };
+    const stateCrossFade = resolveSpecialCrossFade(catObject.clipSpecialState, specialState);
+
+    if (hasSequenceList) {
+      if (catObject.clipSpecialState !== specialState) {
+        const firstAction = def.sequenceActions[0];
+        const firstSpeed = def.sequenceSpeeds?.[0] ?? 1.0;
+        startAction(firstAction, false, firstSpeed, stateCrossFade);
+        catObject.clipSpecialState = specialState;
+        catObject.clipSpecialPhase = "sequence";
+        catObject.clipSpecialSeqIndex = 0;
+      }
+    } else if (hasSequence) {
       if (catObject.clipSpecialState !== specialState) {
         const firstAction = def.introAction || def.loopAction;
         const firstIsLoop = !def.introAction;
-        startAction(firstAction, firstIsLoop, firstIsLoop ? def.loopSpeed : def.introSpeed, true);
+        startAction(firstAction, firstIsLoop, firstIsLoop ? def.loopSpeed : def.introSpeed, stateCrossFade);
         catObject.clipSpecialState = specialState;
         catObject.clipSpecialPhase = firstIsLoop ? "loop" : "intro";
+        catObject.clipSpecialSeqIndex = 0;
       }
     } else if (catObject.clipSpecialState !== specialState) {
-      startAction(def.action, def.loop, def.speed, true);
+      startAction(def.action, def.loop, def.speed, stateCrossFade);
       catObject.clipSpecialState = specialState;
       catObject.clipSpecialPhase = def.loop ? "loop" : "single";
+      catObject.clipSpecialSeqIndex = 0;
     }
 
     catObject.walkAction.enabled = true;
@@ -655,7 +786,31 @@ export function createCatModelRuntime(ctx) {
       }
     }
 
-    if (hasSequence) {
+    if (hasSequenceList) {
+      const seqCount = def.sequenceActions.length;
+      let seqIdx = Number.isFinite(catObject.clipSpecialSeqIndex) ? Math.floor(catObject.clipSpecialSeqIndex) : 0;
+      seqIdx = Math.max(0, Math.min(seqCount - 1, seqIdx));
+      const seqAction = def.sequenceActions[seqIdx];
+      const seqSpeed = def.sequenceSpeeds?.[seqIdx] ?? 1.0;
+      if (catObject.clipSpecialAction !== seqAction) {
+        startAction(seqAction, false, seqSpeed, false);
+      }
+      const seqDur = Math.max(seqAction.getClip().duration, 0.001);
+      if (seqAction.time >= seqDur - 1 / 60) {
+        if (seqIdx < seqCount - 1) {
+          const nextIdx = seqIdx + 1;
+          const nextAction = def.sequenceActions[nextIdx];
+          const nextSpeed = def.sequenceSpeeds?.[nextIdx] ?? 1.0;
+          startAction(nextAction, false, nextSpeed, true);
+          catObject.clipSpecialSeqIndex = nextIdx;
+        } else {
+          // Hold on last frame of the sequence until state changes.
+          seqAction.time = seqDur;
+          seqAction.paused = true;
+          seqAction.setEffectiveWeight(1);
+        }
+      }
+    } else if (hasSequence) {
       if (catObject.clipSpecialPhase === "intro" && def.introAction && def.loopAction) {
         const introAction = def.introAction;
         if (catObject.clipSpecialAction !== introAction) {
@@ -675,6 +830,8 @@ export function createCatModelRuntime(ctx) {
       }
     } else if (catObject.clipSpecialAction) {
       catObject.clipSpecialAction.setEffectiveWeight(1);
+      const resolvedSpeed = resolveSpecialSpeed(specialState, def.speed ?? 1);
+      catObject.clipSpecialAction.setEffectiveTimeScale(resolvedSpeed ?? 1);
     }
 
     catObject.activeClipAction = catObject.clipSpecialAction;
@@ -684,12 +841,25 @@ export function createCatModelRuntime(ctx) {
 
   function updateCatClipLocomotion(catObject, dt, moving, speedNorm, worldSpeed = 0) {
     if (!catObject.useClipLocomotion || !catObject.clipMixer || !catObject.walkAction || !catObject.idleAction) return;
+    let lingeringSpecialAction = null;
     if (catObject.clipSpecialAction) {
-      catObject.clipSpecialAction.setEffectiveWeight(0);
-      catObject.clipSpecialAction.stop();
-      catObject.clipSpecialAction = null;
-      catObject.clipSpecialState = "";
-      catObject.clipSpecialPhase = "";
+      const specialAction = catObject.clipSpecialAction;
+      specialAction.enabled = true;
+      specialAction.play();
+      const specialWeight = Number.isFinite(specialAction.getEffectiveWeight())
+        ? specialAction.getEffectiveWeight()
+        : 1;
+      const fadedWeight = THREE.MathUtils.damp(specialWeight, 0, 18, Math.max(dt, 0));
+      specialAction.setEffectiveWeight(fadedWeight);
+      if (fadedWeight <= 0.01) {
+        specialAction.stop();
+        catObject.clipSpecialAction = null;
+        catObject.clipSpecialState = "";
+        catObject.clipSpecialPhase = "";
+        catObject.clipSpecialSeqIndex = 0;
+      } else {
+        lingeringSpecialAction = specialAction;
+      }
     }
 
     const locomotionActions = catObject.locomotionActions || {};
@@ -736,7 +906,7 @@ export function createCatModelRuntime(ctx) {
     );
     const activeScale = Math.max(0.01, catObject.clipWalkScale);
 
-    const allActions = new Set([idleAction, walkAction, ...Object.values(locomotionActions)].filter(Boolean));
+    const allActions = new Set([idleAction, walkAction, ...Object.values(locomotionActions), lingeringSpecialAction].filter(Boolean));
     for (const action of allActions) {
       const actionKey = keyMap.get(action) || (action === idleAction ? "idle" : "walkF");
       const targetWeight = action === target ? 1 : 0;

@@ -234,12 +234,33 @@ export function createCupRuntime(ctx) {
     if (cup.falling || cup.broken || !cup.body) return;
     const dx = cup.group.position.x - cat.pos.x;
     const dz = cup.group.position.z - cat.pos.z;
-    const minDist = CUP_COLLISION.radius + 0.24;
-    if (dx * dx + dz * dz > minDist * minDist) return;
+    const distSq = dx * dx + dz * dz;
+    const contactDist = CUP_COLLISION.radius + 0.26;
+    const proximityDist = CUP_COLLISION.radius + 0.34;
+    if (distSq > proximityDist * proximityDist) return;
     if (Math.abs(cat.group.position.y - desk.topY) > 0.26) return;
-    const catSpeed = Number.isFinite(cat.nav?.lastSpeed) ? cat.nav.lastSpeed : 0;
-    if (catSpeed < 0.16) return;
-    knockCup({ dirX: dx, dirZ: dz, strength: THREE.MathUtils.clamp(0.7 + catSpeed * 0.5, 0.7, 1.5) });
+    const catSpeed = Math.max(
+      Number.isFinite(cat.nav?.lastSpeed) ? cat.nav.lastSpeed : 0,
+      Number.isFinite(cat.nav?.commandedSpeed) ? cat.nav.commandedSpeed : 0
+    );
+
+    let dirX = dx;
+    let dirZ = dz;
+    if (dirX * dirX + dirZ * dirZ < 1e-4) {
+      dirX = Math.sin(cat.group.rotation.y);
+      dirZ = Math.cos(cat.group.rotation.y);
+    }
+    const dist = Math.sqrt(Math.max(1e-8, distSq));
+    const proximityT = THREE.MathUtils.clamp(
+      1 - (dist - contactDist) / Math.max(0.0001, proximityDist - contactDist),
+      0,
+      1
+    );
+    knockCup({
+      dirX,
+      dirZ,
+      strength: THREE.MathUtils.clamp(0.9 + proximityT * 0.24 + catSpeed * 0.45, 0.9, 1.8),
+    });
   }
 
   function updateCup(dt) {

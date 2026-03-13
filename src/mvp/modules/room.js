@@ -1,6 +1,6 @@
 import * as THREE from "three";
 
-export function makeRoomCorner(scene) {
+export function makeRoomCorner(scene, options = {}) {
   const floor = new THREE.Mesh(
     new THREE.BoxGeometry(14, 0.2, 10),
     new THREE.MeshStandardMaterial({ color: 0xbcc3ce, roughness: 0.95 })
@@ -9,22 +9,80 @@ export function makeRoomCorner(scene) {
   scene.add(floor);
 
   const wallMat = new THREE.MeshStandardMaterial({ color: 0x7f8690, roughness: 0.98 });
-  const backWall = new THREE.Mesh(new THREE.BoxGeometry(14, 4.2, 0.2), wallMat);
-  backWall.position.set(-1, 2.0, -6);
-  scene.add(backWall);
+  const wallCenterX = -1;
+  const wallCenterY = 2.0;
+  const wallCenterZ = -6;
+  const wallWidth = 14;
+  const wallHeight = 4.2;
+  const wallThickness = 0.2;
+  const wallMinX = wallCenterX - wallWidth * 0.5;
+  const wallMaxX = wallCenterX + wallWidth * 0.5;
+  const wallMinY = wallCenterY - wallHeight * 0.5;
+  const wallMaxY = wallCenterY + wallHeight * 0.5;
+
+  const addBackWallPiece = (minX, maxX, minY, maxY) => {
+    const w = maxX - minX;
+    const h = maxY - minY;
+    if (w <= 0.02 || h <= 0.02) return;
+    const piece = new THREE.Mesh(new THREE.BoxGeometry(w, h, wallThickness), wallMat);
+    piece.position.set((minX + maxX) * 0.5, (minY + maxY) * 0.5, wallCenterZ);
+    scene.add(piece);
+  };
+
+  const opening = options?.windowOpening;
+  if (opening) {
+    const halfW = Math.max(0.1, Number(opening.width) * 0.5);
+    const halfH = Math.max(0.1, Number(opening.height) * 0.5);
+    const rawCenterX = Number(opening.centerX);
+    const rawCenterY = Number(opening.centerY);
+    const ox = THREE.MathUtils.clamp(
+      Number.isFinite(rawCenterX) ? rawCenterX : wallCenterX,
+      wallMinX + halfW,
+      wallMaxX - halfW
+    );
+    const oy = THREE.MathUtils.clamp(
+      Number.isFinite(rawCenterY) ? rawCenterY : wallCenterY,
+      wallMinY + halfH,
+      wallMaxY - halfH
+    );
+    const openMinX = ox - halfW;
+    const openMaxX = ox + halfW;
+    const openMinY = oy - halfH;
+    const openMaxY = oy + halfH;
+
+    // Build the back wall as 4 pieces around the window hole.
+    addBackWallPiece(wallMinX, openMinX, wallMinY, wallMaxY); // left
+    addBackWallPiece(openMaxX, wallMaxX, wallMinY, wallMaxY); // right
+    addBackWallPiece(openMinX, openMaxX, wallMinY, openMinY); // bottom
+    addBackWallPiece(openMinX, openMaxX, openMaxY, wallMaxY); // top
+
+    // Window reveal so the wall opening has visible depth.
+    const revealMat = new THREE.MeshStandardMaterial({ color: 0x6f7680, roughness: 0.86 });
+    const revealT = 0.03;
+    const revealLeft = new THREE.Mesh(new THREE.BoxGeometry(revealT, openMaxY - openMinY, wallThickness), revealMat);
+    revealLeft.position.set(openMinX + revealT * 0.5, (openMinY + openMaxY) * 0.5, wallCenterZ);
+    scene.add(revealLeft);
+
+    const revealRight = new THREE.Mesh(new THREE.BoxGeometry(revealT, openMaxY - openMinY, wallThickness), revealMat);
+    revealRight.position.set(openMaxX - revealT * 0.5, (openMinY + openMaxY) * 0.5, wallCenterZ);
+    scene.add(revealRight);
+
+    const revealTop = new THREE.Mesh(new THREE.BoxGeometry(openMaxX - openMinX, revealT, wallThickness), revealMat);
+    revealTop.position.set((openMinX + openMaxX) * 0.5, openMaxY - revealT * 0.5, wallCenterZ);
+    scene.add(revealTop);
+
+    const revealBottom = new THREE.Mesh(new THREE.BoxGeometry(openMaxX - openMinX, revealT, wallThickness), revealMat);
+    revealBottom.position.set((openMinX + openMaxX) * 0.5, openMinY + revealT * 0.5, wallCenterZ);
+    scene.add(revealBottom);
+  } else {
+    const backWall = new THREE.Mesh(new THREE.BoxGeometry(wallWidth, wallHeight, wallThickness), wallMat);
+    backWall.position.set(wallCenterX, wallCenterY, wallCenterZ);
+    scene.add(backWall);
+  }
 
   const leftWall = new THREE.Mesh(new THREE.BoxGeometry(0.2, 4.2, 10), wallMat);
   leftWall.position.set(-8, 2.0, -1);
   scene.add(leftWall);
-
-  const trimMat = new THREE.MeshStandardMaterial({ color: 0x6f7680, roughness: 0.86 });
-  const backTrim = new THREE.Mesh(new THREE.BoxGeometry(14, 0.14, 0.14), trimMat);
-  backTrim.position.set(-1, 0.07, -5.88);
-  scene.add(backTrim);
-
-  const leftTrim = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.14, 10), trimMat);
-  leftTrim.position.set(-7.88, 0.07, -1);
-  scene.add(leftTrim);
 }
 
 export function makeDesk(scene, desk) {
@@ -34,11 +92,12 @@ export function makeDesk(scene, desk) {
   const top = new THREE.Mesh(new THREE.BoxGeometry(desk.sizeX, 0.12, desk.sizeZ), topMat);
   top.position.set(desk.pos.x, 1.02, desk.pos.z);
   top.userData.catSurface = {
+    id: "desk",
     y: desk.topY + 0.02,
-    minX: desk.pos.x - desk.sizeX * 0.5 + 0.2,
-    maxX: desk.pos.x + desk.sizeX * 0.5 - 0.2,
-    minZ: desk.pos.z - desk.sizeZ * 0.5 + 0.16,
-    maxZ: desk.pos.z + desk.sizeZ * 0.5 - 0.16,
+    minX: desk.pos.x - desk.sizeX * 0.5,
+    maxX: desk.pos.x + desk.sizeX * 0.5,
+    minZ: desk.pos.z - desk.sizeZ * 0.5,
+    maxZ: desk.pos.z + desk.sizeZ * 0.5,
   };
   scene.add(top);
 
@@ -54,6 +113,235 @@ export function makeDesk(scene, desk) {
     leg.position.set(desk.pos.x + dx, 0.5, desk.pos.z + dz);
     scene.add(leg);
   }
+}
+
+export function makeChair(scene, chair) {
+  const seatMat = new THREE.MeshStandardMaterial({ color: 0x544a41, roughness: 0.82 });
+  const legMat = new THREE.MeshStandardMaterial({ color: 0x39332d, roughness: 0.84 });
+  const backMat = new THREE.MeshStandardMaterial({ color: 0x4c433b, roughness: 0.8 });
+
+  const seat = new THREE.Mesh(
+    new THREE.BoxGeometry(chair.sizeX, chair.seatThickness, chair.sizeZ),
+    seatMat
+  );
+  seat.position.set(chair.pos.x, chair.seatY - chair.seatThickness * 0.5, chair.pos.z);
+  seat.userData.catSurface = {
+    id: "chair",
+    y: chair.seatY + 0.02,
+    minX: chair.pos.x - chair.sizeX * 0.5,
+    maxX: chair.pos.x + chair.sizeX * 0.5,
+    minZ: chair.pos.z - chair.sizeZ * 0.5,
+    maxZ: chair.pos.z + chair.sizeZ * 0.5,
+  };
+  scene.add(seat);
+
+  const legHeight = Math.max(0.12, chair.seatY - chair.seatThickness);
+  const legGeo = new THREE.BoxGeometry(chair.legHalfX * 2, legHeight, chair.legHalfZ * 2);
+  const legOffsets = [
+    [-chair.legInsetX, -chair.legInsetZ],
+    [chair.legInsetX, -chair.legInsetZ],
+    [-chair.legInsetX, chair.legInsetZ],
+    [chair.legInsetX, chair.legInsetZ],
+  ];
+  for (const [dx, dz] of legOffsets) {
+    const leg = new THREE.Mesh(legGeo, legMat);
+    leg.position.set(chair.pos.x + dx, legHeight * 0.5, chair.pos.z + dz);
+    scene.add(leg);
+  }
+
+  const back = new THREE.Mesh(
+    new THREE.BoxGeometry(chair.sizeX, chair.backHeight, chair.backThickness),
+    backMat
+  );
+  back.position.set(
+    chair.pos.x,
+    chair.seatY + chair.backHeight * 0.5 - chair.seatThickness * 0.5,
+    chair.pos.z - chair.sizeZ * 0.5 + chair.backThickness * 0.5
+  );
+  scene.add(back);
+}
+
+export function makeShelf(scene, shelf) {
+  const postMat = new THREE.MeshStandardMaterial({ color: 0x4a4f59, roughness: 0.84 });
+  const boardMat = new THREE.MeshStandardMaterial({ color: 0x656c78, roughness: 0.78 });
+  const backMat = new THREE.MeshStandardMaterial({ color: 0x57606d, roughness: 0.86 });
+
+  const board = new THREE.Mesh(
+    new THREE.BoxGeometry(shelf.width, shelf.boardThickness, shelf.depth),
+    boardMat
+  );
+  board.position.set(shelf.pos.x, shelf.surfaceY - shelf.boardThickness * 0.5, shelf.pos.z);
+  board.userData.catSurface = {
+    id: "shelf",
+    y: shelf.surfaceY + 0.02,
+    minX: shelf.pos.x - shelf.width * 0.5,
+    maxX: shelf.pos.x + shelf.width * 0.5,
+    minZ: shelf.pos.z - shelf.depth * 0.5,
+    maxZ: shelf.pos.z + shelf.depth * 0.5,
+  };
+  scene.add(board);
+
+  const postHeight = Math.max(0.3, shelf.surfaceY - shelf.boardThickness);
+  const postGeo = new THREE.BoxGeometry(shelf.postHalf * 2, postHeight, shelf.postHalf * 2);
+  const postInsetX = shelf.width * 0.5 - shelf.postHalf;
+  const postInsetZ = shelf.depth * 0.5 - shelf.postHalf;
+  const postOffsets = [
+    [-postInsetX, -postInsetZ],
+    [postInsetX, -postInsetZ],
+    [-postInsetX, postInsetZ],
+    [postInsetX, postInsetZ],
+  ];
+  for (const [dx, dz] of postOffsets) {
+    const post = new THREE.Mesh(postGeo, postMat);
+    post.position.set(shelf.pos.x + dx, postHeight * 0.5, shelf.pos.z + dz);
+    scene.add(post);
+  }
+
+  const backPanel = new THREE.Mesh(
+    new THREE.BoxGeometry(shelf.width, shelf.surfaceY - 0.2 + 0.08, 0.04),
+    backMat
+  );
+  backPanel.position.set(
+    shelf.pos.x,
+    (shelf.surfaceY + 0.2) * 0.5 - shelf.boardThickness * 0.5,
+    shelf.pos.z - shelf.depth * 0.5 + 0.02
+  );
+  scene.add(backPanel);
+}
+
+export function makeHoverShelf(scene, hoverShelf) {
+  const boardMat = new THREE.MeshStandardMaterial({ color: 0x6a7280, roughness: 0.78 });
+  const board = new THREE.Mesh(
+    new THREE.BoxGeometry(hoverShelf.width, hoverShelf.thickness, hoverShelf.depth),
+    boardMat
+  );
+  board.position.set(
+    hoverShelf.pos.x,
+    hoverShelf.surfaceY - hoverShelf.thickness * 0.5,
+    hoverShelf.pos.z
+  );
+  board.userData.catSurface = {
+    id: hoverShelf.id || "hoverShelf",
+    y: hoverShelf.surfaceY + 0.02,
+    minX: hoverShelf.pos.x - hoverShelf.width * 0.5,
+    maxX: hoverShelf.pos.x + hoverShelf.width * 0.5,
+    minZ: hoverShelf.pos.z - hoverShelf.depth * 0.5,
+    maxZ: hoverShelf.pos.z + hoverShelf.depth * 0.5,
+  };
+  scene.add(board);
+}
+
+export function makeWindowSill(scene, windowSill) {
+  const frameMat = new THREE.MeshStandardMaterial({ color: 0x636d7b, roughness: 0.64, metalness: 0.05 });
+  const sillMat = new THREE.MeshStandardMaterial({ color: 0x767f8c, roughness: 0.62, metalness: 0.03 });
+  const glassMat = new THREE.MeshStandardMaterial({
+    color: 0xf1f2f4,
+    roughness: 0.05,
+    metalness: 0.04,
+    transparent: true,
+    opacity: 0.2,
+  });
+
+  const root = new THREE.Group();
+  root.position.set(windowSill.pos.x, 0, windowSill.pos.z);
+
+  const sill = new THREE.Mesh(
+    new THREE.BoxGeometry(windowSill.width, windowSill.thickness, windowSill.depth),
+    sillMat
+  );
+  sill.position.set(0, windowSill.surfaceY - windowSill.thickness * 0.5, 0);
+  sill.userData.catSurface = {
+    id: windowSill.id || "windowSill",
+    y: windowSill.surfaceY + 0.02,
+    minX: windowSill.pos.x - windowSill.width * 0.5,
+    maxX: windowSill.pos.x + windowSill.width * 0.5,
+    minZ: windowSill.pos.z - windowSill.depth * 0.5,
+    maxZ: windowSill.pos.z + windowSill.depth * 0.5,
+  };
+  root.add(sill);
+
+  const openingW = windowSill.windowWidth;
+  const openingH = windowSill.windowHeight;
+  const frameT = 0.055;
+  const frameDepth = 0.1;
+  const frameY = windowSill.openingCenterY;
+  const frameZ = (windowSill.wallZ - windowSill.pos.z) + frameDepth * 0.5;
+
+  const frameTop = new THREE.Mesh(new THREE.BoxGeometry(openingW + frameT * 2, frameT, frameDepth), frameMat);
+  frameTop.position.set(0, frameY + openingH * 0.5 + frameT * 0.5, frameZ);
+  root.add(frameTop);
+
+  const frameBottom = new THREE.Mesh(new THREE.BoxGeometry(openingW + frameT * 2, frameT, frameDepth), frameMat);
+  frameBottom.position.set(0, frameY - openingH * 0.5 - frameT * 0.5, frameZ);
+  root.add(frameBottom);
+
+  const frameLeft = new THREE.Mesh(new THREE.BoxGeometry(frameT, openingH, frameDepth), frameMat);
+  frameLeft.position.set(-openingW * 0.5 - frameT * 0.5, frameY, frameZ);
+  root.add(frameLeft);
+
+  const frameRight = new THREE.Mesh(new THREE.BoxGeometry(frameT, openingH, frameDepth), frameMat);
+  frameRight.position.set(openingW * 0.5 + frameT * 0.5, frameY, frameZ);
+  root.add(frameRight);
+
+  // Sliding sash pane: opening the window moves the pane upward.
+  const paneWidth = openingW * 0.92;
+  const paneHeight = openingH * 0.9;
+  const paneDepth = frameT * 0.45;
+  const paneBaseY = frameY;
+  const paneZ = frameZ + 0.012;
+  const paneOpenLift = openingH * 0.78;
+
+  const pane = new THREE.Mesh(
+    new THREE.BoxGeometry(paneWidth, paneHeight, paneDepth),
+    glassMat
+  );
+  pane.position.set(0, paneBaseY, paneZ);
+  root.add(pane);
+
+  // Bottom sash rail (the visible line is at the bottom of the glass, not center).
+  const bottomRailHeight = frameT * 0.95;
+  const bottomRailZ = frameZ + 0.016;
+  const bottomRailBaseY = paneBaseY - paneHeight * 0.5 + bottomRailHeight * 0.5;
+  const bottomRail = new THREE.Mesh(
+    new THREE.BoxGeometry(paneWidth, bottomRailHeight, frameT * 0.62),
+    frameMat
+  );
+  bottomRail.position.set(0, bottomRailBaseY, bottomRailZ);
+  root.add(bottomRail);
+
+  const sillLip = new THREE.Mesh(
+    new THREE.BoxGeometry(windowSill.width + 0.08, 0.04, 0.08),
+    frameMat
+  );
+  // Keep the sill crease toward the wall/window side rather than room-facing edge.
+  sillLip.position.set(0, windowSill.surfaceY + 0.015, -windowSill.depth * 0.5 - 0.02);
+  root.add(sillLip);
+
+  root.userData.windowSill = {
+    pane,
+    bottomRail,
+    paneBaseY,
+    bottomRailBaseY,
+    paneOpenLift,
+  };
+  root.userData.openAmount = 0;
+  scene.add(root);
+
+  function setOpenAmount(value) {
+    const t = THREE.MathUtils.clamp(Number.isFinite(value) ? value : 0, 0, 1);
+    root.userData.openAmount = t;
+    const data = root.userData.windowSill;
+    const dy = data.paneOpenLift * t;
+    data.pane.position.y = data.paneBaseY + dy;
+    data.bottomRail.position.y = data.bottomRailBaseY + dy;
+  }
+
+  setOpenAmount(0);
+  return {
+    root,
+    sill,
+    setOpenAmount,
+  };
 }
 
 function loadTrashCanModel({ trashGroup, fallbackMeshes, gltfLoader, modelCandidates, trashCan }) {

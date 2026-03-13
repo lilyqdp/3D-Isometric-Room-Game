@@ -94,15 +94,34 @@ export function createDebugControlsRuntime(ctx) {
 
   function getGroundPlanningStart(fromPos = cat.pos) {
     const start = new THREE.Vector3(fromPos.x, 0, fromPos.z);
-    if (!cat.onTable && cat.group.position.y <= 0.08) return start;
     return navRuntime.findSafeGroundPoint(start);
   }
 
-  function pathLength(path) {
-    if (!path || path.length < 2) return Infinity;
-    let d = 0;
-    for (let i = 1; i < path.length; i++) d += path[i - 1].distanceTo(path[i]);
-    return d;
+  function getElevatedSurfaceById(surfaceId) {
+    if (!surfaceId || surfaceId === "floor") return null;
+    const defs = getElevatedSurfaceDefs(true);
+    if (!Array.isArray(defs)) return null;
+    return defs.find((s) => String(s?.id || s?.name || "") === String(surfaceId)) || null;
+  }
+
+  function getCurrentCatSurface(fromPos = cat.pos) {
+    if (!cat.onTable && cat.group.position.y <= 0.08) {
+      return { id: "floor", y: 0 };
+    }
+    const elevated = getElevatedSurfaceAt(fromPos, cat.group.position.y);
+    if (elevated) {
+      return {
+        id: String(elevated.id || elevated.name || "desk"),
+        y: Number.isFinite(elevated.y) ? elevated.y : Math.max(0.02, cat.group.position.y),
+      };
+    }
+    const fallbackId = cat.debugMoveSurfaceId && cat.debugMoveSurfaceId !== "floor"
+      ? String(cat.debugMoveSurfaceId)
+      : "desk";
+    const fallbackY = Number.isFinite(cat.group.position.y)
+      ? Math.max(0.02, cat.group.position.y)
+      : (Number.isFinite(cat.debugMoveY) ? Math.max(0.02, cat.debugMoveY) : desk.topY + 0.02);
+    return { id: fallbackId, y: fallbackY };
   }
 
   function pointInTriangleXZ(px, pz, ax, az, bx, bz, cx, cz) {
@@ -179,30 +198,6 @@ export function createDebugControlsRuntime(ctx) {
     return false;
   }
 
-  function isJumpLandingClearForSurface(landing, surfaceY, dynamicObstacles) {
-    const landingClearance = CAT_COLLISION.catBodyRadius * 1.5;
-    if (navRuntime.isCatPointBlocked(landing.x, landing.z, dynamicObstacles, landingClearance, surfaceY)) return false;
-
-    const landingClearance2 = landingClearance * landingClearance;
-    if (!cup.broken && !cup.falling && cup.group.visible) {
-      if (Math.abs(cup.group.position.y - surfaceY) <= 0.36) {
-        const dx = landing.x - cup.group.position.x;
-        const dz = landing.z - cup.group.position.z;
-        if (dx * dx + dz * dz < landingClearance2) return false;
-      }
-    }
-
-    for (const pickup of pickups) {
-      if (!pickup?.mesh || !pickup.mesh.visible) continue;
-      if (Math.abs(pickup.mesh.position.y - surfaceY) > 0.36) continue;
-      const dx = landing.x - pickup.mesh.position.x;
-      const dz = landing.z - pickup.mesh.position.z;
-      if (dx * dx + dz * dz < landingClearance2) return false;
-    }
-
-    return true;
-  }
-
   function buildElevatedWaypointPlan(surface, wantedPoint, fromPos = cat.pos) {
     const surfaceMargin = CAT_COLLISION.catBodyRadius + 0.05;
     const usableMinX = surface.minX + surfaceMargin;
@@ -213,50 +208,97 @@ export function createDebugControlsRuntime(ctx) {
     const targetX = THREE.MathUtils.clamp(wantedPoint.x, usableMinX, usableMaxX);
     const targetZ = THREE.MathUtils.clamp(wantedPoint.z, usableMinZ, usableMaxZ);
     const target = new THREE.Vector3(targetX, 0, targetZ);
-    const planningStart = getGroundPlanningStart(fromPos);
-    const dynamicObstacles = navRuntime.buildCatObstacles(true, true);
-    const clearance = navRuntime.getCatPathClearance();
-    const jumpOffset = Math.max(CAT_COLLISION.catBodyRadius + 0.28, 0.5);
-    const landingInset = surfaceMargin;
-    const sides = [
-      { nx: -1, nz: 0, edgeX: surface.minX, edgeZ: THREE.MathUtils.clamp(targetZ, usableMinZ, usableMaxZ) },
-      { nx: 1, nz: 0, edgeX: surface.maxX, edgeZ: THREE.MathUtils.clamp(targetZ, usableMinZ, usableMaxZ) },
-      { nx: 0, nz: -1, edgeX: THREE.MathUtils.clamp(targetX, usableMinX, usableMaxX), edgeZ: surface.minZ },
-      { nx: 0, nz: 1, edgeX: THREE.MathUtils.clamp(targetX, usableMinX, usableMaxX), edgeZ: surface.maxZ },
-    ];
-
-    let best = null;
-    let bestScore = Infinity;
-    for (const side of sides) {
-      const landing = new THREE.Vector3(
-        side.edgeX - side.nx * landingInset,
-        0,
-        side.edgeZ - side.nz * landingInset
-      );
-      const anchorRaw = new THREE.Vector3(
-        side.edgeX + side.nx * jumpOffset,
-        0,
-        side.edgeZ + side.nz * jumpOffset
-      );
-      const anchor = clampToRoomFloor(anchorRaw);
-      if (navRuntime.isCatPointBlocked(anchor.x, anchor.z, dynamicObstacles, clearance)) continue;
-      if (!isJumpLandingClearForSurface(landing, surface.y, dynamicObstacles)) continue;
-      if (!navRuntime.canReachGroundTarget(planningStart, anchor, dynamicObstacles)) continue;
-      const path = navRuntime.computeCatPath(planningStart, anchor, dynamicObstacles);
-      const score = pathLength(path) + landing.distanceTo(target) * 0.25;
-      if (score < bestScore) {
-        bestScore = score;
-        best = { anchor, landing };
-      }
+    const surfaceId = String(surface?.id || surface?.name || "desk");
+    const sourceSurface = getCurrentCatSurface(fromPos);
+    if (sourceSurface.id === surfaceId) {
+      return {
+        surface: "elevated",
+        surfaceId,
+        point: new THREE.Vector3(targetX, surface.y, targetZ),
+        finalSurfaceId: surfaceId,
+        finalPoint: new THREE.Vector3(targetX, surface.y, targetZ),
+        floorPoint: clampToRoomFloor(wantedPoint),
+      };
     }
-
-    if (!best) return null;
+    const planningStart = sourceSurface.id === "floor"
+      ? getGroundPlanningStart(fromPos)
+      : new THREE.Vector3(fromPos.x, sourceSurface.y, fromPos.z);
+    const dynamicObstacles = navRuntime.buildCatObstacles(true, true);
+    const anchor = typeof navRuntime.bestSurfaceJumpAnchor === "function"
+      ? navRuntime.bestSurfaceJumpAnchor(
+          surfaceId,
+          planningStart,
+          target,
+          sourceSurface.id
+        )
+      : navRuntime.bestDeskJumpAnchor(planningStart, target);
+    if (!anchor) {
+      // Fallback: if direct elevated->elevated linking is unavailable, route via floor
+      // and keep final target on requested elevated surface.
+      if (sourceSurface.id !== "floor") {
+        const floorPoint = clampToRoomFloor(wantedPoint);
+        return {
+          surface: "floor",
+          point: floorPoint.clone(),
+          floorPoint,
+          finalSurfaceId: surfaceId,
+          finalPoint: new THREE.Vector3(targetX, surface.y, targetZ),
+        };
+      }
+      return null;
+    }
+    if (sourceSurface.id === "floor" && !navRuntime.canReachGroundTarget(planningStart, anchor, dynamicObstacles)) {
+      return null;
+    }
+    const jumpTargets = typeof navRuntime.computeSurfaceJumpTargets === "function"
+      ? navRuntime.computeSurfaceJumpTargets(
+          surfaceId,
+          anchor,
+          target,
+          sourceSurface.id
+        )
+      : navRuntime.computeDeskJumpTargets(anchor, target);
+    if (!jumpTargets?.top) {
+      if (sourceSurface.id !== "floor") {
+        const floorPoint = clampToRoomFloor(wantedPoint);
+        return {
+          surface: "floor",
+          point: floorPoint.clone(),
+          floorPoint,
+          finalSurfaceId: surfaceId,
+          finalPoint: new THREE.Vector3(targetX, surface.y, targetZ),
+        };
+      }
+      return null;
+    }
+    const hopSurfaceId = String(jumpTargets.surfaceId || surfaceId);
+    if (hopSurfaceId === "floor") {
+      const hopFloor = clampToRoomFloor(jumpTargets.top);
+      return {
+        surface: "floor",
+        point: hopFloor.clone(),
+        floorPoint: hopFloor,
+        finalSurfaceId: surfaceId,
+        finalPoint: new THREE.Vector3(targetX, surface.y, targetZ),
+      };
+    }
+    const hopSurfaceDef = getElevatedSurfaceById(hopSurfaceId);
+    const hopY = Number.isFinite(hopSurfaceDef?.y)
+      ? hopSurfaceDef.y
+      : (hopSurfaceId === surfaceId ? surface.y : jumpTargets.top.y);
+    const hopPoint = hopSurfaceId === surfaceId
+      ? new THREE.Vector3(targetX, hopY, targetZ)
+      : new THREE.Vector3(jumpTargets.top.x, hopY, jumpTargets.top.z);
     return {
       surface: "elevated",
-      point: new THREE.Vector3(targetX, surface.y, targetZ),
+      surfaceId: hopSurfaceId,
+      point: hopPoint,
+      finalSurfaceId: surfaceId,
+      finalPoint: new THREE.Vector3(targetX, surface.y, targetZ),
       floorPoint: clampToRoomFloor(wantedPoint),
-      jumpAnchor: best.anchor,
-      jumpLanding: best.landing,
+      jumpAnchor: anchor.clone(),
+      jumpLanding: jumpTargets.top.clone(),
+      directJump: sourceSurface.id !== "floor",
     };
   }
 
@@ -274,9 +316,9 @@ export function createDebugControlsRuntime(ctx) {
       const surface = hit.object.userData?.catSurface;
       if (surface) {
         const surfaceY = Number.isFinite(surface.y) ? surface.y : point.y + 0.02;
-        if (!hasNavAreaAt(point.x, point.z, surfaceY)) continue;
         const plan = buildElevatedWaypointPlan(
           {
+            id: surface.id || surface.name || "desk",
             minX: Number.isFinite(surface.minX) ? surface.minX : point.x,
             maxX: Number.isFinite(surface.maxX) ? surface.maxX : point.x,
             minZ: Number.isFinite(surface.minZ) ? surface.minZ : point.z,
@@ -286,8 +328,14 @@ export function createDebugControlsRuntime(ctx) {
           point,
           cat.pos
         );
-        if (plan && hasNavAreaAt(plan.point.x, plan.point.z, plan.point.y)) return plan;
+        if (plan) return plan;
         continue;
+      }
+
+      const elevated = getElevatedSurfaceAt(point, point.y);
+      if (elevated) {
+        const plan = buildElevatedWaypointPlan(elevated, point, cat.pos);
+        if (plan) return plan;
       }
 
       const floorPoint = clampToRoomFloor(point);
@@ -358,6 +406,7 @@ export function createDebugControlsRuntime(ctx) {
         const surfacePoint = findSurfaceTeleportPoint(surfaceDef, point);
         return {
           surface: "elevated",
+          surfaceId: String(surface.id || surface.name || "desk"),
           point: surfacePoint,
           floorPoint: clampToRoomFloor(point),
         };
@@ -368,6 +417,7 @@ export function createDebugControlsRuntime(ctx) {
         const surfacePoint = findSurfaceTeleportPoint(elevated, point);
         return {
           surface: "elevated",
+          surfaceId: String(elevated.id || elevated.name || "desk"),
           point: surfacePoint,
           floorPoint: clampToRoomFloor(point),
         };
@@ -385,61 +435,69 @@ export function createDebugControlsRuntime(ctx) {
     return { surface: "floor", point: floorPoint.clone(), floorPoint };
   }
 
-  function buildJumpDownPlan(fromPos, fromY, towardGroundPoint = null) {
-    const surface = getElevatedSurfaceAt(fromPos, fromY);
-    if (!surface) return null;
-    const dynamicObstacles = navRuntime.buildCatObstacles(true, true);
-    const clearance = navRuntime.getCatPathClearance();
-    const jumpOffset = Math.max(CAT_COLLISION.catBodyRadius + 0.28, 0.5);
-    const edgeInset = CAT_COLLISION.catBodyRadius + 0.05;
-    const target = towardGroundPoint ? clampToRoomFloor(towardGroundPoint) : null;
-
-    const usableMinX = surface.minX + edgeInset;
-    const usableMaxX = surface.maxX - edgeInset;
-    const usableMinZ = surface.minZ + edgeInset;
-    const usableMaxZ = surface.maxZ - edgeInset;
-    if (usableMinX >= usableMaxX || usableMinZ >= usableMaxZ) return null;
-    const localX = THREE.MathUtils.clamp(fromPos.x, usableMinX, usableMaxX);
-    const localZ = THREE.MathUtils.clamp(fromPos.z, usableMinZ, usableMaxZ);
-    const sides = [
-      { nx: -1, nz: 0, edgeX: surface.minX, edgeZ: localZ },
-      { nx: 1, nz: 0, edgeX: surface.maxX, edgeZ: localZ },
-      { nx: 0, nz: -1, edgeX: localX, edgeZ: surface.minZ },
-      { nx: 0, nz: 1, edgeX: localX, edgeZ: surface.maxZ },
-    ];
-
-    let best = null;
-    let bestScore = Infinity;
-    for (const side of sides) {
-      const edgePoint = new THREE.Vector3(
-        side.edgeX - side.nx * edgeInset,
-        0,
-        side.edgeZ - side.nz * edgeInset
-      );
-      const groundRaw = new THREE.Vector3(
-        side.edgeX + side.nx * jumpOffset,
-        0,
-        side.edgeZ + side.nz * jumpOffset
-      );
-      const groundPoint = clampToRoomFloor(groundRaw);
-      if (navRuntime.isCatPointBlocked(groundPoint.x, groundPoint.z, dynamicObstacles, clearance)) continue;
-      if (target && !navRuntime.canReachGroundTarget(groundPoint, target, dynamicObstacles)) continue;
-      const edgeCost = new THREE.Vector2(fromPos.x - edgePoint.x, fromPos.z - edgePoint.z).length();
-      const targetCost = target ? groundPoint.distanceTo(target) : 0;
-      const score = edgeCost + targetCost * 0.35;
-      if (score < bestScore) {
-        bestScore = score;
-        best = { edgePoint, groundPoint };
+  function updateDebugJumpDownPlan(towardGroundPoint = null, force = false, desiredLandingSurfaceId = null) {
+    if (!cat.nav.jumpDownDebug || typeof cat.nav.jumpDownDebug !== "object") cat.nav.jumpDownDebug = {};
+    if (!force) {
+      const off = cat.debugMoveJumpOff;
+      const down = cat.debugMoveJumpDown;
+      if (
+        Number.isFinite(off?.x) &&
+        Number.isFinite(off?.z) &&
+        Number.isFinite(down?.x) &&
+        Number.isFinite(down?.z) &&
+        cat.pos.distanceToSquared(off) > 0.03 * 0.03
+      ) {
+        cat.nav.jumpDownDebug.planPhase = "reuse-current";
+        cat.nav.jumpDownDebug.planReuse = true;
+        cat.nav.jumpDownDebug.planRefreshSkipped = true;
+        cat.nav.jumpDownDebug.planSkipReason = "already-approaching-jump-off";
+        return true;
       }
     }
-    return best;
-  }
-
-  function updateDebugJumpDownPlan(towardGroundPoint = null) {
-    const plan = buildJumpDownPlan(cat.pos, cat.group.position.y, towardGroundPoint);
-    if (!plan) return false;
-    cat.debugMoveJumpOff.copy(plan.edgePoint);
-    cat.debugMoveJumpDown.copy(plan.groundPoint);
+    const sourceSurface = getElevatedSurfaceAt(cat.pos, cat.group.position.y);
+    const surfaceId = String(sourceSurface?.id || cat.debugMoveSurfaceId || "desk");
+    const fromY = Number.isFinite(sourceSurface?.y)
+      ? sourceSurface.y
+      : (Number.isFinite(cat.debugMoveY) && cat.debugMoveY > 0.02 ? cat.debugMoveY : desk.topY + 0.02);
+    const fromTopPoint = new THREE.Vector3(cat.pos.x, fromY, cat.pos.z);
+    cat.nav.jumpDownDebug.planPhase = "recompute";
+    cat.nav.jumpDownDebug.planReuse = false;
+    cat.nav.jumpDownDebug.planRefreshSkipped = false;
+    cat.nav.jumpDownDebug.planSourceSurfaceId = surfaceId;
+    cat.nav.jumpDownDebug.planDesiredLandingSurfaceId =
+      desiredLandingSurfaceId == null || desiredLandingSurfaceId === ""
+        ? String(cat.nav.jumpDownLandingSurfaceId || "floor")
+        : String(desiredLandingSurfaceId);
+    cat.nav.jumpDownDebug.planFromX = fromTopPoint.x;
+    cat.nav.jumpDownDebug.planFromY = fromTopPoint.y;
+    cat.nav.jumpDownDebug.planFromZ = fromTopPoint.z;
+    cat.nav.jumpDownDebug.planTowardX = Number.isFinite(towardGroundPoint?.x) ? towardGroundPoint.x : NaN;
+    cat.nav.jumpDownDebug.planTowardZ = Number.isFinite(towardGroundPoint?.z) ? towardGroundPoint.z : NaN;
+    const plan = typeof navRuntime.computeSurfaceJumpDownTargets === "function"
+      ? navRuntime.computeSurfaceJumpDownTargets(
+          surfaceId,
+          fromTopPoint,
+          towardGroundPoint,
+          desiredLandingSurfaceId
+        )
+      : navRuntime.computeDeskJumpDownTargets(fromTopPoint, towardGroundPoint);
+    if (!plan) {
+      cat.nav.jumpDownDebug.planPhase = "recompute-failed";
+      cat.nav.jumpDownDebug.planFailure = "planner-returned-null";
+      return false;
+    }
+    cat.debugMoveJumpOff.copy(plan.top);
+    cat.debugMoveJumpDown.copy(plan.jumpFrom);
+    cat.debugMoveJumpDownY = Number.isFinite(plan.jumpFrom?.y) ? plan.jumpFrom.y : 0;
+    cat.nav.jumpDownDebug.planPhase = "recompute-ok";
+    cat.nav.jumpDownDebug.planFailure = "";
+    cat.nav.jumpDownDebug.planJumpOffX = plan.top.x;
+    cat.nav.jumpDownDebug.planJumpOffY = Number.isFinite(plan.top.y) ? plan.top.y : fromY;
+    cat.nav.jumpDownDebug.planJumpOffZ = plan.top.z;
+    cat.nav.jumpDownDebug.planJumpDownX = plan.jumpFrom.x;
+    cat.nav.jumpDownDebug.planJumpDownY = Number.isFinite(plan.jumpFrom?.y) ? plan.jumpFrom.y : 0;
+    cat.nav.jumpDownDebug.planJumpDownZ = plan.jumpFrom.z;
+    cat.nav.jumpDownDebug.planTopWasClamped = !!plan.topWasClamped;
     return true;
   }
 
@@ -454,8 +512,12 @@ export function createDebugControlsRuntime(ctx) {
     if (target.surface !== "elevated" && !cat.onTable && cat.group.position.y <= 0.08) {
       cat.debugMoveActive = false;
       cat.debugMoveSurface = "floor";
+      cat.debugMoveSurfaceId = "floor";
+      cat.debugMoveFinalSurfaceId = "floor";
       cat.debugMoveY = 0;
+      cat.debugMoveFinalY = 0;
       cat.debugMoveTarget.copy(movePoint);
+      cat.debugMoveFinalTarget.set(movePoint.x, 0, movePoint.z);
       cat.manualPatrolActive = true;
       cat.patrolTarget.copy(movePoint);
       cat.state = "patrol";
@@ -474,7 +536,19 @@ export function createDebugControlsRuntime(ctx) {
 
     cat.debugMoveActive = true;
     cat.debugMoveSurface = target.surface === "elevated" ? "elevated" : "floor";
+    cat.debugMoveSurfaceId = target.surface === "elevated" ? String(target.surfaceId || "desk") : "floor";
     cat.debugMoveY = target.surface === "elevated" ? target.point.y : 0;
+    cat.debugMoveFinalSurfaceId = String(
+      target.finalSurfaceId || (target.surface === "elevated" ? target.surfaceId || "desk" : "floor")
+    );
+    const finalTargetPoint =
+      target.finalPoint || target.point;
+    cat.debugMoveFinalY =
+      cat.debugMoveFinalSurfaceId === "floor"
+        ? 0
+        : Number(finalTargetPoint.y || cat.debugMoveY || 0.02);
+    cat.debugMoveFinalTarget.set(finalTargetPoint.x, 0, finalTargetPoint.z);
+    cat.debugMoveDirectJump = !!target.directJump;
     cat.debugMoveSitSeconds = 0;
     cat.debugMoveTarget.copy(movePoint);
     if (target.jumpAnchor) cat.debugMoveJumpAnchor.copy(target.jumpAnchor);
@@ -483,16 +557,11 @@ export function createDebugControlsRuntime(ctx) {
     else cat.debugMoveLanding.copy(movePoint);
     cat.debugMoveJumpOff.copy(cat.debugMoveLanding);
     cat.debugMoveJumpDown.copy(movePoint);
+    cat.debugMoveJumpDownY = 0;
     if (cat.debugMoveSurface === "floor" && (cat.onTable || cat.group.position.y > 0.08)) {
-      if (!updateDebugJumpDownPlan(movePoint)) {
-        cat.debugMoveJumpOff.set(cat.pos.x, 0, cat.pos.z);
-        cat.debugMoveJumpDown.copy(movePoint);
-      }
+      if (!updateDebugJumpDownPlan(movePoint, true, "floor")) return false;
     } else if (cat.debugMoveSurface === "elevated" && cat.group.position.y > 0.08 && Math.abs(cat.group.position.y - cat.debugMoveY) > 0.12) {
-      if (!updateDebugJumpDownPlan(cat.debugMoveJumpAnchor)) {
-        cat.debugMoveJumpOff.set(cat.pos.x, 0, cat.pos.z);
-        cat.debugMoveJumpDown.copy(cat.debugMoveJumpAnchor);
-      }
+      if (!updateDebugJumpDownPlan(cat.debugMoveJumpAnchor, true, cat.debugMoveSurfaceId)) return false;
     }
     cat.state = "patrol";
     cat.lastState = "debugMove";
@@ -513,10 +582,23 @@ export function createDebugControlsRuntime(ctx) {
     resetCatJumpBypass();
     resetCatUnstuckTracking();
     cat.nav.stuckT = 0;
+    cat.nav.jumpDownLandingSurfaceId = null;
     cat.jump = null;
     cat.debugMoveActive = false;
     cat.debugMoveSurface = target.surface === "elevated" ? "elevated" : "floor";
+    cat.debugMoveSurfaceId = target.surface === "elevated" ? String(target.surfaceId || "desk") : "floor";
     cat.debugMoveY = target.surface === "elevated" ? target.point.y : 0;
+    cat.debugMoveFinalSurfaceId = String(
+      target.finalSurfaceId || (target.surface === "elevated" ? target.surfaceId || "desk" : "floor")
+    );
+    const finalTeleportPoint =
+      target.finalPoint || target.point;
+    cat.debugMoveFinalY =
+      cat.debugMoveFinalSurfaceId === "floor"
+        ? 0
+        : Number(finalTeleportPoint.y || cat.debugMoveY || 0.02);
+    cat.debugMoveFinalTarget.set(finalTeleportPoint.x, 0, finalTeleportPoint.z);
+    cat.debugMoveDirectJump = false;
     cat.debugMoveSitSeconds = 0;
     const landingPoint =
       cat.debugMoveSurface === "floor" ? navRuntime.findSafeGroundPoint(target.floorPoint) : target.point.clone();
@@ -527,13 +609,16 @@ export function createDebugControlsRuntime(ctx) {
     else cat.debugMoveLanding.copy(landingPoint);
     cat.debugMoveJumpOff.copy(cat.debugMoveLanding);
     cat.debugMoveJumpDown.copy(landingPoint);
+    cat.debugMoveJumpDownY = 0;
     cat.pos.set(landingPoint.x, 0, landingPoint.z);
     cat.group.position.set(landingPoint.x, cat.debugMoveY, landingPoint.z);
     cat.onTable = cat.debugMoveY > 0.02;
     cat.tableRoamTarget.set(landingPoint.x, 0, landingPoint.z);
     if (cat.onTable) {
-      cat.state = !cup.broken && !cup.falling ? "toCup" : "tableRoam";
-      cat.lastState = "debugTeleport";
+      const teleportedSurfaceId = String(cat.debugMoveSurfaceId || "");
+      const teleportedToDesk = teleportedSurfaceId === "desk";
+      cat.state = teleportedToDesk && !cup.broken && !cup.falling ? "toCup" : "patrol";
+      cat.lastState = teleportedToDesk ? "debugTeleport" : "debugMove";
       cat.manualPatrolActive = false;
       cat.debugMoveActive = false;
       cat.debugMoveSurface = "elevated";
