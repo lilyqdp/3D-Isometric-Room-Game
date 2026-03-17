@@ -3,6 +3,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import * as CANNON from "./vendor/cannon-es.js";
 import { makeBins, makeChair, makeDesk, makeHoverShelf, makeRoomCorner, makeShelf, makeWindowSill } from "./modules/room.js";
+import { createSurfaceRegistry } from "./modules/surface-registry.js";
 import { setupPhysicsWorld } from "./modules/physics.js";
 import { addRandomPickups, pickRandomCatSpawnPoint, spawnRandomPickup } from "./modules/spawning.js";
 import { updateCatStateMachineRuntime } from "./modules/cat-state-machine.js";
@@ -243,6 +244,7 @@ const SIMULATION_DT = 1 / SIMULATION_HZ;
 const MAX_FRAME_DT = 0.1;
 const MAX_SIM_STEPS_PER_FRAME = 12;
 let simAccumulator = 0;
+let lastAnimationFrameAt = 0;
 
 const binVisuals = {
   hamper: { shells: [], ring: null },
@@ -281,6 +283,9 @@ const CAT_NAV = {
   step: 0.26,
   margin: 0.4,
   clearance: 0.2,
+  // Hybrid planning: prefer Recast/Detour, but allow the sampled A* planner to
+  // recover valid around-obstacle routes when Recast projection/query misses.
+  useFallbackPlanner: true,
   useDetourCrowd: true,
   detourSpeedScale: 0.8,
   detourArriveSnapRadius: 0.1,
@@ -288,6 +293,9 @@ const CAT_NAV = {
   detourLeadDistance: 0.45,
   locomotionSpeedScale: 3.0,
   locomotionScaleCap: 8.0,
+  runEnableDistance: 0.95,
+  runDisableDistance: 0.55,
+  runMaxYawDelta: 0.82,
   repathInterval: 0.18,
   jumpBypassCheckInterval: 0.18,
   stuckSpeed: 0.035,
@@ -451,6 +459,129 @@ renderer.domElement.addEventListener("contextmenu", onCanvasContextMenu);
 window.addEventListener("pointermove", onPointerMove);
 window.addEventListener("pointerup", onPointerUp);
 
+const SURFACE_SPECS = [
+  {
+    id: "desk",
+    name: "desk",
+    minX: desk.pos.x - desk.sizeX * 0.5,
+    maxX: desk.pos.x + desk.sizeX * 0.5,
+    minZ: desk.pos.z - desk.sizeZ * 0.5,
+    maxZ: desk.pos.z + desk.sizeZ * 0.5,
+    y: desk.topY + 0.02,
+    randomPatrol: true,
+    manualPatrol: true,
+    allowCatnip: true,
+    special: { type: "desk", cupLoss: true },
+    supports: [
+      { x: desk.pos.x - 1.45, z: desk.pos.z - 0.8, hx: 0.13, hz: 0.13, topY: 1.02, navPad: 0.03 },
+      { x: desk.pos.x + 1.45, z: desk.pos.z - 0.8, hx: 0.13, hz: 0.13, topY: 1.02, navPad: 0.03 },
+      { x: desk.pos.x - 1.45, z: desk.pos.z + 0.8, hx: 0.13, hz: 0.13, topY: 1.02, navPad: 0.03 },
+      { x: desk.pos.x + 1.45, z: desk.pos.z + 0.8, hx: 0.13, hz: 0.13, topY: 1.02, navPad: 0.03 },
+    ],
+  },
+  {
+    id: "chair",
+    name: "chair",
+    minX: chair.pos.x - chair.sizeX * 0.5,
+    maxX: chair.pos.x + chair.sizeX * 0.5,
+    minZ: chair.pos.z - chair.sizeZ * 0.5,
+    maxZ: chair.pos.z + chair.sizeZ * 0.5,
+    y: chair.seatY + 0.02,
+    randomPatrol: false,
+    manualPatrol: true,
+    allowCatnip: true,
+    supports: [
+      { x: chair.pos.x - chair.legInsetX, z: chair.pos.z - chair.legInsetZ, hx: chair.legHalfX + 0.03, hz: chair.legHalfZ + 0.03, topY: chair.seatY - chair.seatThickness, navPad: 0.03 },
+      { x: chair.pos.x + chair.legInsetX, z: chair.pos.z - chair.legInsetZ, hx: chair.legHalfX + 0.03, hz: chair.legHalfZ + 0.03, topY: chair.seatY - chair.seatThickness, navPad: 0.03 },
+      { x: chair.pos.x - chair.legInsetX, z: chair.pos.z + chair.legInsetZ, hx: chair.legHalfX + 0.03, hz: chair.legHalfZ + 0.03, topY: chair.seatY - chair.seatThickness, navPad: 0.03 },
+      { x: chair.pos.x + chair.legInsetX, z: chair.pos.z + chair.legInsetZ, hx: chair.legHalfX + 0.03, hz: chair.legHalfZ + 0.03, topY: chair.seatY - chair.seatThickness, navPad: 0.03 },
+    ],
+    blockers: [
+      {
+        kind: "box",
+        x: chair.pos.x,
+        z: chair.pos.z - chair.sizeZ * 0.5 + chair.backThickness * 0.5,
+        hx: chair.sizeX * 0.5 + 0.02,
+        hz: chair.backThickness * 0.5 + 0.02,
+        y: chair.seatY + chair.backHeight * 0.5 - chair.seatThickness * 0.5,
+        h: chair.backHeight + 0.04,
+        navPad: 0.02,
+      },
+    ],
+  },
+  {
+    id: "shelf",
+    name: "shelf",
+    minX: shelf.pos.x - shelf.width * 0.5,
+    maxX: shelf.pos.x + shelf.width * 0.5,
+    minZ: shelf.pos.z - shelf.depth * 0.5,
+    maxZ: shelf.pos.z + shelf.depth * 0.5,
+    y: shelf.surfaceY + 0.02,
+    randomPatrol: false,
+    manualPatrol: true,
+    allowCatnip: true,
+    supports: (() => {
+      const insetX = shelf.width * 0.5 - shelf.postHalf;
+      const insetZ = shelf.depth * 0.5 - shelf.postHalf;
+      return [
+        { x: shelf.pos.x - insetX, z: shelf.pos.z - insetZ, hx: shelf.postHalf + 0.02, hz: shelf.postHalf + 0.02, topY: shelf.surfaceY - shelf.boardThickness, navPad: 0.02 },
+        { x: shelf.pos.x + insetX, z: shelf.pos.z - insetZ, hx: shelf.postHalf + 0.02, hz: shelf.postHalf + 0.02, topY: shelf.surfaceY - shelf.boardThickness, navPad: 0.02 },
+        { x: shelf.pos.x - insetX, z: shelf.pos.z + insetZ, hx: shelf.postHalf + 0.02, hz: shelf.postHalf + 0.02, topY: shelf.surfaceY - shelf.boardThickness, navPad: 0.02 },
+        { x: shelf.pos.x + insetX, z: shelf.pos.z + insetZ, hx: shelf.postHalf + 0.02, hz: shelf.postHalf + 0.02, topY: shelf.surfaceY - shelf.boardThickness, navPad: 0.02 },
+      ];
+    })(),
+    blockers: [
+      {
+        kind: "box",
+        x: shelf.pos.x,
+        z: shelf.pos.z - shelf.depth * 0.5 + 0.02,
+        hx: shelf.width * 0.5 + 0.02,
+        hz: 0.04,
+        y: (shelf.surfaceY + 0.2) * 0.5 - shelf.boardThickness * 0.5,
+        h: shelf.surfaceY - 0.2 + 0.12,
+        navPad: 0.02,
+      },
+    ],
+  },
+  {
+    id: hoverShelf.id,
+    name: hoverShelf.id,
+    minX: hoverShelf.pos.x - hoverShelf.width * 0.5,
+    maxX: hoverShelf.pos.x + hoverShelf.width * 0.5,
+    minZ: hoverShelf.pos.z - hoverShelf.depth * 0.5,
+    maxZ: hoverShelf.pos.z + hoverShelf.depth * 0.5,
+    y: hoverShelf.surfaceY + 0.02,
+    randomPatrol: false,
+    manualPatrol: true,
+    allowCatnip: true,
+    special: { type: "platform" },
+  },
+  {
+    id: windowSill.id,
+    name: windowSill.id,
+    minX: windowSill.pos.x - windowSill.width * 0.5,
+    maxX: windowSill.pos.x + windowSill.width * 0.5,
+    minZ: windowSill.pos.z - windowSill.depth * 0.5,
+    maxZ: windowSill.pos.z + windowSill.depth * 0.5,
+    y: windowSill.surfaceY + 0.02,
+    randomPatrol: false,
+    manualPatrol: true,
+    allowCatnip: true,
+    special: { type: "windowSill", windowTarget: true },
+  },
+];
+
+const surfaceRegistry = createSurfaceRegistry({
+  floorBounds: {
+    minX: ROOM.minX + CAT_NAV.margin,
+    maxX: ROOM.maxX - CAT_NAV.margin,
+    minZ: ROOM.minZ + CAT_NAV.margin,
+    maxZ: ROOM.maxZ - CAT_NAV.margin,
+  },
+  floorY: ROOM.floorY,
+  surfaceSpecs: SURFACE_SPECS,
+});
+
 const TARGET_BOUNDS = {
   minX: -5.2,
   maxX: 1.5,
@@ -503,111 +634,9 @@ const SHELF_BACK_COLLIDER = {
   h: shelf.surfaceY - 0.2 + 0.08,
 };
 
-const EXTRA_NAV_OBSTACLES = [
-  ...CHAIR_LEGS.map((leg) => ({
-    kind: "box",
-    x: leg.x,
-    z: leg.z,
-    hx: leg.halfX + 0.03,
-    hz: leg.halfZ + 0.03,
-    navPad: 0.03,
-    // Allow jump links to/from the chair seat to ignore chair legs only.
-    jumpIgnoreSurfaceIds: ["chair"],
-    y: leg.topY * 0.5,
-    h: leg.topY + 0.04,
-  })),
-  {
-    kind: "box",
-    x: CHAIR_BACK_COLLIDER.x,
-    z: CHAIR_BACK_COLLIDER.z,
-    hx: CHAIR_BACK_COLLIDER.halfX + 0.02,
-    hz: CHAIR_BACK_COLLIDER.halfZ + 0.02,
-    navPad: 0.02,
-    y: CHAIR_BACK_COLLIDER.y,
-    h: CHAIR_BACK_COLLIDER.h + 0.04,
-  },
-  ...SHELF_POSTS.map((post) => ({
-    kind: "box",
-    x: post.x,
-    z: post.z,
-    hx: post.halfX + 0.02,
-    hz: post.halfZ + 0.02,
-    navPad: 0.02,
-    // Allow jump links to/from the shelf top to ignore shelf posts only.
-    jumpIgnoreSurfaceIds: ["shelf"],
-    y: post.topY * 0.5,
-    h: post.topY + 0.04,
-  })),
-  {
-    kind: "box",
-    x: SHELF_BACK_COLLIDER.x,
-    z: SHELF_BACK_COLLIDER.z,
-    hx: SHELF_BACK_COLLIDER.halfX + 0.02,
-    hz: SHELF_BACK_COLLIDER.halfZ + 0.02,
-    navPad: 0.02,
-    y: SHELF_BACK_COLLIDER.y,
-    h: SHELF_BACK_COLLIDER.h + 0.04,
-  },
-];
+const EXTRA_NAV_OBSTACLES = surfaceRegistry.buildNavObstacles();
 
-const EXTRA_STATIC_BOXES = [
-  ...CHAIR_LEGS.map((leg) => ({
-    x: leg.x,
-    y: leg.topY * 0.5,
-    z: leg.z,
-    hx: leg.halfX,
-    hy: leg.topY * 0.5,
-    hz: leg.halfZ,
-  })),
-  {
-    x: chair.pos.x,
-    y: chair.seatY - chair.seatThickness * 0.5,
-    z: chair.pos.z,
-    hx: chair.sizeX * 0.5,
-    hy: chair.seatThickness * 0.5,
-    hz: chair.sizeZ * 0.5,
-  },
-  {
-    x: CHAIR_BACK_COLLIDER.x,
-    y: CHAIR_BACK_COLLIDER.y,
-    z: CHAIR_BACK_COLLIDER.z,
-    hx: CHAIR_BACK_COLLIDER.halfX,
-    hy: CHAIR_BACK_COLLIDER.h * 0.5,
-    hz: CHAIR_BACK_COLLIDER.halfZ,
-  },
-  ...SHELF_POSTS.map((post) => ({
-    x: post.x,
-    y: post.topY * 0.5,
-    z: post.z,
-    hx: post.halfX,
-    hy: post.topY * 0.5,
-    hz: post.halfZ,
-  })),
-  {
-    x: shelf.pos.x,
-    y: shelf.surfaceY - shelf.boardThickness * 0.5,
-    z: shelf.pos.z,
-    hx: shelf.width * 0.5,
-    hy: shelf.boardThickness * 0.5,
-    hz: shelf.depth * 0.5,
-  },
-  {
-    x: SHELF_BACK_COLLIDER.x,
-    y: SHELF_BACK_COLLIDER.y,
-    z: SHELF_BACK_COLLIDER.z,
-    hx: SHELF_BACK_COLLIDER.halfX,
-    hy: SHELF_BACK_COLLIDER.h * 0.5,
-    hz: SHELF_BACK_COLLIDER.halfZ,
-  },
-  {
-    x: windowSill.pos.x,
-    y: windowSill.surfaceY - windowSill.thickness * 0.5,
-    z: windowSill.pos.z,
-    hx: windowSill.width * 0.5,
-    hy: windowSill.thickness * 0.5,
-    hz: windowSill.depth * 0.5,
-  },
-];
+const EXTRA_STATIC_BOXES = surfaceRegistry.buildStaticBoxes();
 
 const pickupsRuntime = createPickupsRuntime({
   THREE,
@@ -657,6 +686,8 @@ const navRuntime = createCatNavigationRuntime({
   game,
   pickupRadius: (pickup) => pickupsRuntime.pickupRadius(pickup),
   isDraggingPickup: (pickup) => pickupsRuntime.isDraggingPickup(pickup),
+  getSurfaceDefs,
+  getSurfaceById,
   getElevatedSurfaceDefs,
   clearCatNavPath,
   resetCatUnstuckTracking,
@@ -705,6 +736,8 @@ const catnipRuntime = createCatnipRuntime({
   bestDeskJumpAnchor: navRuntime.bestDeskJumpAnchor,
   bestSurfaceJumpAnchor: navRuntime.bestSurfaceJumpAnchor,
   computeSurfaceJumpTargets: navRuntime.computeSurfaceJumpTargets,
+  getSurfaceDefs,
+  getSurfaceById,
   getElevatedSurfaceDefs,
   getClockTime: () => clockTime,
 });
@@ -732,6 +765,8 @@ const debugRuntime = createDebugOverlayRuntime({
   computeCatPath: navRuntime.computeCatPath,
   computeDeskJumpTargets: navRuntime.computeDeskJumpTargets,
   getSurfaceJumpDebugData: navRuntime.getSurfaceJumpDebugData,
+  getSurfaceDefs,
+  getSurfaceById,
   getDeskDesiredTarget: () => getDeskDesiredTarget(),
   getTimeScale: () => game.timeScale,
   setTimeScale: (value) => {
@@ -757,11 +792,33 @@ const debugControlsRuntime = createDebugControlsRuntime({
   pickups,
   game,
   navRuntime,
+  getClockTime: () => clockTime,
   getDebugRoot: () => debugRuntime.root,
+  queueSharedDebugRouteRequest: (request) => {
+    if (!cat.nav || typeof cat.nav !== "object") cat.nav = {};
+    const finalPoint = request?.finalPoint;
+    if (!finalPoint) return false;
+    cat.nav.pendingSharedRouteRequest = {
+      finalSurfaceId: String(request?.finalSurfaceId || "floor"),
+      finalPoint: new THREE.Vector3(
+        Number(finalPoint.x) || 0,
+        Number(finalPoint.y) || 0,
+        Number(finalPoint.z) || 0
+      ),
+      sitSeconds: Number.isFinite(request?.sitSeconds) ? Number(request.sitSeconds) : 0,
+      source: String(request?.source || "debug-click"),
+      forceReplan: request?.forceReplan !== false,
+      lastState: String(request?.lastState || "debugMove"),
+      failStatus: request?.failStatus ? String(request.failStatus) : "No route to click",
+    };
+    return true;
+  },
   clearCatJumpTargets,
   clearCatNavPath,
   resetCatJumpBypass,
   resetCatUnstuckTracking,
+  getSurfaceDefs,
+  getSurfaceById,
   getElevatedSurfaceDefs,
 });
 const debugCameraRuntime = createMainDebugCameraRuntime({
@@ -830,8 +887,167 @@ function addMess(amount) {
   game.mess = Math.max(0, game.mess + amount);
 }
 
+function getElevatedSurfaceById(surfaceId) {
+  if (!surfaceId || surfaceId === "floor") return null;
+  const defs = getElevatedSurfaceDefs(true);
+  if (!Array.isArray(defs)) return null;
+  return defs.find((s) => String(s?.id || s?.name || "") === String(surfaceId)) || null;
+}
+
+function scoreElevatedSurfaceAtPoint(x, z, y, surface, pad = 0.18, preferredSurfaceId = "") {
+  if (!surface) return null;
+  const sx0 = Number(surface.minX);
+  const sx1 = Number(surface.maxX);
+  const sz0 = Number(surface.minZ);
+  const sz1 = Number(surface.maxZ);
+  const sy = Number(surface.y);
+  if (![sx0, sx1, sz0, sz1, sy].every(Number.isFinite)) return null;
+  const inside = x >= sx0 - pad && x <= sx1 + pad && z >= sz0 - pad && z <= sz1 + pad;
+  if (!inside) return null;
+  const dy = Math.abs(sy - y);
+  const edgeDist = Math.min(
+    Math.abs(x - sx0),
+    Math.abs(x - sx1),
+    Math.abs(z - sz0),
+    Math.abs(z - sz1)
+  );
+  const surfaceId = String(surface.id || surface.name || "");
+  const preferredBias = preferredSurfaceId && surfaceId === String(preferredSurfaceId) ? -0.08 : 0;
+  const score = dy + Math.max(0, 0.22 - edgeDist) * 0.2 + preferredBias;
+  return { score, surface, dy };
+}
+
+function findBestElevatedSurfaceAt(x, z, y, pad = 0.18, maxDy = 0.58, preferredSurfaceId = "") {
+  const defs = getElevatedSurfaceDefs(true);
+  if (!Array.isArray(defs)) return null;
+  let best = null;
+  let bestScore = Infinity;
+  for (const strictPad of [0.03, pad]) {
+    best = null;
+    bestScore = Infinity;
+    for (const surface of defs) {
+      const scored = scoreElevatedSurfaceAtPoint(x, z, y, surface, strictPad, preferredSurfaceId);
+      if (!scored || scored.dy > maxDy) continue;
+      if (scored.score < bestScore) {
+        bestScore = scored.score;
+        best = scored.surface;
+      }
+    }
+    if (best) return best;
+  }
+  return best;
+}
+
+function isNearElevatedSurface(x, z, y, surface, pad = 0.28, yPad = 0.7) {
+  if (!surface) return false;
+  return (
+    x >= surface.minX - pad &&
+    x <= surface.maxX + pad &&
+    z >= surface.minZ - pad &&
+    z <= surface.maxZ + pad &&
+    Math.abs((surface.y || 0) - y) <= yPad
+  );
+}
+
+function findLooseElevatedSurfaceAt(x, z, y, preferredSurfaceId = "") {
+  const defs = getElevatedSurfaceDefs(true);
+  if (!Array.isArray(defs) || defs.length === 0) return null;
+
+  let best = null;
+  let bestScore = Infinity;
+  for (const surface of defs) {
+    if (!surface) continue;
+    const sx0 = Number(surface.minX);
+    const sx1 = Number(surface.maxX);
+    const sz0 = Number(surface.minZ);
+    const sz1 = Number(surface.maxZ);
+    const sy = Number(surface.y);
+    if (![sx0, sx1, sz0, sz1, sy].every(Number.isFinite)) continue;
+
+    const dx = x < sx0 ? sx0 - x : x > sx1 ? x - sx1 : 0;
+    const dz = z < sz0 ? sz0 - z : z > sz1 ? z - sz1 : 0;
+    const dy = Math.abs(sy - y);
+    if (dy > 1.15) continue;
+
+    const surfaceId = String(surface.id || surface.name || "");
+    const preferredBias = preferredSurfaceId && surfaceId === String(preferredSurfaceId) ? -0.18 : 0;
+    const score = dx * 1.25 + dz * 1.25 + dy * 1.8 + preferredBias;
+    if (score < bestScore) {
+      bestScore = score;
+      best = surface;
+    }
+  }
+  return best;
+}
+
+function getCurrentCatSurfaceIdForSpawnReach() {
+  const y = Number.isFinite(cat.group.position.y) ? cat.group.position.y : 0;
+  if (y <= 0.08 && !cat.onTable) return "floor";
+
+  const routeSurfaceId =
+    cat.nav?.route?.active && cat.nav?.route?.surfaceId && cat.nav.route.surfaceId !== "floor"
+      ? String(cat.nav.route.surfaceId)
+      : "";
+  const routeFinalSurfaceId =
+    cat.nav?.route?.active && cat.nav?.route?.finalSurfaceId && cat.nav.route.finalSurfaceId !== "floor"
+      ? String(cat.nav.route.finalSurfaceId)
+      : "";
+  const hintedSurfaceId =
+    routeSurfaceId ||
+    routeFinalSurfaceId ||
+    (cat.debugMoveSurfaceId && cat.debugMoveSurfaceId !== "floor" ? String(cat.debugMoveSurfaceId) : "");
+
+  const best = findBestElevatedSurfaceAt(cat.pos.x, cat.pos.z, y, 0.18, 0.58, hintedSurfaceId);
+  if (best) return String(best.id || best.name || hintedSurfaceId || "floor");
+
+  for (const fallbackId of [
+    hintedSurfaceId,
+    routeFinalSurfaceId,
+    cat.debugMoveSurfaceId,
+    cat.nav?.lastSurfaceHopTo,
+    cat.nav?.lastSurfaceHopFrom,
+  ]) {
+    const surface = getElevatedSurfaceById(fallbackId);
+    if (surface && isNearElevatedSurface(cat.pos.x, cat.pos.z, y, surface)) {
+      return String(surface.id || surface.name || fallbackId || "floor");
+    }
+  }
+
+  const loose = findLooseElevatedSurfaceAt(cat.pos.x, cat.pos.z, y, hintedSurfaceId);
+  if (loose) return String(loose.id || loose.name || hintedSurfaceId || "floor");
+
+  return y <= 0.08 ? "floor" : hintedSurfaceId || routeFinalSurfaceId || "floor";
+}
+
+function getSpawnReachStart() {
+  const floorStart = new THREE.Vector3(cat.pos.x, 0, cat.pos.z);
+  if (!(cat.onTable || cat.group.position.y > 0.08)) {
+    return navRuntime.findSafeGroundPoint(floorStart);
+  }
+
+  const surfaceId = getCurrentCatSurfaceIdForSpawnReach();
+  if (!surfaceId || surfaceId === "floor") {
+    return navRuntime.findSafeGroundPoint(floorStart);
+  }
+
+  const fromTopPoint = new THREE.Vector3(
+    cat.pos.x,
+    Math.max(0.02, Number.isFinite(cat.group.position.y) ? cat.group.position.y : 0),
+    cat.pos.z
+  );
+  const jumpDownPlan =
+    typeof navRuntime.computeSurfaceJumpDownTargets === "function"
+      ? navRuntime.computeSurfaceJumpDownTargets(surfaceId, fromTopPoint, null, "floor")
+      : null;
+  if (jumpDownPlan?.jumpFrom) {
+    return navRuntime.findSafeGroundPoint(new THREE.Vector3(jumpDownPlan.jumpFrom.x, 0, jumpDownPlan.jumpFrom.z));
+  }
+
+  return navRuntime.findSafeGroundPoint(floorStart);
+}
+
 function spawnPickupOfType(type) {
-  const reachStart = cat.onTable ? navRuntime.findSafeGroundPoint(desk.approach) : cat.pos;
+  const reachStart = getSpawnReachStart();
   const spawned = spawnRandomPickup({
     type,
     catSpawn: reachStart,
@@ -863,14 +1079,14 @@ function updateEndlessSpawning(dt) {
 
   let attempts = 0;
   while (game.laundrySpawnBudget >= 1 && attempts < ENDLESS_SPAWN.maxSpawnAttemptsPerFrame) {
-    game.laundrySpawnBudget -= 1;
-    spawnPickupOfType("laundry");
     attempts++;
+    if (!spawnPickupOfType("laundry")) break;
+    game.laundrySpawnBudget -= 1;
   }
   while (game.trashSpawnBudget >= 1 && attempts < ENDLESS_SPAWN.maxSpawnAttemptsPerFrame) {
-    game.trashSpawnBudget -= 1;
-    spawnPickupOfType("trash");
     attempts++;
+    if (!spawnPickupOfType("trash")) break;
+    game.trashSpawnBudget -= 1;
   }
 }
 
@@ -966,6 +1182,41 @@ function resetGame() {
   clearCatJumpTargets();
   cat.nav.goal.set(cat.pos.x, 0, cat.pos.z);
   cat.nav.debugDestination.set(cat.pos.x, 0, cat.pos.z);
+  if (!cat.nav.route || typeof cat.nav.route !== "object") cat.nav.route = {};
+  if (!cat.nav.route.target || typeof cat.nav.route.target.set !== "function") cat.nav.route.target = new THREE.Vector3();
+  if (!cat.nav.route.finalTarget || typeof cat.nav.route.finalTarget.set !== "function") cat.nav.route.finalTarget = new THREE.Vector3();
+  if (!cat.nav.route.jumpAnchor || typeof cat.nav.route.jumpAnchor.set !== "function") cat.nav.route.jumpAnchor = new THREE.Vector3();
+  if (!cat.nav.route.landing || typeof cat.nav.route.landing.set !== "function") cat.nav.route.landing = new THREE.Vector3();
+  if (!cat.nav.route.jumpOff || typeof cat.nav.route.jumpOff.set !== "function") cat.nav.route.jumpOff = new THREE.Vector3();
+  if (!cat.nav.route.jumpDown || typeof cat.nav.route.jumpDown.set !== "function") cat.nav.route.jumpDown = new THREE.Vector3();
+  cat.nav.route.active = false;
+  cat.nav.route.source = "";
+  cat.nav.route.surface = "floor";
+  cat.nav.route.surfaceId = "floor";
+  cat.nav.route.finalSurfaceId = "floor";
+  cat.nav.route.y = 0;
+  cat.nav.route.finalY = 0;
+  cat.nav.route.jumpDownY = 0;
+  cat.nav.route.directJump = false;
+  cat.nav.route.sitSeconds = 0;
+  cat.nav.route.recoverAt = 0;
+  cat.nav.route.approachSurfaceId = "floor";
+  cat.nav.route.createdAt = 0;
+  cat.nav.route.blockedSince = 0;
+  cat.nav.route.blockedReason = "";
+  cat.nav.route.lastProgressAt = 0;
+  cat.nav.route.lastProgressX = cat.pos.x;
+  cat.nav.route.lastProgressZ = cat.pos.z;
+  cat.nav.route.segments = [];
+  cat.nav.route.segmentIndex = 0;
+  cat.nav.route.segmentEnteredAt = 0;
+  cat.nav.route.segmentReason = "";
+  cat.nav.route.target.set(cat.pos.x, 0, cat.pos.z);
+  cat.nav.route.finalTarget.set(cat.pos.x, 0, cat.pos.z);
+  cat.nav.route.jumpAnchor.set(cat.pos.x, 0, cat.pos.z);
+  cat.nav.route.landing.set(cat.pos.x, 0, cat.pos.z);
+  cat.nav.route.jumpOff.set(cat.pos.x, 0, cat.pos.z);
+  cat.nav.route.jumpDown.set(cat.pos.x, 0, cat.pos.z);
   clearCatNavPath(true);
   cat.nav.anchorReplanAt = 0;
   cat.nav.anchorLandingCheckAt = 0;
@@ -992,8 +1243,15 @@ function resetGame() {
   cat.nav.locomotionHoldT = 0;
   cat.nav.catnipPathCheckAt = 0;
   cat.nav.catnipUseExactTarget = false;
+  cat.nav.catnipApproachKey = "";
+  cat.nav.catnipApproachX = NaN;
+  cat.nav.catnipApproachZ = NaN;
   cat.nav.windowPathCheckAt = 0;
   cat.nav.windowHoldActive = false;
+  cat.nav.goalChangePendingSince = 0;
+  cat.nav.goalChangePendingX = NaN;
+  cat.nav.goalChangePendingZ = NaN;
+  cat.nav.goalRepathCooldownUntil = 0;
   if (cat.locomotion) {
     cat.locomotion.activeClip = "idle";
     cat.locomotion.clipScale = 0;
@@ -1015,6 +1273,8 @@ function clearCatNavPath(resetRepath = false) {
   cat.nav.index = 0;
   if (resetRepath) {
     cat.nav.repathAt = 0;
+    cat.nav.goalChangePendingSince = 0;
+    cat.nav.goalRepathCooldownUntil = 0;
     navRuntime.resetDetourCrowd?.();
   }
 }
@@ -1093,226 +1353,19 @@ function placeCatnipFromMouse() {
   catnipRuntime.placeCatnipFromMouse();
 }
 
+function getSurfaceDefs(options = undefined) {
+  if (options === true) return surfaceRegistry.getElevatedSurfaceDefs(true);
+  if (options === false) return surfaceRegistry.getElevatedSurfaceDefs(false);
+  if (typeof options === "object" && options) return surfaceRegistry.getSurfaceDefs(options);
+  return surfaceRegistry.getSurfaceDefs();
+}
+
+function getSurfaceById(surfaceId) {
+  return surfaceRegistry.getSurfaceById(surfaceId);
+}
+
 function getElevatedSurfaceDefs(includeDesk = true) {
-  const surfaces = [];
-  if (includeDesk) {
-    surfaces.push({
-      id: "desk",
-      name: "desk",
-      // Outer perimeter = real tabletop perimeter.
-      minX: desk.pos.x - desk.sizeX * 0.5,
-      maxX: desk.pos.x + desk.sizeX * 0.5,
-      minZ: desk.pos.z - desk.sizeZ * 0.5,
-      maxZ: desk.pos.z + desk.sizeZ * 0.5,
-      y: desk.topY + 0.02,
-    });
-  }
-  surfaces.push({
-    id: "chair",
-    name: "chair",
-    minX: chair.pos.x - chair.sizeX * 0.5,
-    maxX: chair.pos.x + chair.sizeX * 0.5,
-    minZ: chair.pos.z - chair.sizeZ * 0.5,
-    maxZ: chair.pos.z + chair.sizeZ * 0.5,
-    y: chair.seatY + 0.02,
-  });
-  surfaces.push({
-    id: "shelf",
-    name: "shelf",
-    minX: shelf.pos.x - shelf.width * 0.5,
-    maxX: shelf.pos.x + shelf.width * 0.5,
-    minZ: shelf.pos.z - shelf.depth * 0.5,
-    maxZ: shelf.pos.z + shelf.depth * 0.5,
-    y: shelf.surfaceY + 0.02,
-  });
-  surfaces.push({
-    id: hoverShelf.id,
-    name: hoverShelf.id,
-    minX: hoverShelf.pos.x - hoverShelf.width * 0.5,
-    maxX: hoverShelf.pos.x + hoverShelf.width * 0.5,
-    minZ: hoverShelf.pos.z - hoverShelf.depth * 0.5,
-    maxZ: hoverShelf.pos.z + hoverShelf.depth * 0.5,
-    y: hoverShelf.surfaceY + 0.02,
-  });
-  surfaces.push({
-    id: windowSill.id,
-    name: windowSill.id,
-    minX: windowSill.pos.x - windowSill.width * 0.5,
-    maxX: windowSill.pos.x + windowSill.width * 0.5,
-    minZ: windowSill.pos.z - windowSill.depth * 0.5,
-    maxZ: windowSill.pos.z + windowSill.depth * 0.5,
-    y: windowSill.surfaceY + 0.02,
-  });
-  return surfaces;
-}
-
-function computeJumpNoClipMinY(jump, x, z, progressU) {
-  if (!jump || progressU >= 0.96) return null;
-  const surfaces = getElevatedSurfaceDefs(true);
-  if (!Array.isArray(surfaces) || surfaces.length === 0) return null;
-  const pad = Math.max(0.08, CAT_COLLISION.catBodyRadius * 0.9);
-  const jumpArc = Math.max(0.02, Number(jump.arc) || 0);
-  const jumpTopY = Math.max(jump.fromY, jump.toY) + jumpArc;
-  const jumpBottomY = Math.min(jump.fromY, jump.toY) - 0.08;
-  let minY = -Infinity;
-  for (const s of surfaces) {
-    const sy = Number(s?.y);
-    const minX = Number(s?.minX);
-    const maxX = Number(s?.maxX);
-    const minZ = Number(s?.minZ);
-    const maxZ = Number(s?.maxZ);
-    if (![sy, minX, maxX, minZ, maxZ].every(Number.isFinite)) continue;
-    // Ignore surfaces that are clearly outside this jump's vertical travel band.
-    // This prevents a low jump from being clamped up to an unrelated higher platform.
-    if (sy > jumpTopY + 0.14 || sy < jumpBottomY - 0.14) continue;
-    const targetIsThisSurface =
-      Math.abs(sy - jump.toY) <= 0.14 &&
-      jump.to.x >= minX - pad &&
-      jump.to.x <= maxX + pad &&
-      jump.to.z >= minZ - pad &&
-      jump.to.z <= maxZ + pad;
-    if (targetIsThisSurface) continue;
-    const inside =
-      x >= minX - pad &&
-      x <= maxX + pad &&
-      z >= minZ - pad &&
-      z <= maxZ + pad;
-    if (!inside) continue;
-    minY = Math.max(minY, sy + 0.08);
-  }
-  return Number.isFinite(minY) ? minY : null;
-}
-
-function startJump(to, toY, dur, arc, nextState, opts = null) {
-  const fromY = cat.group.position.y;
-  const dropOrLevelJump = toY <= fromY + 0.03;
-  const requestedNextState = nextState || "patrol";
-  const resolvedNextState = dropOrLevelJump ? "landStop" : requestedNextState;
-  let resolvedDur = dur;
-  let preJumpDur = 0;
-  const horizontalDist = Math.hypot(to.x - cat.pos.x, to.z - cat.pos.z);
-  const downVerticalDist = Math.max(0, fromY - toY);
-  const allowClamp = !!(opts && opts.allowClamp);
-  if (dropOrLevelJump && requestedNextState !== "landStop") {
-    cat.landStopNextState = requestedNextState;
-  }
-  if (dropOrLevelJump) {
-    // Distance-aware down-jump timing:
-    // shorter hops get shorter prep/air/land so clips transition earlier and smoother.
-    const jumpSpan = horizontalDist + downVerticalDist * 0.75;
-    const scaledPrepDur = THREE.MathUtils.clamp(0.14 + jumpSpan * 0.22, 0.14, 0.58);
-    const scaledAirDur = THREE.MathUtils.clamp(0.22 + horizontalDist * 0.2 + downVerticalDist * 0.18, 0.2, 0.62);
-    const scaledLandDur = THREE.MathUtils.clamp(0.12 + horizontalDist * 0.06 + downVerticalDist * 0.14, 0.12, 0.3);
-    resolvedDur = scaledAirDur;
-    preJumpDur = scaledPrepDur;
-    cat.landStopDuration = scaledLandDur;
-    // Force a fresh jump-down clip sequence (Edge_to -> Edge_from -> Land_stop)
-    // when the actual drop starts, instead of continuing a stale preview pose.
-    if (cat.clipSpecialAction) {
-      cat.clipSpecialAction.stop();
-      cat.clipSpecialAction = null;
-    }
-    cat.clipSpecialState = "";
-    cat.clipSpecialPhase = "";
-  } else {
-    const disableUpPrep = !!(opts && opts.upPrep === false);
-    if (!disableUpPrep) {
-      const explicitUpPrepDur = Number(opts?.preDur);
-      if (Number.isFinite(explicitUpPrepDur)) {
-        preJumpDur = Math.max(0, explicitUpPrepDur);
-      } else {
-        // Default prep for up-jumps: Aim_U then Incline(40-48) before launch.
-        preJumpDur = THREE.MathUtils.clamp(0.72 + horizontalDist * 0.12, 0.72, 0.95);
-      }
-    }
-  }
-  cat.jump = {
-    from: cat.pos.clone(),
-    to: to.clone(),
-    fromY,
-    toY,
-    dur: resolvedDur,
-    t: 0,
-    preDur: preJumpDur,
-    preT: 0,
-    arc,
-    nextState: resolvedNextState,
-    allowClamp,
-    easePos: !!(opts && opts.easePos),
-    easeY: !!(opts && opts.easeY),
-    avoidDeskClip: !!(opts && opts.avoidDeskClip),
-  };
-}
-
-function updateJump(dt) {
-  if (!cat.jump) return false;
-  const isDownJump = cat.jump.toY <= cat.jump.fromY + 0.03;
-  // Keep the cat oriented toward the jump destination during prep and airtime.
-  const jumpDx = cat.jump.to.x - cat.jump.from.x;
-  const jumpDz = cat.jump.to.z - cat.jump.from.z;
-  if (jumpDx * jumpDx + jumpDz * jumpDz > 1e-6) {
-    const jumpYaw = Math.atan2(jumpDx, jumpDz);
-    const yawDelta = Math.atan2(
-      Math.sin(jumpYaw - cat.group.rotation.y),
-      Math.cos(jumpYaw - cat.group.rotation.y)
-    );
-    cat.group.rotation.y += yawDelta * Math.min(1, dt * 12.0);
-  }
-  let stepDt = dt;
-  const hasPrep = (cat.jump.preDur || 0) > 1e-5;
-  if (hasPrep && cat.jump.preT < cat.jump.preDur) {
-    const remainPrep = Math.max(0, cat.jump.preDur - cat.jump.preT);
-    const usedPrep = Math.min(stepDt, remainPrep);
-    cat.jump.preT += usedPrep;
-    stepDt -= usedPrep;
-    cat.pos.copy(cat.jump.from);
-    cat.group.position.set(cat.pos.x, cat.jump.fromY, cat.pos.z);
-    if (cat.jump.preT < cat.jump.preDur - 1e-5) return false;
-  }
-
-  cat.jump.t += stepDt;
-  const u = Math.min(1, cat.jump.t / cat.jump.dur);
-  const uPos = cat.jump.easePos ? THREE.MathUtils.smootherstep(u, 0, 1) : u;
-  let uY = u;
-  if (cat.jump.easeY) {
-    // Down-jumps need a softer launch so paws do not clip into the source surface.
-    // Up-jumps keep the older snappier easing.
-    uY = isDownJump ? THREE.MathUtils.smoothstep(u, 0, 1) : Math.pow(u, 0.74);
-  }
-  cat.pos.lerpVectors(cat.jump.from, cat.jump.to, uPos);
-  let lift = Math.sin(Math.PI * u) * cat.jump.arc;
-  if (isDownJump) {
-    // Use an asymmetric arc for down-jumps: quick lift-off, faster settle.
-    const apexU = 0.28;
-    if (u <= apexU) {
-      lift = cat.jump.arc * (u / Math.max(1e-5, apexU));
-    } else {
-      const downU = (u - apexU) / Math.max(1e-5, 1 - apexU);
-      lift = cat.jump.arc * Math.pow(Math.max(0, 1 - downU), 1.8);
-    }
-  }
-  let y = THREE.MathUtils.lerp(cat.jump.fromY, cat.jump.toY, uY) + lift;
-  if (cat.jump.allowClamp) {
-    const noClipMinY = computeJumpNoClipMinY(cat.jump, cat.pos.x, cat.pos.z, u);
-    if (Number.isFinite(noClipMinY) && y < noClipMinY) y = noClipMinY;
-    if (cat.jump.avoidDeskClip && y < desk.topY + 0.08) {
-      const halfX = desk.sizeX * 0.5 + 0.12;
-      const halfZ = desk.sizeZ * 0.5 + 0.12;
-      if (Math.abs(cat.pos.x - desk.pos.x) <= halfX && Math.abs(cat.pos.z - desk.pos.z) <= halfZ) {
-        y = desk.topY + 0.08;
-      }
-    }
-  }
-  cat.group.position.set(cat.pos.x, y, cat.pos.z);
-  const downLandingReady = isDownJump && u >= 0.9 && y <= cat.jump.toY + 0.02;
-  if (u >= 1 || downLandingReady) {
-    cat.group.position.y = cat.jump.toY;
-    const next = cat.jump.nextState;
-    cat.jump = null;
-    cat.state = next;
-    return true;
-  }
-  return false;
+  return surfaceRegistry.getElevatedSurfaceDefs(includeDesk);
 }
 
 function knockCup(...args) {
@@ -1349,8 +1402,9 @@ function updateCat(dt) {
       getCurrentGroundGoal: navRuntime.getCurrentGroundGoal,
       ensureCatPath: navRuntime.ensureCatPath,
       findSafeGroundPoint: navRuntime.findSafeGroundPoint,
-      startJump,
-      updateJump,
+      startJump: navRuntime.startJump,
+      updateJump: navRuntime.updateJump,
+      clearActiveJump: navRuntime.clearActiveJump,
       clearCatJumpTargets,
       moveCatToward: navRuntime.moveCatToward,
       pickRandomPatrolPoint: navRuntime.pickRandomPatrolPoint,
@@ -1364,6 +1418,8 @@ function updateCat(dt) {
       hasClearTravelLine: navRuntime.hasClearTravelLine,
       computeDeskJumpTargets: navRuntime.computeDeskJumpTargets,
       computeSurfaceJumpTargets: navRuntime.computeSurfaceJumpTargets,
+      getSurfaceDefs,
+      getSurfaceById,
       getElevatedSurfaceDefs,
       keepCatAwayFromCup: navRuntime.keepCatAwayFromCup,
       knockCup,
@@ -1468,9 +1524,13 @@ function simulateStep(stepDt, perfSample = null) {
 
 function animate() {
   const frameStartAt = performance.now();
+  const frameIntervalMs =
+    lastAnimationFrameAt > 0 ? frameStartAt - lastAnimationFrameAt : NaN;
+  lastAnimationFrameAt = frameStartAt;
   const frameDt = Math.min(clock.getDelta(), MAX_FRAME_DT);
   const timeScale = THREE.MathUtils.clamp(game.timeScale, 0, 2);
   const perfSample = {
+    frameIntervalMs,
     frameDtMs: frameDt * 1000,
     simSteps: 0,
     simulatedDtMs: 0,

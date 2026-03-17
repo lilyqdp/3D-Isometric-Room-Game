@@ -20,7 +20,7 @@ export function computeCupSwipePlan(THREE, desk, cupPosition, outPoint = null, o
   else if (nearest === dPosZ) edgeDir.set(0, 0, 1);
   else edgeDir.set(0, 0, -1);
 
-  const standDist = 0.34;
+  const standDist = 0.42;
   point.set(
     cupPosition.x - edgeDir.x * standDist,
     0,

@@ -11,6 +11,85 @@ export function animateCatPoseRuntime(ctx, dt, moving) {
   } = ctx;
 
 function animateCatPose(dt, moving) {
+  const setAnimDebug = (specialState, specialClip) => {
+    if (!cat.nav) return;
+    cat.nav.animSpecialState = specialState || "none";
+    cat.nav.animSpecialClip = specialClip || "none";
+  };
+  const updateBlink = () => {
+    const blink = cat.blink;
+    if (!blink || !blink.enabled) return;
+
+    const closeDur = Math.max(0.01, Number(blink.closeDuration) || 0.07);
+    const holdDur = Math.max(0, Number(blink.holdDuration) || 0.04);
+    const openDur = Math.max(0.01, Number(blink.openDuration) || 0.07);
+    const totalDur = closeDur + holdDur + openDur;
+    const baseInterval = Math.max(0.5, Number(blink.interval) || 6);
+    const intervalMin = Math.max(
+      0.5,
+      Number.isFinite(blink.intervalMin) ? Number(blink.intervalMin) : baseInterval * 0.75
+    );
+    const intervalMax = Math.max(
+      intervalMin,
+      Number.isFinite(blink.intervalMax) ? Number(blink.intervalMax) : baseInterval * 1.25
+    );
+    const randomInterval = () =>
+      intervalMax <= intervalMin + 1e-6
+        ? intervalMin
+        : intervalMin + Math.random() * (intervalMax - intervalMin);
+
+    let amount = 0;
+    if (!Number.isFinite(blink.nextAt)) {
+      blink.nextAt = clockTime + randomInterval();
+    }
+    if (!blink.active && clockTime >= blink.nextAt) {
+      blink.active = true;
+      blink.t = 0;
+      blink.nextAt = clockTime + randomInterval();
+    }
+
+    if (blink.active) {
+      blink.t += Math.max(0, dt);
+      if (blink.t < closeDur) {
+        amount = THREE.MathUtils.clamp(blink.t / closeDur, 0, 1);
+      } else if (blink.t < closeDur + holdDur) {
+        amount = 1;
+      } else if (blink.t < totalDur) {
+        amount = THREE.MathUtils.clamp(1 - (blink.t - closeDur - holdDur) / openDur, 0, 1);
+      } else {
+        blink.active = false;
+        blink.t = 0;
+        amount = 0;
+      }
+    }
+
+    const minOpenScale = 0.12;
+    if (Array.isArray(cat.blinkTargets)) {
+      for (const target of cat.blinkTargets) {
+        if (!target?.node?.scale) continue;
+        const baseScaleY =
+          Number.isFinite(target.baseScaleY) && target.baseScaleY > 1e-5
+            ? target.baseScaleY
+            : 1;
+        target.node.scale.y = THREE.MathUtils.lerp(
+          baseScaleY,
+          baseScaleY * minOpenScale,
+          amount
+        );
+      }
+    }
+    if (Array.isArray(cat.blinkMorphTargets)) {
+      for (const morph of cat.blinkMorphTargets) {
+        if (!morph?.node?.morphTargetInfluences) continue;
+        const index = morph.index;
+        if (!Number.isFinite(index)) continue;
+        morph.node.morphTargetInfluences[index] = amount;
+      }
+    }
+  };
+  setAnimDebug("none", "none");
+  updateBlink();
+
   const isPrepareJump = cat.state === "prepareJump";
   const isLaunchUp = cat.state === "launchUp";
   const isForepawHook = cat.state === "forepawHook";
@@ -62,7 +141,10 @@ function animateCatPose(dt, moving) {
         if (!cat.jump) return "jumpUp";
         const prepDur = Number(cat.jump.preDur || 0);
         const prepT = Number(cat.jump.preT || 0);
+        const launchDelay = Number(cat.jump.launchDelay || 0);
+        const launchDelayT = Number(cat.jump.launchDelayT || 0);
         if (prepDur > 1e-5 && prepT < prepDur - 1e-5) return "jumpPrepare";
+        if (launchDelay > 1e-5 && launchDelayT < launchDelay - 1e-5) return "jumpPrepare";
         // Keep airborne up-jumps to a single clip after prep.
         return "jumpUp";
       };
@@ -70,7 +152,10 @@ function animateCatPose(dt, moving) {
         if (!cat.jump) return "";
         const prepDur = Number(cat.jump.preDur || 0);
         const prepT = Number(cat.jump.preT || 0);
+        const launchDelay = Number(cat.jump.launchDelay || 0);
+        const launchDelayT = Number(cat.jump.launchDelayT || 0);
         if (prepDur > 1e-5 && prepT < prepDur - 1e-5) return "jumpDownPrepare";
+        if (launchDelay > 1e-5 && launchDelayT < launchDelay - 1e-5) return "jumpDownPrepare";
         return "jumpDown";
       };
 
@@ -79,6 +164,8 @@ function animateCatPose(dt, moving) {
         const speedOverrides = {};
         const prepDur = Math.max(0, Number(cat.jump.preDur || 0));
         const airDur = Math.max(1e-5, Number(cat.jump.dur || 0));
+        const launchDelay = Math.max(0, Number(cat.jump.launchDelay || 0));
+        const clipMotionDur = Math.max(1e-5, airDur + launchDelay);
         const isDownJumpClip = cat.jump.toY <= cat.jump.fromY + 0.03;
         if (isDownJumpClip) {
           const prepAction = cat.stateClipActions?.jumpDownPrepare?.action;
@@ -89,7 +176,7 @@ function animateCatPose(dt, moving) {
             speedOverrides.jumpDownPrepare = THREE.MathUtils.clamp(prepClipDur / prepDur, 0.2, 2.5);
           }
           if (Number.isFinite(downClipDur) && downClipDur > 1e-5 && airDur > 1e-5) {
-            speedOverrides.jumpDown = THREE.MathUtils.clamp(downClipDur / airDur, 0.2, 2.5);
+            speedOverrides.jumpDown = THREE.MathUtils.clamp(downClipDur / clipMotionDur, 0.2, 2.5);
           }
         } else {
           const prepSeq = cat.stateClipActions?.jumpPrepare?.sequenceActions;
@@ -106,7 +193,7 @@ function animateCatPose(dt, moving) {
             speedOverrides.jumpPrepare = THREE.MathUtils.clamp(prepClipDur / prepDur, 0.2, 2.5);
           }
           if (Number.isFinite(upClipDur) && upClipDur > 1e-5 && airDur > 1e-5) {
-            speedOverrides.jumpUp = THREE.MathUtils.clamp(upClipDur / airDur, 0.2, 2.5);
+            speedOverrides.jumpUp = THREE.MathUtils.clamp(upClipDur / clipMotionDur, 0.2, 2.5);
           }
         }
         if (Object.keys(speedOverrides).length > 0) {
@@ -127,6 +214,11 @@ function animateCatPose(dt, moving) {
       }
 
       const handledByClip = setCatClipSpecialPose(cat, clipSpecialState, dt);
+      const activeClipName =
+        cat.clipSpecialAction?.getClip?.()?.name ||
+        cat.activeClipAction?.getClip?.()?.name ||
+        "none";
+      setAnimDebug(clipSpecialState || "none", activeClipName);
       if (handledByClip) {
         cat.modelAnchor.position.y = THREE.MathUtils.damp(cat.modelAnchor.position.y, 0, 10, dt);
         cat.modelAnchor.rotation.x = THREE.MathUtils.damp(cat.modelAnchor.rotation.x, 0, 14, dt);
@@ -137,6 +229,7 @@ function animateCatPose(dt, moving) {
       if (!usesSpecialPose) {
         const clipMoving = !forceStill && (moving || worldSpeed > 0.12 || navSpeedNorm > 0.16);
         updateCatClipLocomotion(cat, dt, clipMoving, navSpeedNorm, worldSpeed);
+        setAnimDebug("none", cat.activeClipAction?.getClip?.()?.name || "none");
 
         cat.modelAnchor.position.y = THREE.MathUtils.damp(cat.modelAnchor.position.y, 0, 10, dt);
         cat.modelAnchor.rotation.x = THREE.MathUtils.damp(cat.modelAnchor.rotation.x, 0, 10, dt);
@@ -144,6 +237,7 @@ function animateCatPose(dt, moving) {
         return;
       }
       cat.clipMixer.update(dt);
+      setAnimDebug(clipSpecialState || "none", activeClipName);
     }
 
     const rig = cat.rig;

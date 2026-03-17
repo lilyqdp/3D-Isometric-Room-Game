@@ -16,11 +16,15 @@ export function createDebugControlsRuntime(ctx) {
     pickups,
     game,
     navRuntime,
+    getClockTime,
     getDebugRoot,
+    queueSharedDebugRouteRequest,
     clearCatJumpTargets,
     clearCatNavPath,
     resetCatJumpBypass,
     resetCatUnstuckTracking,
+    getSurfaceDefs,
+    getSurfaceById,
     getElevatedSurfaceDefs,
   } = ctx;
 
@@ -99,9 +103,110 @@ export function createDebugControlsRuntime(ctx) {
 
   function getElevatedSurfaceById(surfaceId) {
     if (!surfaceId || surfaceId === "floor") return null;
-    const defs = getElevatedSurfaceDefs(true);
+    const defs = typeof getSurfaceDefs === "function" ? getSurfaceDefs({ includeFloor: false }) : getElevatedSurfaceDefs(true);
     if (!Array.isArray(defs)) return null;
     return defs.find((s) => String(s?.id || s?.name || "") === String(surfaceId)) || null;
+  }
+
+  function getRoutePointY(point, fallback = 0) {
+    return Number.isFinite(point?.y) ? Number(point.y) : fallback;
+  }
+
+  function hydrateRoutePointHeights(route = null) {
+    const activeRoute = route || cat.nav?.route || null;
+    if (!activeRoute) return activeRoute;
+    const targetY = activeRoute.surface === "elevated"
+      ? Math.max(0.02, getRoutePointY(activeRoute.target, Number(activeRoute.y) || 0.02))
+      : 0;
+    const finalSurfaceId = String(activeRoute.finalSurfaceId || activeRoute.surfaceId || "floor");
+    const finalY = finalSurfaceId === "floor"
+      ? 0
+      : Math.max(0.02, getRoutePointY(activeRoute.finalTarget, Number(activeRoute.finalY) || targetY || 0.02));
+    const jumpDownY = getRoutePointY(activeRoute.jumpDown, Number(activeRoute.jumpDownY) || 0);
+    if (activeRoute.target?.set) activeRoute.target.y = targetY;
+    if (activeRoute.finalTarget?.set) activeRoute.finalTarget.y = finalY;
+    if (activeRoute.jumpDown?.set) activeRoute.jumpDown.y = jumpDownY;
+    activeRoute.y = targetY;
+    activeRoute.finalY = finalY;
+    activeRoute.jumpDownY = jumpDownY;
+    return activeRoute;
+  }
+
+  function ensureNavRoute() {
+    if (!cat.nav.route || typeof cat.nav.route !== "object") cat.nav.route = {};
+    const route = cat.nav.route;
+    if (!route.target || typeof route.target.set !== "function") route.target = new THREE.Vector3(cat.pos.x, 0, cat.pos.z);
+    if (!route.finalTarget || typeof route.finalTarget.set !== "function") route.finalTarget = new THREE.Vector3(cat.pos.x, 0, cat.pos.z);
+    if (!route.jumpAnchor || typeof route.jumpAnchor.set !== "function") route.jumpAnchor = new THREE.Vector3(cat.pos.x, 0, cat.pos.z);
+    if (!route.landing || typeof route.landing.set !== "function") route.landing = new THREE.Vector3(cat.pos.x, 0, cat.pos.z);
+    if (!route.jumpOff || typeof route.jumpOff.set !== "function") route.jumpOff = new THREE.Vector3(cat.pos.x, 0, cat.pos.z);
+    if (!route.jumpDown || typeof route.jumpDown.set !== "function") route.jumpDown = new THREE.Vector3(cat.pos.x, 0, cat.pos.z);
+    if (typeof route.active !== "boolean") route.active = false;
+    if (!route.source) route.source = "";
+    route.surface = route.surface === "elevated" ? "elevated" : "floor";
+    route.surfaceId = String(route.surfaceId || "floor");
+    route.finalSurfaceId = String(route.finalSurfaceId || "floor");
+    route.y = Number.isFinite(route.y) ? route.y : 0;
+    route.finalY = Number.isFinite(route.finalY) ? route.finalY : 0;
+    route.jumpDownY = Number.isFinite(route.jumpDownY) ? route.jumpDownY : 0;
+    route.directJump = !!route.directJump;
+    route.approachSurfaceId = String(route.approachSurfaceId || "floor");
+    route.sitSeconds = Number.isFinite(route.sitSeconds) ? route.sitSeconds : 0;
+    route.recoverAt = Number.isFinite(route.recoverAt) ? route.recoverAt : 0;
+    route.createdAt = Number.isFinite(route.createdAt) ? route.createdAt : 0;
+    route.blockedSince = Number.isFinite(route.blockedSince) ? route.blockedSince : 0;
+    route.blockedReason = route.blockedReason ? String(route.blockedReason) : "";
+    route.lastProgressAt = Number.isFinite(route.lastProgressAt) ? route.lastProgressAt : 0;
+    route.lastProgressX = Number.isFinite(route.lastProgressX) ? route.lastProgressX : cat.pos.x;
+    route.lastProgressZ = Number.isFinite(route.lastProgressZ) ? route.lastProgressZ : cat.pos.z;
+    if (!Array.isArray(route.segments)) route.segments = [];
+    route.segmentIndex = Number.isFinite(route.segmentIndex) ? Math.max(0, route.segmentIndex | 0) : 0;
+    route.segmentEnteredAt = Number.isFinite(route.segmentEnteredAt) ? route.segmentEnteredAt : 0;
+    route.segmentReason = route.segmentReason ? String(route.segmentReason) : "";
+    route.segmentProgressAt = Number.isFinite(route.segmentProgressAt) ? route.segmentProgressAt : 0;
+    route.segmentProgressX = Number.isFinite(route.segmentProgressX) ? route.segmentProgressX : cat.pos.x;
+    route.segmentProgressZ = Number.isFinite(route.segmentProgressZ) ? route.segmentProgressZ : cat.pos.z;
+    route.segmentProgressDist = Number.isFinite(route.segmentProgressDist) ? route.segmentProgressDist : Infinity;
+    hydrateRoutePointHeights(route);
+    return route;
+  }
+
+  function syncRouteFromDebugMove(sourceOverride = null) {
+    const route = ensureNavRoute();
+    const wasActive = !!route.active;
+    const now = typeof getClockTime === "function" ? Number(getClockTime()) : 0;
+    route.active = !!cat.debugMoveActive;
+    route.surface = cat.debugMoveSurface === "elevated" ? "elevated" : "floor";
+    route.surfaceId = String(cat.debugMoveSurfaceId || "floor");
+    route.finalSurfaceId = String(cat.debugMoveFinalSurfaceId || "floor");
+    route.y = Number.isFinite(cat.debugMoveY) ? cat.debugMoveY : 0;
+    route.finalY = Number.isFinite(cat.debugMoveFinalY) ? cat.debugMoveFinalY : 0;
+    route.jumpDownY = Number.isFinite(cat.debugMoveJumpDownY) ? cat.debugMoveJumpDownY : 0;
+    route.directJump = !!cat.debugMoveDirectJump;
+    route.approachSurfaceId = String(cat.nav.debugMoveApproachSurfaceId || (route.directJump ? route.surfaceId : "floor"));
+    route.sitSeconds = Number.isFinite(cat.debugMoveSitSeconds) ? cat.debugMoveSitSeconds : 0;
+    route.recoverAt = Number.isFinite(cat.nav.debugMoveRecoverAt) ? cat.nav.debugMoveRecoverAt : 0;
+    if (cat.debugMoveTarget?.copy) route.target.copy(cat.debugMoveTarget);
+    if (cat.debugMoveFinalTarget?.copy) route.finalTarget.copy(cat.debugMoveFinalTarget);
+    if (cat.debugMoveJumpAnchor?.copy) route.jumpAnchor.copy(cat.debugMoveJumpAnchor);
+    if (cat.debugMoveLanding?.copy) route.landing.copy(cat.debugMoveLanding);
+    if (cat.debugMoveJumpOff?.copy) route.jumpOff.copy(cat.debugMoveJumpOff);
+    if (cat.debugMoveJumpDown?.copy) route.jumpDown.copy(cat.debugMoveJumpDown);
+    hydrateRoutePointHeights(route);
+    if (sourceOverride != null) route.source = String(sourceOverride);
+    if (sourceOverride != null || (route.active && !wasActive)) {
+      route.createdAt = Number.isFinite(now) ? now : 0;
+      route.blockedSince = 0;
+      route.blockedReason = "";
+      route.lastProgressAt = route.active && Number.isFinite(now) ? now : 0;
+      route.lastProgressX = cat.pos.x;
+      route.lastProgressZ = cat.pos.z;
+      route.segmentProgressAt = route.active && Number.isFinite(now) ? now : 0;
+      route.segmentProgressX = cat.pos.x;
+      route.segmentProgressZ = cat.pos.z;
+      route.segmentProgressDist = Infinity;
+    }
+    return route;
   }
 
   function getCurrentCatSurface(fromPos = cat.pos) {
@@ -199,14 +304,9 @@ export function createDebugControlsRuntime(ctx) {
   }
 
   function buildElevatedWaypointPlan(surface, wantedPoint, fromPos = cat.pos) {
-    const surfaceMargin = CAT_COLLISION.catBodyRadius + 0.05;
-    const usableMinX = surface.minX + surfaceMargin;
-    const usableMaxX = surface.maxX - surfaceMargin;
-    const usableMinZ = surface.minZ + surfaceMargin;
-    const usableMaxZ = surface.maxZ - surfaceMargin;
-    if (usableMinX >= usableMaxX || usableMinZ >= usableMaxZ) return null;
-    const targetX = THREE.MathUtils.clamp(wantedPoint.x, usableMinX, usableMaxX);
-    const targetZ = THREE.MathUtils.clamp(wantedPoint.z, usableMinZ, usableMaxZ);
+    const snappedPoint = findSurfaceTeleportPoint(surface, wantedPoint);
+    const targetX = snappedPoint.x;
+    const targetZ = snappedPoint.z;
     const target = new THREE.Vector3(targetX, 0, targetZ);
     const surfaceId = String(surface?.id || surface?.name || "desk");
     const sourceSurface = getCurrentCatSurface(fromPos);
@@ -356,7 +456,7 @@ export function createDebugControlsRuntime(ctx) {
 
   function getElevatedSurfaceAt(point, y) {
     if (y <= 0.08) return null;
-    const surfaces = getElevatedSurfaceDefs(true);
+    const surfaces = typeof getSurfaceDefs === "function" ? getSurfaceDefs({ includeFloor: false }) : getElevatedSurfaceDefs(true);
     let best = null;
     let bestScore = Infinity;
     for (const surface of surfaces) {
@@ -489,6 +589,7 @@ export function createDebugControlsRuntime(ctx) {
     cat.debugMoveJumpOff.copy(plan.top);
     cat.debugMoveJumpDown.copy(plan.jumpFrom);
     cat.debugMoveJumpDownY = Number.isFinite(plan.jumpFrom?.y) ? plan.jumpFrom.y : 0;
+    syncRouteFromDebugMove();
     cat.nav.jumpDownDebug.planPhase = "recompute-ok";
     cat.nav.jumpDownDebug.planFailure = "";
     cat.nav.jumpDownDebug.planJumpOffX = plan.top.x;
@@ -506,71 +607,44 @@ export function createDebugControlsRuntime(ctx) {
     const target = getMouseDebugSurfaceTarget();
     if (!target) return false;
 
-    const movePoint =
-      target.surface === "floor" ? navRuntime.findSafeGroundPoint(target.floorPoint) : new THREE.Vector3(target.point.x, 0, target.point.z);
-
-    if (target.surface !== "elevated" && !cat.onTable && cat.group.position.y <= 0.08) {
-      cat.debugMoveActive = false;
-      cat.debugMoveSurface = "floor";
-      cat.debugMoveSurfaceId = "floor";
-      cat.debugMoveFinalSurfaceId = "floor";
-      cat.debugMoveY = 0;
-      cat.debugMoveFinalY = 0;
-      cat.debugMoveTarget.copy(movePoint);
-      cat.debugMoveFinalTarget.set(movePoint.x, 0, movePoint.z);
-      cat.manualPatrolActive = true;
-      cat.patrolTarget.copy(movePoint);
-      cat.state = "patrol";
-      cat.lastState = "debugMove";
-      cat.stateT = 0;
-      cat.phaseT = 0;
-      clearCatJumpTargets();
-      clearCatNavPath(true);
-      resetCatJumpBypass();
-      resetCatUnstuckTracking();
-      cat.nav.stuckT = 0;
-      cat.nav.debugDestination.set(movePoint.x, 0, movePoint.z);
-      navRuntime.ensureCatPath(movePoint, true, true);
-      return true;
-    }
-
-    cat.debugMoveActive = true;
-    cat.debugMoveSurface = target.surface === "elevated" ? "elevated" : "floor";
-    cat.debugMoveSurfaceId = target.surface === "elevated" ? String(target.surfaceId || "desk") : "floor";
-    cat.debugMoveY = target.surface === "elevated" ? target.point.y : 0;
-    cat.debugMoveFinalSurfaceId = String(
+    const finalSurfaceId = String(
       target.finalSurfaceId || (target.surface === "elevated" ? target.surfaceId || "desk" : "floor")
     );
-    const finalTargetPoint =
-      target.finalPoint || target.point;
-    cat.debugMoveFinalY =
-      cat.debugMoveFinalSurfaceId === "floor"
-        ? 0
-        : Number(finalTargetPoint.y || cat.debugMoveY || 0.02);
-    cat.debugMoveFinalTarget.set(finalTargetPoint.x, 0, finalTargetPoint.z);
-    cat.debugMoveDirectJump = !!target.directJump;
-    cat.debugMoveSitSeconds = 0;
-    cat.debugMoveTarget.copy(movePoint);
-    if (target.jumpAnchor) cat.debugMoveJumpAnchor.copy(target.jumpAnchor);
-    else cat.debugMoveJumpAnchor.copy(movePoint);
-    if (target.jumpLanding) cat.debugMoveLanding.copy(target.jumpLanding);
-    else cat.debugMoveLanding.copy(movePoint);
-    cat.debugMoveJumpOff.copy(cat.debugMoveLanding);
-    cat.debugMoveJumpDown.copy(movePoint);
-    cat.debugMoveJumpDownY = 0;
-    if (cat.debugMoveSurface === "floor" && (cat.onTable || cat.group.position.y > 0.08)) {
-      if (!updateDebugJumpDownPlan(movePoint, true, "floor")) return false;
-    } else if (cat.debugMoveSurface === "elevated" && cat.group.position.y > 0.08 && Math.abs(cat.group.position.y - cat.debugMoveY) > 0.12) {
-      if (!updateDebugJumpDownPlan(cat.debugMoveJumpAnchor, true, cat.debugMoveSurfaceId)) return false;
-    }
+    const rawFinalPoint = target.finalPoint || target.point || target.floorPoint;
+    if (!rawFinalPoint) return false;
+    const finalPoint = finalSurfaceId === "floor"
+      ? navRuntime.findSafeGroundPoint(new THREE.Vector3(rawFinalPoint.x, 0, rawFinalPoint.z))
+      : new THREE.Vector3(rawFinalPoint.x, Number(rawFinalPoint?.y || target.point?.y || 0.02), rawFinalPoint.z);
+
+    clearCatJumpTargets();
+    clearCatNavPath(true);
+    resetCatJumpBypass();
+    resetCatUnstuckTracking();
+    cat.nav.stuckT = 0;
+    cat.manualPatrolActive = false;
+    cat.debugMoveActive = false;
+    cat.nav.jumpDownPlanValid = false;
+    cat.nav.jumpDownToward = null;
+    cat.nav.jumpDownLandingSurfaceId = null;
     cat.state = "patrol";
     cat.lastState = "debugMove";
     cat.stateT = 0;
-    cat.nav.debugDestination.set(target.point.x, cat.debugMoveY, target.point.z);
-    if (cat.debugMoveSurface === "floor" && !cat.onTable) {
-      navRuntime.ensureCatPath(cat.debugMoveTarget, true, true);
+    cat.phaseT = 0;
+    cat.nav.debugDestination.set(finalPoint.x, Number(finalPoint?.y || 0), finalPoint.z);
+
+    if (typeof queueSharedDebugRouteRequest === "function") {
+      return !!queueSharedDebugRouteRequest({
+        finalSurfaceId,
+        finalPoint,
+        sitSeconds: 0,
+        source: "debug-click",
+        forceReplan: true,
+        lastState: "debugMove",
+        failStatus: "No route to click",
+      });
     }
-    return true;
+
+    return false;
   }
 
   function teleportCatToDebugMouseTarget() {
@@ -583,7 +657,7 @@ export function createDebugControlsRuntime(ctx) {
     resetCatUnstuckTracking();
     cat.nav.stuckT = 0;
     cat.nav.jumpDownLandingSurfaceId = null;
-    cat.jump = null;
+    navRuntime.clearActiveJump();
     cat.debugMoveActive = false;
     cat.debugMoveSurface = target.surface === "elevated" ? "elevated" : "floor";
     cat.debugMoveSurfaceId = target.surface === "elevated" ? String(target.surfaceId || "desk") : "floor";
@@ -597,7 +671,7 @@ export function createDebugControlsRuntime(ctx) {
       cat.debugMoveFinalSurfaceId === "floor"
         ? 0
         : Number(finalTeleportPoint.y || cat.debugMoveY || 0.02);
-    cat.debugMoveFinalTarget.set(finalTeleportPoint.x, 0, finalTeleportPoint.z);
+    cat.debugMoveFinalTarget.set(finalTeleportPoint.x, cat.debugMoveFinalY, finalTeleportPoint.z);
     cat.debugMoveDirectJump = false;
     cat.debugMoveSitSeconds = 0;
     const landingPoint =
@@ -627,6 +701,7 @@ export function createDebugControlsRuntime(ctx) {
       cat.state = "patrol";
       cat.lastState = "debugMove";
     }
+    syncRouteFromDebugMove("debug-teleport-target");
     cat.stateT = 0;
     cat.phaseT = 0;
     cat.nav.goal.set(landingPoint.x, 0, landingPoint.z);

@@ -1,3 +1,5 @@
+import { CAT_LOCOMOTION_PROFILES } from "./cat-locomotion.js";
+
 export function createCatModelRuntime(ctx) {
   const { THREE, gltfLoader, catModelCandidates, catModelYawOffset } = ctx;
 
@@ -71,6 +73,20 @@ export function createCatModelRuntime(ctx) {
       paw,
       simpleParts,
       modelAnchor,
+      blinkTargets: [],
+      blinkMorphTargets: [],
+      blink: {
+        enabled: false,
+        interval: 6,
+        intervalMin: 4.5,
+        intervalMax: 7.5,
+        closeDuration: 0.07,
+        holdDuration: 0.04,
+        openDuration: 0.07,
+        nextAt: Number.NaN,
+        active: false,
+        t: 0,
+      },
       usingRealisticModel: false,
       rig: null,
       clipMixer: null,
@@ -93,16 +109,7 @@ export function createCatModelRuntime(ctx) {
       locomotion: {
         activeClip: "idle",
         clipScale: 0,
-        profiles: {
-          idle: { planarSpeed: 0, turnRate: 0, localX: 0, localZ: 0 },
-          walkF: { planarSpeed: 0.9, turnRate: 1.1, localX: 0, localZ: 1 },
-          walkL: { planarSpeed: 0.78, turnRate: 0.7, localX: 0.32, localZ: 0.95 },
-          walkR: { planarSpeed: 0.78, turnRate: 0.7, localX: -0.32, localZ: 0.95 },
-          turn45L: { planarSpeed: 0, turnRate: 0.76, localX: 0, localZ: 0 },
-          turn45R: { planarSpeed: 0, turnRate: 0.76, localX: 0, localZ: 0 },
-          turn90L: { planarSpeed: 0, turnRate: 1.52, localX: 0, localZ: 0 },
-          turn90R: { planarSpeed: 0, turnRate: 1.52, localX: 0, localZ: 0 },
-        },
+        profiles: { ...CAT_LOCOMOTION_PROFILES },
       },
       pos: new THREE.Vector3(1.5, 0, 1.7),
       state: "patrol", // patrol|toDesk|prepareJump|launchUp|forepawHook|pullUp|jumpSettle|toCup|swipe|jumpDown|landStop|sit|toCatnip|distracted
@@ -145,6 +152,49 @@ export function createCatModelRuntime(ctx) {
       nav: {
         goal: new THREE.Vector3(1.5, 0, 1.7),
         debugDestination: new THREE.Vector3(1.5, 0, 1.7),
+        route: {
+          active: false,
+          source: "",
+          surface: "floor",
+          surfaceId: "floor",
+          finalSurfaceId: "floor",
+          y: 0,
+          finalY: 0,
+          jumpDownY: 0,
+          directJump: false,
+          sitSeconds: 0,
+          recoverAt: 0,
+          approachSurfaceId: "floor",
+          createdAt: 0,
+          blockedSince: 0,
+          blockedReason: "",
+          lastProgressAt: 0,
+          lastProgressX: 1.5,
+          lastProgressZ: 1.7,
+          segments: [],
+          segmentIndex: 0,
+          segmentEnteredAt: 0,
+          segmentReason: "",
+          segmentProgressAt: 0,
+          segmentProgressX: 1.5,
+          segmentProgressZ: 1.7,
+          segmentProgressDist: Infinity,
+          target: new THREE.Vector3(1.5, 0, 1.7),
+          finalTarget: new THREE.Vector3(1.5, 0, 1.7),
+          jumpAnchor: new THREE.Vector3(1.5, 0, 1.7),
+          landing: new THREE.Vector3(1.5, 0, 1.7),
+          jumpOff: new THREE.Vector3(1.5, 0, 1.7),
+          jumpDown: new THREE.Vector3(1.5, 0, 1.7),
+        },
+        routeInvalidation: {
+          pending: false,
+          kind: "",
+          target: new THREE.Vector3(1.5, 0, 1.7),
+          queryY: 0,
+          useDynamic: true,
+          requestedAt: 0,
+          count: 0,
+        },
         path: [],
         index: 0,
         commandedSpeed: 0,
@@ -167,6 +217,13 @@ export function createCatModelRuntime(ctx) {
         lastSurfaceHopTo: "",
         lastSurfaceHopAt: 0,
         surfaceHopTrail: [],
+        surfaceState: {
+          currentSurfaceId: "floor",
+          authority: "spawn",
+          authoritativeUntil: 0,
+          updatedAt: 0,
+          lastStableSurfaceId: "floor",
+        },
         steerYaw: NaN,
         pickupTrapT: 0,
         unstuckCheckAt: 0,
@@ -304,6 +361,38 @@ export function createCatModelRuntime(ctx) {
     }
 
     return rig;
+  }
+
+  function initCatBlinkTargets(catObject, model) {
+    const blinkTargets = [];
+    const blinkMorphTargets = [];
+    const eyeNameRegex = /(eye|eyeball|eyelid|lid)/i;
+    const blinkMorphRegex = /(blink|eye.?close|eyelid|lid.?close)/i;
+
+    model.traverse((node) => {
+      if (!node || !node.isMesh) return;
+      const nodeName = node.name || "";
+      if (eyeNameRegex.test(nodeName)) {
+        blinkTargets.push({
+          node,
+          baseScaleY:
+            Number.isFinite(node.scale?.y) && node.scale.y > 1e-5 ? node.scale.y : 1,
+        });
+      }
+      if (node.morphTargetDictionary && node.morphTargetInfluences) {
+        for (const [morphName, index] of Object.entries(node.morphTargetDictionary)) {
+          if (!blinkMorphRegex.test(morphName)) continue;
+          blinkMorphTargets.push({ node, index });
+        }
+      }
+    });
+
+    catObject.blinkTargets = blinkTargets;
+    catObject.blinkMorphTargets = blinkMorphTargets;
+    catObject.blink.enabled = blinkTargets.length > 0 || blinkMorphTargets.length > 0;
+    catObject.blink.active = false;
+    catObject.blink.t = 0;
+    catObject.blink.nextAt = Number.NaN;
   }
 
   function setBonePose(rig, bone, x = 0, y = 0, z = 0, alpha = 1) {
@@ -497,13 +586,24 @@ export function createCatModelRuntime(ctx) {
     }
 
     const walkClip =
-      pickAnimationClip(inPlaceClips, [/^walk_f$/i, /^walk$/i, /walk_f/i, /walk/i, /trot_f/i, /run_f/i]) || inPlaceClips[0];
+      pickAnimationClip(inPlaceClips, [/^walk_f$/i, /^walk$/i, /walk_f/i, /walk/i, /trot_f/i]) || inPlaceClips[0];
+    const runClip =
+      pickAnimationClip(inPlaceClips, [/^run_f$/i, /^run$/i, /run_f/i, /run/i]) || walkClip;
     const idleClip =
       pickAnimationClip(inPlaceClips, [/^idle$/i, /idle/i, /rest/i, /stand/i, /wait/i]) || walkClip || inPlaceClips[0];
 
     const locomotionClips = {
       idle: idleClip,
       walkF: walkClip,
+      runF: runClip,
+      runL:
+        pickAnimationClip(inPlaceClips, [/^run_l$/i, /run_l/i, /run\.l/i, /trot_l/i]) ||
+        pickAnimationClip(inPlaceClips, [/^walk_l$/i, /walk_l/i, /trot_l/i, /incline_side/i]) ||
+        walkClip,
+      runR:
+        pickAnimationClip(inPlaceClips, [/^run_r$/i, /run_r/i, /run\.r/i, /trot_r/i]) ||
+        pickAnimationClip(inPlaceClips, [/^walk_r$/i, /walk_r/i, /trot_r/i, /incline_side/i]) ||
+        walkClip,
       walkL:
         pickAnimationClip(inPlaceClips, [/^walk_l$/i, /walk_l/i, /trot_l/i, /run_l/i, /incline_side/i]) || walkClip,
       walkR:
@@ -875,12 +975,42 @@ export function createCatModelRuntime(ctx) {
     const keyMap = catObject.locomotionActionKeys || new Map();
     const targetKey = keyMap.get(target) || (target === idleAction ? "idle" : "walkF");
     const prevTargetKey = catObject.locomotionLastTargetKey || targetKey;
-    const isWalkKey = (key) => key === "walkF" || key === "walkL" || key === "walkR";
+    const isWalkKey = (key) =>
+      key === "walkF" ||
+      key === "runF" ||
+      key === "walkL" ||
+      key === "walkR" ||
+      key === "runL" ||
+      key === "runR";
     const isTurnKey = (key) => key === "turn90L" || key === "turn90R" || key === "turn45L" || key === "turn45R";
 
     if (targetKey !== prevTargetKey && isTurnKey(targetKey) && !isTurnKey(prevTargetKey)) {
       // Entering a turn from walk/idle: start from a deterministic pose and blend in.
       target.reset();
+    }
+    if (targetKey !== prevTargetKey && isWalkKey(targetKey) && isTurnKey(prevTargetKey)) {
+      // Exiting a turn into walk: seed walk phase from turn direction to reduce visible pose pop.
+      const prevAction = catObject.activeClipAction || locomotionActions[prevTargetKey];
+      if (prevAction && prevAction !== target) {
+        const prevDuration = Math.max(prevAction.getClip()?.duration || 0, 0.001);
+        const targetDuration = Math.max(target.getClip()?.duration || 0, 0.001);
+        const turnPhase = (((prevAction.time % prevDuration) + prevDuration) % prevDuration) / prevDuration;
+        const fromLeft = prevTargetKey.endsWith("L");
+        const leadPhase = fromLeft ? 0.12 : 0.62;
+        const oppositePhase = (leadPhase + 0.5) % 1;
+        let mappedPhase = leadPhase;
+        if (targetKey === "walkF" || targetKey === "runF") {
+          mappedPhase = THREE.MathUtils.lerp(leadPhase, turnPhase, 0.35);
+        } else if (
+          (fromLeft && (targetKey === "walkL" || targetKey === "runL")) ||
+          (!fromLeft && (targetKey === "walkR" || targetKey === "runR"))
+        ) {
+          mappedPhase = THREE.MathUtils.lerp(leadPhase, turnPhase, 0.5);
+        } else {
+          mappedPhase = THREE.MathUtils.lerp(oppositePhase, turnPhase, 0.3);
+        }
+        target.time = mappedPhase * targetDuration;
+      }
     }
     if (targetKey !== prevTargetKey && isWalkKey(targetKey) && isWalkKey(prevTargetKey)) {
       // Walk-to-walk keeps phase continuity.
@@ -890,6 +1020,21 @@ export function createCatModelRuntime(ctx) {
         const targetDuration = Math.max(target.getClip()?.duration || 0, 0.001);
         const phase = ((prevAction.time % prevDuration) + prevDuration) % prevDuration;
         target.time = (phase / prevDuration) * targetDuration;
+      }
+    }
+    if (targetKey !== prevTargetKey && isTurnKey(targetKey) && isTurnKey(prevTargetKey)) {
+      const sameSide = targetKey.slice(-1) === prevTargetKey.slice(-1);
+      if (sameSide) {
+        // Preserve phase when moving between same-side turn clips (45<->90).
+        const prevAction = catObject.activeClipAction || locomotionActions[prevTargetKey];
+        if (prevAction && prevAction !== target) {
+          const prevDuration = Math.max(prevAction.getClip()?.duration || 0, 0.001);
+          const targetDuration = Math.max(target.getClip()?.duration || 0, 0.001);
+          const phase = ((prevAction.time % prevDuration) + prevDuration) % prevDuration;
+          target.time = (phase / prevDuration) * targetDuration;
+        }
+      } else {
+        target.reset();
       }
     }
     catObject.locomotionLastTargetKey = targetKey;
@@ -905,6 +1050,8 @@ export function createCatModelRuntime(ctx) {
       Math.max(dt, 0)
     );
     const activeScale = Math.max(0.01, catObject.clipWalkScale);
+    const isTurnToWalkTransition =
+      targetKey !== prevTargetKey && isWalkKey(targetKey) && isTurnKey(prevTargetKey);
 
     const allActions = new Set([idleAction, walkAction, ...Object.values(locomotionActions), lingeringSpecialAction].filter(Boolean));
     for (const action of allActions) {
@@ -916,11 +1063,24 @@ export function createCatModelRuntime(ctx) {
         : action.getEffectiveWeight();
       let weightRate = targetWeight > currentWeight ? 13 : 18;
       if (isTurnKey(targetKey)) {
-        // Snap turn blend a bit faster so walk/turn overlap does not look like foot skating.
+        // Snap hard into turn clips so walk influence doesn't cause visible turn skid.
         if (actionKey === targetKey) {
-          weightRate = targetWeight > currentWeight ? 24 : 20;
+          weightRate = targetWeight > currentWeight ? 26 : 18;
+        } else if (isTurnKey(actionKey)) {
+          weightRate = targetWeight > currentWeight ? 18 : 30;
         } else {
-          weightRate = targetWeight > currentWeight ? 16 : 24;
+          weightRate = targetWeight > currentWeight ? 16 : 34;
+        }
+      } else if (isTurnKey(actionKey) && !isTurnKey(targetKey)) {
+        weightRate = targetWeight > currentWeight ? 14 : 22;
+      }
+      if (isTurnToWalkTransition) {
+        if (actionKey === targetKey) {
+          weightRate = targetWeight > currentWeight ? 5.5 : 14;
+        } else if (actionKey === prevTargetKey) {
+          weightRate = targetWeight > currentWeight ? 10 : 7;
+        } else if (isTurnKey(actionKey)) {
+          weightRate = targetWeight > currentWeight ? 10 : 16;
         }
       }
       let nextWeight = THREE.MathUtils.damp(currentWeight, targetWeight, weightRate, Math.max(dt, 0));
@@ -935,7 +1095,7 @@ export function createCatModelRuntime(ctx) {
         action.setEffectiveTimeScale(1.0);
       } else {
         const isActiveTurn = isTurnKey(actionKey) && actionKey === targetKey;
-        const runScale = isActiveTurn ? Math.max(0.7, Math.min(activeScale, 1.8)) : activeScale;
+        const runScale = isActiveTurn ? 1.0 : activeScale;
         if (isTurnKey(actionKey) && actionKey !== targetKey && nextWeight < 0.015) {
           action.setEffectiveTimeScale(0);
         } else {
@@ -980,6 +1140,7 @@ export function createCatModelRuntime(ctx) {
           catObject.usingRealisticModel = true;
           catObject.rig = createCatRig(model);
           setupCatClipAnimations(catObject, model, gltf.animations || []);
+          initCatBlinkTargets(catObject, model);
 
           for (const mesh of catObject.simpleParts) {
             mesh.visible = false;

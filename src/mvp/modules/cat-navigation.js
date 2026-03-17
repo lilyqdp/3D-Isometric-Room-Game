@@ -2,6 +2,7 @@ import { createCatPathfindingRuntime } from "./cat-pathfinding.js";
 import { createCatJumpPlanningRuntime } from "./cat-jump-planning.js";
 import { createCatSteeringRuntime } from "./cat-steering.js";
 import { createCatRecoveryRuntime } from "./cat-recovery.js";
+import { createCatJumpRuntime } from "./cat-jump-runtime.js";
 
 export function createCatNavigationRuntime(ctx) {
   const {
@@ -24,6 +25,8 @@ export function createCatNavigationRuntime(ctx) {
     game,
     pickupRadius,
     isDraggingPickup,
+    getSurfaceDefs,
+    getSurfaceById,
     getElevatedSurfaceDefs,
     clearCatNavPath,
     resetCatUnstuckTracking,
@@ -38,6 +41,8 @@ export function createCatNavigationRuntime(ctx) {
     ASTAR_NEIGHBOR_OFFSETS,
     ROOM,
     desk,
+    getSurfaceDefs,
+    getSurfaceById,
     getElevatedSurfaceDefs,
     hamper,
     trashCan,
@@ -59,16 +64,16 @@ export function createCatNavigationRuntime(ctx) {
     return pathRuntime.buildCatObstacles(includePickups, includeClosePickups);
   }
 
-  function isCatPointBlocked(x, z, obstacles, clearance = CAT_NAV.clearance, queryY = 0) {
-    return pathRuntime.isCatPointBlocked(x, z, obstacles, clearance, queryY);
+  function isCatPointBlocked(x, z, obstacles, clearance = null, queryY = 0, stage = "plan") {
+    return pathRuntime.isCatPointBlocked(x, z, obstacles, clearance, queryY, stage);
   }
 
   function getCatPathClearance() {
     return pathRuntime.getCatPathClearance();
   }
 
-  function hasClearTravelLine(a, b, obstacles, clearance = CAT_NAV.clearance, queryY = 0) {
-    return pathRuntime.hasClearTravelLine(a, b, obstacles, clearance, queryY);
+  function hasClearTravelLine(a, b, obstacles, clearance = null, queryY = 0, stage = "plan") {
+    return pathRuntime.hasClearTravelLine(a, b, obstacles, clearance, queryY, stage);
   }
 
   function catPathDistance(path) {
@@ -87,20 +92,24 @@ export function createCatNavigationRuntime(ctx) {
     return pathRuntime.getLastAStarDebugData();
   }
 
-  function computeCatPath(start, goal, obstacles, queryY = null) {
-    return pathRuntime.computeCatPath(start, goal, obstacles, queryY);
+  function computeCatPath(start, goal, obstacles, queryY = null, allowFallback = null, recordDebug = true) {
+    return pathRuntime.computeCatPath(start, goal, obstacles, queryY, allowFallback, recordDebug);
   }
 
-  function isPathTraversable(path, obstacles, clearance = CAT_NAV.clearance) {
-    return pathRuntime.isPathTraversable(path, obstacles, clearance);
+  function isPathTraversable(path, obstacles, clearance = null, queryY = null) {
+    return pathRuntime.isPathTraversable(path, obstacles, clearance, queryY);
   }
 
-  function canReachGroundTarget(start, goal, obstacles) {
-    return pathRuntime.canReachGroundTarget(start, goal, obstacles);
+  function canReachGroundTarget(start, goal, obstacles, options = null) {
+    return pathRuntime.canReachGroundTarget(start, goal, obstacles, options);
   }
 
-  function ensureCatPath(target, force = false, useDynamic = false, queryY = null) {
-    return pathRuntime.ensureCatPath(target, force, useDynamic, queryY);
+  function ensureCatPath(target, force = false, useDynamic = false, queryY = null, allowFallback = null) {
+    return pathRuntime.ensureCatPath(target, force, useDynamic, queryY, allowFallback);
+  }
+
+  function ensureCatPathNoFallback(target, force = false, useDynamic = false, queryY = null) {
+    return pathRuntime.ensureCatPathNoFallback(target, force, useDynamic, queryY);
   }
 
   function stepDetourCrowdToward(target, dt, useDynamicPlan = true, desiredSpeed = null) {
@@ -117,6 +126,8 @@ export function createCatNavigationRuntime(ctx) {
     CAT_COLLISION,
     ROOM,
     desk,
+    getSurfaceDefs,
+    getSurfaceById,
     getElevatedSurfaceDefs,
     CUP_COLLISION,
     pickups,
@@ -128,6 +139,15 @@ export function createCatNavigationRuntime(ctx) {
     isPathTraversable,
     catPathDistance,
     hasClearTravelLine,
+  });
+
+  const motionJumpRuntime = createCatJumpRuntime({
+    THREE,
+    CAT_COLLISION,
+    desk,
+    cat,
+    getElevatedSurfaceDefs,
+    getClockTime,
   });
 
   const recoveryRuntime = createCatRecoveryRuntime({
@@ -159,6 +179,9 @@ export function createCatNavigationRuntime(ctx) {
     SWIPE_TIMING,
     ROOM,
     desk,
+    game,
+    getSurfaceDefs,
+    getSurfaceById,
     getElevatedSurfaceDefs,
     cat,
     getClockTime,
@@ -168,6 +191,7 @@ export function createCatNavigationRuntime(ctx) {
     getCatPathClearance,
     hasClearTravelLine,
     ensureCatPath,
+    ensureCatPathNoFallback,
     stepDetourCrowdToward,
     canReachGroundTarget,
   });
@@ -184,6 +208,7 @@ export function createCatNavigationRuntime(ctx) {
     computeCatPath,
     canReachGroundTarget,
     ensureCatPath,
+    ensureCatPathNoFallback,
     stepDetourCrowdToward,
     resetDetourCrowd,
     bestSurfaceJumpAnchor: jumpRuntime.bestSurfaceJumpAnchor,
@@ -193,6 +218,10 @@ export function createCatNavigationRuntime(ctx) {
     computeDeskJumpTargets: jumpRuntime.computeDeskJumpTargets,
     computeDeskJumpDownTargets: jumpRuntime.computeDeskJumpDownTargets,
     getSurfaceJumpDebugData: jumpRuntime.getSurfaceJumpDebugData,
+    computeJumpNoClipMinY: motionJumpRuntime.computeJumpNoClipMinY,
+    clearActiveJump: motionJumpRuntime.clearActiveJump,
+    startJump: motionJumpRuntime.startJump,
+    updateJump: motionJumpRuntime.updateJump,
     moveCatToward: steeringRuntime.moveCatToward,
     findSafeGroundPoint: steeringRuntime.findSafeGroundPoint,
     pickRandomPatrolPoint: steeringRuntime.pickRandomPatrolPoint,

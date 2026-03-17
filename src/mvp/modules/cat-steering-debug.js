@@ -17,6 +17,9 @@ export function createCatSteeringDebugRuntime(ctx) {
     }
     if (!Array.isArray(cat.nav.debugEvents)) cat.nav.debugEvents = [];
     if (!Number.isFinite(cat.nav.segmentBlockedFrames)) cat.nav.segmentBlockedFrames = 0;
+    if (!Number.isFinite(cat.nav.segmentBlockRepathAt)) cat.nav.segmentBlockRepathAt = 0;
+    if (!Number.isFinite(cat.nav.segmentBlockEventAt)) cat.nav.segmentBlockEventAt = 0;
+    if (typeof cat.nav.segmentBlockSignature !== "string") cat.nav.segmentBlockSignature = "";
     if (!Number.isFinite(cat.nav.staleInvalidFrames)) cat.nav.staleInvalidFrames = 0;
     if (!Number.isFinite(cat.nav.wholePathBlockedFrames)) cat.nav.wholePathBlockedFrames = 0;
     if (!Number.isFinite(cat.nav.wholePathBlockRetryAt)) cat.nav.wholePathBlockRetryAt = 0;

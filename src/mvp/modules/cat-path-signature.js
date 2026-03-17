@@ -9,27 +9,37 @@ export function createCatPathSignatureRuntime(ctx) {
     if (!Array.isArray(obstacles) || !includePickups) return [];
     const specs = [];
     for (const obs of obstacles) {
+      const mode = String(obs?.mode || "hard");
+      // Soft and pushable clutter should influence high-level planning but should not
+      // churn detour/tile-cache updates every time the cat brushes them. Those are
+      // handled by the lightweight runtime steering and pickup shove logic instead.
+      if (mode !== "hard") continue;
+      const navPad = Math.max(0, Number(obs?.navPad) || 0);
       if (obs.tag === "cup") {
         specs.push({
           key: "cup",
           kind: "cylinder",
+          mode,
           x: obs.x,
           y: Number.isFinite(obs.y) ? obs.y : 0.1,
           z: obs.z,
-          radius: Math.max(0.03, obs.r || CUP_COLLISION.radius || 0.08),
+          radius: Math.max(0.03, (obs.r || CUP_COLLISION.radius || 0.08) + navPad),
           height: Math.max(0.12, obs.h || (CUP_COLLISION.waterHeight || 0.27)),
+          navPad,
         });
       } else if (obs.kind === "obb" && obs.pickupKey) {
         specs.push({
           key: obs.pickupKey,
           kind: "box",
+          mode,
           x: obs.x,
           y: Number.isFinite(obs.y) ? obs.y : 0.1,
           z: obs.z,
-          hx: Math.max(0.03, obs.hx || 0.1),
+          hx: Math.max(0.03, (obs.hx || 0.1) + navPad),
           hy: Math.max(0.05, (obs.h || 0.2) * 0.5),
-          hz: Math.max(0.03, obs.hz || 0.1),
+          hz: Math.max(0.03, (obs.hz || 0.1) + navPad),
           angle: Number.isFinite(obs.yaw) ? obs.yaw : 0,
+          navPad,
         });
       }
     }
@@ -41,13 +51,14 @@ export function createCatPathSignatureRuntime(ctx) {
     const sorted = specs.slice().sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
     const parts = [];
     for (const s of sorted) {
+      const mode = String(s.mode || "na");
       if (s.kind === "cylinder") {
         parts.push(
-          `c:${s.key}:${qv(s.x, 0.03)}:${qv(s.y, 0.03)}:${qv(s.z, 0.03)}:${qv(s.radius, 0.02)}:${qv(s.height, 0.03)}`
+          `c:${s.key}:${mode}:${qv(s.x, 0.03)}:${qv(s.y, 0.03)}:${qv(s.z, 0.03)}:${qv(s.radius, 0.02)}:${qv(s.height, 0.03)}:${qv(s.navPad || 0, 0.01)}`
         );
       } else {
         parts.push(
-          `b:${s.key}:${qv(s.x, 0.03)}:${qv(s.y, 0.03)}:${qv(s.z, 0.03)}:${qv(s.hx, 0.02)}:${qv(s.hy, 0.02)}:${qv(s.hz, 0.02)}:${qv(s.angle, 0.04)}`
+          `b:${s.key}:${mode}:${qv(s.x, 0.03)}:${qv(s.y, 0.03)}:${qv(s.z, 0.03)}:${qv(s.hx, 0.02)}:${qv(s.hy, 0.02)}:${qv(s.hz, 0.02)}:${qv(s.angle, 0.04)}:${qv(s.navPad || 0, 0.01)}`
         );
       }
     }
@@ -57,12 +68,15 @@ export function createCatPathSignatureRuntime(ctx) {
   function obstacleSignature(obstacles, clearance) {
     const parts = [`c:${qv(clearance)}`, `n:${obstacles.length}`];
     for (const obs of obstacles) {
+      const mode = String(obs?.mode || "hard");
+      const navPad = qv(obs?.navPad || 0, 0.01);
+      const steerPad = qv(obs?.steerPad || 0, 0.01);
       if (obs.kind === "circle") {
-        parts.push(`c:${qv(obs.x)}:${qv(obs.z)}:${qv(obs.r)}:${qv(obs.y || 0, 0.04)}:${qv(obs.h || 0, 0.04)}`);
+        parts.push(`c:${mode}:${navPad}:${steerPad}:${qv(obs.x)}:${qv(obs.z)}:${qv(obs.r)}:${qv(obs.y || 0, 0.04)}:${qv(obs.h || 0, 0.04)}`);
       } else if (obs.kind === "obb") {
-        parts.push(`o:${qv(obs.x)}:${qv(obs.z)}:${qv(obs.hx)}:${qv(obs.hz)}:${qv(obs.yaw || 0, 0.05)}:${qv(obs.y || 0, 0.04)}:${qv(obs.h || 0, 0.04)}`);
+        parts.push(`o:${mode}:${navPad}:${steerPad}:${qv(obs.x)}:${qv(obs.z)}:${qv(obs.hx)}:${qv(obs.hz)}:${qv(obs.yaw || 0, 0.05)}:${qv(obs.y || 0, 0.04)}:${qv(obs.h || 0, 0.04)}`);
       } else {
-        parts.push(`b:${qv(obs.x)}:${qv(obs.z)}:${qv(obs.hx)}:${qv(obs.hz)}:${qv(obs.y || 0, 0.04)}:${qv(obs.h || 0, 0.04)}`);
+        parts.push(`b:${mode}:${navPad}:${steerPad}:${qv(obs.x)}:${qv(obs.z)}:${qv(obs.hx)}:${qv(obs.hz)}:${qv(obs.y || 0, 0.04)}:${qv(obs.h || 0, 0.04)}`);
       }
     }
     return parts.join("|");
