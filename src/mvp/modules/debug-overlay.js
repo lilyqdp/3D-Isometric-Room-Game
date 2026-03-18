@@ -1,3 +1,4 @@
+import { catHasNonFloorSurface, getCatSurfaceId } from "./surface-ids.js";
 import {
   formatDebugNumber as formatNum,
   pushDebugPerfValue as pushPerfValue,
@@ -237,9 +238,21 @@ export function createDebugOverlayRuntime(ctx) {
     depthTest: false,
   });
   const DEBUG_SURFACE_PROBE_MISS_MAT = new THREE.LineBasicMaterial({
+    color: 0x8b8f98,
+    transparent: true,
+    opacity: 0.78,
+    depthTest: false,
+  });
+  const DEBUG_SURFACE_PROBE_STATIC_BLOCKED_MAT = new THREE.LineBasicMaterial({
+    color: 0xff4747,
+    transparent: true,
+    opacity: 0.88,
+    depthTest: false,
+  });
+  const DEBUG_SURFACE_PROBE_DYNAMIC_BLOCKED_MAT = new THREE.LineBasicMaterial({
     color: 0xffa12d,
     transparent: true,
-    opacity: 0.82,
+    opacity: 0.84,
     depthTest: false,
   });
   const DEBUG_SURFACE_PROBE_DOWN_ONLY_MAT = new THREE.LineBasicMaterial({
@@ -254,7 +267,13 @@ export function createDebugOverlayRuntime(ctx) {
     opacity: 0.92,
     depthTest: false,
   });
-  const DEBUG_SURFACE_LINK_BLOCKED_MAT = new THREE.LineBasicMaterial({
+  const DEBUG_SURFACE_LINK_STATIC_BLOCKED_MAT = new THREE.LineBasicMaterial({
+    color: 0xff4747,
+    transparent: true,
+    opacity: 0.88,
+    depthTest: false,
+  });
+  const DEBUG_SURFACE_LINK_DYNAMIC_BLOCKED_MAT = new THREE.LineBasicMaterial({
     color: 0xffa12d,
     transparent: true,
     opacity: 0.88,
@@ -266,7 +285,13 @@ export function createDebugOverlayRuntime(ctx) {
     opacity: 0.9,
     depthTest: false,
   });
-  const DEBUG_SURFACE_DOWN_LINK_BLOCKED_MAT = new THREE.LineBasicMaterial({
+  const DEBUG_SURFACE_DOWN_LINK_STATIC_BLOCKED_MAT = new THREE.LineBasicMaterial({
+    color: 0xff4747,
+    transparent: true,
+    opacity: 0.84,
+    depthTest: false,
+  });
+  const DEBUG_SURFACE_DOWN_LINK_DYNAMIC_BLOCKED_MAT = new THREE.LineBasicMaterial({
     color: 0xffa12d,
     transparent: true,
     opacity: 0.84,
@@ -305,6 +330,14 @@ export function createDebugOverlayRuntime(ctx) {
     depthTest: false,
   });
   const DEBUG_SURFACE_PROBE_END_MISS_MAT = new THREE.MeshBasicMaterial({
+    color: 0x8b8f98,
+    depthTest: false,
+  });
+  const DEBUG_SURFACE_PROBE_END_STATIC_BLOCKED_MAT = new THREE.MeshBasicMaterial({
+    color: 0xff4747,
+    depthTest: false,
+  });
+  const DEBUG_SURFACE_PROBE_END_DYNAMIC_BLOCKED_MAT = new THREE.MeshBasicMaterial({
     color: 0xffa12d,
     depthTest: false,
   });
@@ -312,7 +345,11 @@ export function createDebugOverlayRuntime(ctx) {
     color: 0x9cf7ff,
     depthTest: false,
   });
-  const DEBUG_SURFACE_LINK_BLOCKED_POINT_MAT = new THREE.MeshBasicMaterial({
+  const DEBUG_SURFACE_LINK_STATIC_BLOCKED_POINT_MAT = new THREE.MeshBasicMaterial({
+    color: 0xff4747,
+    depthTest: false,
+  });
+  const DEBUG_SURFACE_LINK_DYNAMIC_BLOCKED_POINT_MAT = new THREE.MeshBasicMaterial({
     color: 0xffa12d,
     depthTest: false,
   });
@@ -338,7 +375,15 @@ export function createDebugOverlayRuntime(ctx) {
     depthWrite: false,
     side: THREE.DoubleSide,
   });
-  const DEBUG_SURFACE_LINK_CLEARANCE_BLOCKED_MAT = new THREE.MeshBasicMaterial({
+  const DEBUG_SURFACE_LINK_CLEARANCE_STATIC_BLOCKED_MAT = new THREE.MeshBasicMaterial({
+    color: 0xff6f6f,
+    transparent: true,
+    opacity: 0.16,
+    depthTest: false,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+  });
+  const DEBUG_SURFACE_LINK_CLEARANCE_DYNAMIC_BLOCKED_MAT = new THREE.MeshBasicMaterial({
     color: 0xff8d4d,
     transparent: true,
     opacity: 0.16,
@@ -432,12 +477,21 @@ export function createDebugOverlayRuntime(ctx) {
     simMs: [],
     simulatedDtMs: [],
     simSteps: [],
+    windowMs: [],
     physicsMs: [],
     pickupsMs: [],
     spawnMs: [],
     catMs: [],
     cupMs: [],
     shatterMs: [],
+    debugCameraMs: [],
+    debugViewMs: [],
+    controlsMs: [],
+    uiMs: [],
+    renderMs: [],
+    postRenderMs: [],
+    accountedMs: [],
+    unaccountedMs: [],
     drawCalls: [],
     triangles: [],
     geometries: [],
@@ -702,12 +756,21 @@ export function createDebugOverlayRuntime(ctx) {
     pushPerfValue(perfTelemetry.simMs, sample.simMs);
     pushPerfValue(perfTelemetry.simulatedDtMs, sample.simulatedDtMs);
     pushPerfValue(perfTelemetry.simSteps, sample.simSteps);
+    pushPerfValue(perfTelemetry.windowMs, sample.windowMs);
     pushPerfValue(perfTelemetry.physicsMs, sample.physicsMs);
     pushPerfValue(perfTelemetry.pickupsMs, sample.pickupsMs);
     pushPerfValue(perfTelemetry.spawnMs, sample.spawnMs);
     pushPerfValue(perfTelemetry.catMs, sample.catMs);
     pushPerfValue(perfTelemetry.cupMs, sample.cupMs);
     pushPerfValue(perfTelemetry.shatterMs, sample.shatterMs);
+    pushPerfValue(perfTelemetry.debugCameraMs, sample.debugCameraMs);
+    pushPerfValue(perfTelemetry.debugViewMs, sample.debugViewMs);
+    pushPerfValue(perfTelemetry.controlsMs, sample.controlsMs);
+    pushPerfValue(perfTelemetry.uiMs, sample.uiMs);
+    pushPerfValue(perfTelemetry.renderMs, sample.renderMs);
+    pushPerfValue(perfTelemetry.postRenderMs, sample.postRenderMs);
+    pushPerfValue(perfTelemetry.accountedMs, sample.accountedMs);
+    pushPerfValue(perfTelemetry.unaccountedMs, sample.unaccountedMs);
     pushPerfValue(perfTelemetry.drawCalls, sample.drawCalls);
     pushPerfValue(perfTelemetry.triangles, sample.triangles);
     pushPerfValue(perfTelemetry.geometries, sample.geometries);
@@ -805,7 +868,7 @@ export function createDebugOverlayRuntime(ctx) {
     lines.push(
       `anim specialState=${navAnimSpecialState || cat.clipSpecialState || "none"} specialClip=${navAnimSpecialClip || activeSpecialClip || activeAnyClip || "none"}`
     );
-    lines.push(`pos=(${formatNum(cat.pos.x, 2)}, ${formatNum(cat.group.position.y, 2)}, ${formatNum(cat.pos.z, 2)}) onTable=${cat.onTable ? "yes" : "no"}`);
+    lines.push(`pos=(${formatNum(cat.pos.x, 2)}, ${formatNum(cat.group.position.y, 2)}, ${formatNum(cat.pos.z, 2)}) surface=${getCatSurfaceId(cat)}`);
     lines.push(`path len=${cat.nav?.path?.length || 0} idx=${cat.nav?.index || 0} stuckT=${formatNum(cat.nav?.stuckT || 0, 3)} repathAt=${formatNum((cat.nav?.repathAt || 0) - clockTime, 2)}s`);
     lines.push(`step reason=${step.reason || "na"} phase=${step.phase || "na"} direct=${step.direct ? "y" : "n"} dynIgnore=${step.ignoreDynamic ? "y" : "n"} turnOnly=${step.turnOnly ? "y" : "n"} turnOnlyT=${formatNum(step.turnOnlyT || 0, 2)} noSteerFrames=${step.noSteerFrames || 0} segBlockedFrames=${cat.nav?.segmentBlockedFrames || 0} staleInvalidFrames=${cat.nav?.staleInvalidFrames || 0}`);
     lines.push(`target=(${formatNum(step.targetX, 2)}, ${formatNum(step.targetZ, 2)}) chase=(${formatNum(step.chaseX, 2)}, ${formatNum(step.chaseZ, 2)}) d=${formatNum(step.distToChase || 0, 3)}`);
@@ -1009,8 +1072,8 @@ export function createDebugOverlayRuntime(ctx) {
     lines.push(`step reason=${step.reason || "na"} phase=${step.phase || "na"} target=${quantizeDebugValue(step.targetX,0.05)},${quantizeDebugValue(step.targetZ,0.05)} chase=${quantizeDebugValue(step.chaseX,0.05)},${quantizeDebugValue(step.chaseZ,0.05)} blocked=${step.blockedObstacle || "none"}`);
     lines.push(`elev support=${step.supportSurfaceId || "na"} rawTarget=${quantizeDebugValue(step.rawTargetX,0.05)},${quantizeDebugValue(step.rawTargetZ,0.05)} resolvedTarget=${quantizeDebugValue(step.resolvedTargetX,0.05)},${quantizeDebugValue(step.resolvedTargetZ,0.05)} snapDist=${formatNum(step.targetSnapDist || 0, 3)}`);
     if (jumpDown) lines.push(`jumpDown phase=${jumpDown.phase || "na"} plan=${jumpDown.planPhase || "na"} valid=${jumpDown.planValid ? "y" : "n"} fail=${jumpDown.failReason || jumpDown.planFailure || "none"} source=${jumpDown.planSourceSurfaceId || "na"} desired=${jumpDown.desiredLandingSurfaceId || jumpDown.planDesiredLandingSurfaceId || "na"}`);
-    lines.push(`events/1s skipExisting=${countEvents(events,1,clockTime,["route-plan-skip-existing"])} rejectJumpdown=${countEvents(events,1,clockTime,["route-queue-reject-no-jumpdown-link","route-move-reject-no-jumpdown-link"])} rejectElev=${countEvents(events,1,clockTime,["route-queue-reject-no-elevated-link"])} repathElevNoProg=${countEvents(events,1,clockTime,["repath-elevated-no-progress"])} routeInvalidate=${countEvents(events,1,clockTime,["route-invalidate"])}`);
-    lines.push(`events/5s skipExisting=${countEvents(events,5,clockTime,["route-plan-skip-existing"])} rejectJumpdown=${countEvents(events,5,clockTime,["route-queue-reject-no-jumpdown-link","route-move-reject-no-jumpdown-link"])} rejectElev=${countEvents(events,5,clockTime,["route-queue-reject-no-elevated-link"])} repathElevNoProg=${countEvents(events,5,clockTime,["repath-elevated-no-progress"])} routeInvalidate=${countEvents(events,5,clockTime,["route-invalidate"])}`);
+    lines.push(`events/1s skipExisting=${countEvents(events,1,clockTime,["route-plan-skip-existing"])} rejectJumpdown=${countEvents(events,1,clockTime,["route-queue-reject-no-jumpdown-link","route-move-reject-no-jumpdown-link"])} rejectElev=${countEvents(events,1,clockTime,["route-queue-reject-no-surface-link"])} repathElevNoProg=${countEvents(events,1,clockTime,["repath-surface-no-progress"])} routeInvalidate=${countEvents(events,1,clockTime,["route-invalidate"])}`);
+    lines.push(`events/5s skipExisting=${countEvents(events,5,clockTime,["route-plan-skip-existing"])} rejectJumpdown=${countEvents(events,5,clockTime,["route-queue-reject-no-jumpdown-link","route-move-reject-no-jumpdown-link"])} rejectElev=${countEvents(events,5,clockTime,["route-queue-reject-no-surface-link"])} repathElevNoProg=${countEvents(events,5,clockTime,["repath-surface-no-progress"])} routeInvalidate=${countEvents(events,5,clockTime,["route-invalidate"])}`);
     const recent = routeDiagState.sameDestPathChanges.slice(-6);
     if (recent.length) {
       lines.push("recent same-destination path flips:");
@@ -1084,7 +1147,16 @@ export function createDebugOverlayRuntime(ctx) {
       `sim ms avg=${formatNum(perfMean(perfTelemetry.simMs), 2)} | simulated dt/frame avg=${formatNum(perfMean(perfTelemetry.simulatedDtMs), 2)}`
     );
     lines.push(
-      `subsystem ms avg: physics=${formatNum(perfMean(perfTelemetry.physicsMs), 2)} pickups=${formatNum(perfMean(perfTelemetry.pickupsMs), 2)} spawn=${formatNum(perfMean(perfTelemetry.spawnMs), 2)} cat=${formatNum(perfMean(perfTelemetry.catMs), 2)} cup=${formatNum(perfMean(perfTelemetry.cupMs), 2)} shatter=${formatNum(perfMean(perfTelemetry.shatterMs), 2)}`
+      `sim subsystems avg: window=${formatNum(perfMean(perfTelemetry.windowMs), 2)} physics=${formatNum(perfMean(perfTelemetry.physicsMs), 2)} pickups=${formatNum(perfMean(perfTelemetry.pickupsMs), 2)} spawn=${formatNum(perfMean(perfTelemetry.spawnMs), 2)} cat=${formatNum(perfMean(perfTelemetry.catMs), 2)} cup=${formatNum(perfMean(perfTelemetry.cupMs), 2)} shatter=${formatNum(perfMean(perfTelemetry.shatterMs), 2)}`
+    );
+    lines.push(
+      `frame stages avg: debugCam=${formatNum(perfMean(perfTelemetry.debugCameraMs), 2)} debugView=${formatNum(perfMean(perfTelemetry.debugViewMs), 2)} controls=${formatNum(perfMean(perfTelemetry.controlsMs), 2)} ui=${formatNum(perfMean(perfTelemetry.uiMs), 2)} render=${formatNum(perfMean(perfTelemetry.renderMs), 2)} post=${formatNum(perfMean(perfTelemetry.postRenderMs), 2)}`
+    );
+    lines.push(
+      `frame stages p95: debugView=${formatNum(perfPercentile(perfTelemetry.debugViewMs, 0.95), 2)} ui=${formatNum(perfPercentile(perfTelemetry.uiMs, 0.95), 2)} render=${formatNum(perfPercentile(perfTelemetry.renderMs, 0.95), 2)} unaccounted=${formatNum(perfPercentile(perfTelemetry.unaccountedMs, 0.95), 2)}`
+    );
+    lines.push(
+      `accounting last: accounted=${formatNum(sample.accountedMs, 2)} unaccounted=${formatNum(sample.unaccountedMs, 2)} | avg accounted=${formatNum(perfMean(perfTelemetry.accountedMs), 2)} unaccounted=${formatNum(perfMean(perfTelemetry.unaccountedMs), 2)}`
     );
     lines.push(
       `render last: drawCalls=${formatNum(sample.drawCalls, 0)} tris=${formatNum(sample.triangles, 0)} geo=${formatNum(sample.geometries, 0)} tex=${formatNum(sample.textures, 0)}`
@@ -1127,7 +1199,7 @@ export function createDebugOverlayRuntime(ctx) {
     const summarizeMetric = (name, label) => {
       const metric = metrics[name];
       if (!metric || !Array.isArray(metric.samples) || metric.samples.length === 0) return `${label}: no samples`;
-      return `${label}: avg=${formatNum(perfMean(metric.samples), 2)} p95=${formatNum(perfPercentile(metric.samples, 0.95), 2)} max=${formatNum(perfMax(metric.samples), 2)} calls=${formatNum(metric.calls, 0)} slow=${formatNum(metric.slowCount, 0)}`;
+      return `${label}: last=${formatNum(metric.lastMs, 2)} avg=${formatNum(perfMean(metric.samples), 2)} p95=${formatNum(perfPercentile(metric.samples, 0.95), 2)} max=${formatNum(perfMax(metric.samples), 2)} calls=${formatNum(metric.calls, 0)} slow=${formatNum(metric.slowCount, 0)}`;
     };
     const hitRate = (hits, misses) => {
       const total = (Number(hits) || 0) + (Number(misses) || 0);
@@ -1145,6 +1217,12 @@ export function createDebugOverlayRuntime(ctx) {
     lines.push(summarizeMetric("buildCatObstacles", "build obstacles"));
     lines.push(summarizeMetric("findNearestWalkablePoint", "nearest walkable"));
     lines.push(summarizeMetric("stepDetourCrowdToward", "detour crowd step"));
+    lines.push("click / catnip:");
+    lines.push(summarizeMetric("pointerCatnipClick", "pointer catnip click"));
+    lines.push(summarizeMetric("placeCatnipFromMouse", "place catnip total"));
+    lines.push(summarizeMetric("getPlacementFromMouse", "catnip raycast"));
+    lines.push(summarizeMetric("isValidCatnipSpot", "catnip validate"));
+    lines.push(summarizeMetric("hasGroundEscapeSpace", "catnip escape scan"));
     lines.push(
       `cache hit rates: path=${hitRate(counters.pathCacheHits, counters.pathCacheMisses)} family=${hitRate(counters.pathFamilyHits, counters.pathFamilyMisses)} corridor=${hitRate(counters.pathCorridorHits, counters.pathCorridorMisses)} reach=${hitRate(counters.reachabilityCacheHits, counters.reachabilityCacheMisses)} nearest=${hitRate(counters.nearestWalkableCacheHits, counters.nearestWalkableCacheMisses)} obstacles=${hitRate(counters.obstacleCacheHits, counters.obstacleCacheMisses)} tri=${hitRate(counters.triangleNavMeshCacheHits, counters.triangleNavMeshCacheMisses)}`
     );
@@ -1165,6 +1243,9 @@ export function createDebugOverlayRuntime(ctx) {
         if (evt.ok != null) parts.push(`ok=${evt.ok ? 1 : 0}`);
         if (Number.isFinite(evt.pathLen)) parts.push(`len=${formatNum(evt.pathLen, 0)}`);
         if (evt.includePickups != null) parts.push(`dyn=${evt.includePickups ? 1 : 0}`);
+        if (evt.surface) parts.push(`surface=${evt.surface}`);
+        if (evt.result) parts.push(`result=${evt.result}`);
+        if (evt.phase) parts.push(`phase=${evt.phase}`);
         lines.push(parts.join(" | "));
       }
     } else {
@@ -1607,6 +1688,43 @@ export function createDebugOverlayRuntime(ctx) {
     }
   }
 
+  function resolveSurfaceLinkClass(link, direction = "up") {
+    const isDown = direction === "down";
+    const valid = isDown ? !!link?.validDown : !!link?.validUp;
+    if (valid) return "valid";
+    const blockedByImmovable = isDown ? !!link?.blockedByImmovableDown : !!link?.blockedByImmovableUp;
+    const blockedByMovable = isDown ? !!link?.blockedByMovableDown : !!link?.blockedByMovableUp;
+    const staticValid = isDown ? !!link?.staticValidDown : !!link?.staticValidUp;
+    if (blockedByImmovable || !staticValid) return "staticBlocked";
+    if (blockedByMovable) return "dynamicBlocked";
+    return "staticBlocked";
+  }
+
+  function getSurfaceLinkLineMaterial(link, direction = "up") {
+    const cls = resolveSurfaceLinkClass(link, direction);
+    if (direction === "down") {
+      if (cls === "valid") return DEBUG_SURFACE_DOWN_LINK_VALID_MAT;
+      if (cls === "dynamicBlocked") return DEBUG_SURFACE_DOWN_LINK_DYNAMIC_BLOCKED_MAT;
+      return DEBUG_SURFACE_DOWN_LINK_STATIC_BLOCKED_MAT;
+    }
+    if (cls === "valid") return DEBUG_SURFACE_LINK_VALID_MAT;
+    if (cls === "dynamicBlocked") return DEBUG_SURFACE_LINK_DYNAMIC_BLOCKED_MAT;
+    return DEBUG_SURFACE_LINK_STATIC_BLOCKED_MAT;
+  }
+
+  function getSurfaceLinkBlockedPointMaterial(link, direction = "up") {
+    const cls = resolveSurfaceLinkClass(link, direction);
+    if (cls === "dynamicBlocked") return DEBUG_SURFACE_LINK_DYNAMIC_BLOCKED_POINT_MAT;
+    return DEBUG_SURFACE_LINK_STATIC_BLOCKED_POINT_MAT;
+  }
+
+  function getSurfaceLinkClearanceMaterial(link, direction = "up") {
+    const cls = resolveSurfaceLinkClass(link, direction);
+    if (cls === "valid") return DEBUG_SURFACE_LINK_CLEARANCE_VALID_MAT;
+    if (cls === "dynamicBlocked") return DEBUG_SURFACE_LINK_CLEARANCE_DYNAMIC_BLOCKED_MAT;
+    return DEBUG_SURFACE_LINK_CLEARANCE_STATIC_BLOCKED_MAT;
+  }
+
   function rebuildSurfaceJumpDebug() {
     clearDebugChildren(debugView.surfaceJumpGroup);
     const showBounds = isFlagOn("showSurfaceBounds");
@@ -1693,17 +1811,27 @@ export function createDebugOverlayRuntime(ctx) {
         const upValid = !!probe?.validUp;
         const downValid = !!probe?.validDown;
         const isHit = !!probe?.hit;
-        const isDownOnly = isHit && !upValid && downValid;
-        const mat = isHit
-          ? (upValid ? DEBUG_SURFACE_PROBE_HIT_MAT : (isDownOnly ? DEBUG_SURFACE_PROBE_DOWN_ONLY_MAT : DEBUG_SURFACE_PROBE_MISS_MAT))
-          : DEBUG_SURFACE_PROBE_MISS_MAT;
+        const debugClass = String(probe?.debugClass || (isHit ? (upValid ? "validUp" : (downValid ? "validDown" : "staticBlocked")) : "noTarget"));
+        let mat = DEBUG_SURFACE_PROBE_MISS_MAT;
+        let endMat = DEBUG_SURFACE_PROBE_END_MISS_MAT;
+        if (debugClass === "validUp") {
+          mat = DEBUG_SURFACE_PROBE_HIT_MAT;
+          endMat = DEBUG_SURFACE_PROBE_END_HIT_MAT;
+        } else if (debugClass === "validDown") {
+          mat = DEBUG_SURFACE_PROBE_DOWN_ONLY_MAT;
+          endMat = DEBUG_SURFACE_PROBE_END_DOWN_ONLY_MAT;
+        } else if (debugClass === "dynamicBlocked") {
+          mat = DEBUG_SURFACE_PROBE_DYNAMIC_BLOCKED_MAT;
+          endMat = DEBUG_SURFACE_PROBE_END_DYNAMIC_BLOCKED_MAT;
+        } else if (debugClass === "staticBlocked") {
+          mat = DEBUG_SURFACE_PROBE_STATIC_BLOCKED_MAT;
+          endMat = DEBUG_SURFACE_PROBE_END_STATIC_BLOCKED_MAT;
+        }
         addLine(debugView.surfaceJumpGroup, origin, end, mat, 18);
 
         const endMarker = makeDebugCenterMarker(
           isHit ? 0.014 : 0.012,
-          isHit
-            ? (upValid ? DEBUG_SURFACE_PROBE_END_HIT_MAT : (isDownOnly ? DEBUG_SURFACE_PROBE_END_DOWN_ONLY_MAT : DEBUG_SURFACE_PROBE_END_MISS_MAT))
-            : DEBUG_SURFACE_PROBE_END_MISS_MAT
+          endMat
         );
         endMarker.position.copy(end);
         endMarker.renderOrder = 19;
@@ -1733,8 +1861,8 @@ export function createDebugOverlayRuntime(ctx) {
         const jumpFromDown = new THREE.Vector3(jumpFrom.x, fromY, jumpFrom.z);
         const downStart = link?.downStart || hookFullEnd;
         const downEnd = link?.downEnd || jumpFromDown;
-        const upMat = link.validUp ? DEBUG_SURFACE_LINK_VALID_MAT : DEBUG_SURFACE_LINK_BLOCKED_MAT;
-        const downMat = link.validDown ? DEBUG_SURFACE_DOWN_LINK_VALID_MAT : DEBUG_SURFACE_DOWN_LINK_BLOCKED_MAT;
+        const upMat = getSurfaceLinkLineMaterial(link, "up");
+        const downMat = getSurfaceLinkLineMaterial(link, "down");
         if (showLinks && showUp) {
           addLine(debugView.surfaceJumpGroup, launchStart, launchEnd, upMat, 19);
           if (!link?.upLaunchBlocked) {
@@ -1742,7 +1870,7 @@ export function createDebugOverlayRuntime(ctx) {
           }
           if (!link.validUp && (link?.upLaunchBlocked || link?.upHookBlocked)) {
             const blockedAt = link?.upLaunchBlocked ? launchEnd : hookEnd;
-            const blockedMarker = makeDebugCenterMarker(0.014, DEBUG_SURFACE_LINK_BLOCKED_POINT_MAT);
+            const blockedMarker = makeDebugCenterMarker(0.014, getSurfaceLinkBlockedPointMaterial(link, "up"));
             blockedMarker.position.copy(blockedAt);
             blockedMarker.renderOrder = 20;
             debugView.surfaceJumpGroup.add(blockedMarker);
@@ -1750,7 +1878,7 @@ export function createDebugOverlayRuntime(ctx) {
         }
         if (showLinks && showDown) addLine(debugView.surfaceJumpGroup, downStart, downEnd, downMat, 20);
         if (showLinks && showDown && !showUp && !link.validDown && link?.downBlocked) {
-          const blockedMarker = makeDebugCenterMarker(0.014, DEBUG_SURFACE_LINK_BLOCKED_POINT_MAT);
+          const blockedMarker = makeDebugCenterMarker(0.014, getSurfaceLinkBlockedPointMaterial(link, "down"));
           blockedMarker.position.copy(downEnd);
           blockedMarker.renderOrder = 20;
           debugView.surfaceJumpGroup.add(blockedMarker);
@@ -1777,8 +1905,8 @@ export function createDebugOverlayRuntime(ctx) {
             0.02,
             Number.isFinite(link?.landingClearance) ? link.landingClearance : Math.max(CAT_COLLISION.catBodyRadius, CAT_COLLISION.catBodyRadius * 1.5)
           );
-          const upClearMat = link.validUp ? DEBUG_SURFACE_LINK_CLEARANCE_VALID_MAT : DEBUG_SURFACE_LINK_CLEARANCE_BLOCKED_MAT;
-          const downClearMat = link.validDown ? DEBUG_SURFACE_LINK_CLEARANCE_VALID_MAT : DEBUG_SURFACE_LINK_CLEARANCE_BLOCKED_MAT;
+          const upClearMat = getSurfaceLinkClearanceMaterial(link, "up");
+          const downClearMat = getSurfaceLinkClearanceMaterial(link, "down");
 
           if (showUp) {
             addClearanceTube(debugView.surfaceJumpGroup, launchStart, launchFullEnd, launchClearance, upClearMat, 21);
@@ -2371,7 +2499,7 @@ export function createDebugOverlayRuntime(ctx) {
     return [
       `state:${cat.state || "na"}`,
       `jump:${cat.jump ? 1 : 0}`,
-      `onTable:${cat.onTable ? 1 : 0}`,
+      `surface:${getCatSurfaceId(cat)}`,
       `dbgMove:${cat.debugMoveActive ? 1 : 0}`,
       `dst:${q(dst.x)},${q(dst.y)},${q(dst.z)}`,
       `chase:${q(step.chaseX)},${q(step.chaseY)},${q(step.chaseZ)}`,
@@ -2392,7 +2520,7 @@ export function createDebugOverlayRuntime(ctx) {
     const pathKey = buildPathKey();
     let path = buildPlannedPath();
     if (!path || path.length < 2) {
-      const airborne = !!cat.jump || (!cat.onTable && cat.group.position.y > 0.08);
+      const airborne = !!cat.jump || (!catHasNonFloorSurface(cat, cat.group.position.y, 0.08) && cat.group.position.y > 0.08);
       if (
         airborne &&
         debugView.lastPathKey === pathKey &&

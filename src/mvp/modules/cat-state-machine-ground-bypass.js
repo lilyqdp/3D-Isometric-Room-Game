@@ -1,3 +1,5 @@
+import { catHasNonFloorSurface } from "./surface-ids.js";
+
 export function createCatStateMachineGroundBypassRuntime(ctx) {
   const {
     getClockTime,
@@ -91,8 +93,7 @@ export function createCatStateMachineGroundBypassRuntime(ctx) {
 
     if (
       cat.jump ||
-      cat.onTable ||
-      cat.group.position.y > 0.08 ||
+      catHasNonFloorSurface(cat) ||
       cat.state === "jumpDown" ||
       cat.state === "landStop"
     ) {

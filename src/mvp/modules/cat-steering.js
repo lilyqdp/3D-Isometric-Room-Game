@@ -1,3 +1,4 @@
+import { catHasNonFloorSurface, isFloorSurfaceId } from "./surface-ids.js";
 import { createCatSteeringDebugRuntime } from "./cat-steering-debug.js";
 import { getCatLocomotionProfile } from "./cat-locomotion.js";
 
@@ -91,16 +92,16 @@ export function createCatSteeringRuntime(ctx) {
     return `${mode}:${q(target?.x)}:${q(target?.z)}:${q(queryY)}`;
   }
 
-  function makeSegmentBlockKey(segmentBlock, target, queryY = 0, elevated = false) {
+  function makeSegmentBlockKey(segmentBlock, target, queryY = 0, nonFloorSurface = false) {
     const q = (v) => Math.round((Number.isFinite(v) ? v : 0) / REPATH_KEY_QUANTUM);
     const obs = String(segmentBlock?.obstacleLabel || segmentBlock?.obstacleKind || "unknown");
     const kind = String(segmentBlock?.obstacleKind || "na");
-    const mode = elevated ? "elev" : "ground";
+    const mode = nonFloorSurface ? "surface" : "ground";
     return `${mode}:${obs}:${kind}:${q(segmentBlock?.sampleX)}:${q(segmentBlock?.sampleZ)}:${q(target?.x)}:${q(target?.z)}:${q(queryY)}`;
   }
 
-  function canTriggerSegmentBlockedRepath(now, segmentBlock, target, queryY = 0, elevated = false) {
-    const key = makeSegmentBlockKey(segmentBlock, target, queryY, elevated);
+  function canTriggerSegmentBlockedRepath(now, segmentBlock, target, queryY = 0, nonFloorSurface = false) {
+    const key = makeSegmentBlockKey(segmentBlock, target, queryY, nonFloorSurface);
     const lastKey = String(cat.nav.segmentBlockSignature || "");
     const nextAt = Number(cat.nav.segmentBlockRepathAt) || 0;
     const cooldown = key === lastKey ? SAME_SEGMENT_BLOCK_REPATH_COOLDOWN : SEGMENT_BLOCK_REPATH_COOLDOWN;
@@ -179,7 +180,7 @@ export function createCatSteeringRuntime(ctx) {
       const dz = target.z - point.z;
       return dx * dx + dz * dz <= radius * radius;
     };
-    const onGroundNow = !cat.onTable && cat.group.position.y <= 0.08;
+    const onGroundNow = !catHasNonFloorSurface(cat);
     const routeCanRefreshLocally =
       !!activeRoute?.active &&
       (
@@ -187,7 +188,7 @@ export function createCatSteeringRuntime(ctx) {
           targetY <= 0.02 &&
           onGroundNow &&
           (
-            activeRoute.surface === "floor" ||
+            isFloorSurfaceId(activeRoute.surfaceId || activeRoute.finalSurfaceId || "floor") ||
             isNearRoutePoint(activeRoute.jumpAnchor) ||
             isNearRoutePoint(activeRoute.target)
           )
@@ -1897,12 +1898,12 @@ export function createCatSteeringRuntime(ctx) {
             if (allowSegmentBlockedRepath) {
               markRepathCause("segment-blocked", {
                 ignoreDynamic: !!ignoreDynamic,
-                elevated: true,
+                nonFloorSurface: true,
                 ...segmentBlock,
               });
               if (tryEnsurePath(repathState, tempTo, true, !ignoreDynamic, queryY)) {
                 bumpDebugCounter("repath");
-                recordNavEvent("repath-segment-blocked", { ignoreDynamic: !!ignoreDynamic, elevated: true });
+                recordNavEvent("repath-segment-blocked", { ignoreDynamic: !!ignoreDynamic, nonFloorSurface: true });
                 segmentObstacles = getElevatedCollisionObstacles();
                 if (cat.nav.path.length > 1) {
                   chase = selectPathChasePoint(tempTo, segmentObstacles, segmentClearance, queryY, lookAheadDistance);
@@ -1926,7 +1927,7 @@ export function createCatSteeringRuntime(ctx) {
                 recordNavEvent("segment-blocked-local-rescue", {
                   x: rescueChase.x,
                   z: rescueChase.z,
-                  elevated: true,
+                  nonFloorSurface: true,
                 });
               }
             }
@@ -1954,7 +1955,7 @@ export function createCatSteeringRuntime(ctx) {
           return true;
         }
         cat.nav.debugStep = {
-          phase: "elevated",
+          phase: "surface",
           reason: "noPath",
           direct,
           ignoreDynamic,
@@ -1966,7 +1967,7 @@ export function createCatSteeringRuntime(ctx) {
           time: now,
         };
         bumpDebugCounter("noPath");
-        recordNavEvent("no-path", { targetX: target.x, targetZ: target.z, elevated: true });
+        recordNavEvent("no-path", { targetX: target.x, targetZ: target.z, nonFloorSurface: true });
         cat.group.position.set(cat.pos.x, yLevel, cat.pos.z);
         setLocomotionIntent("idle", 0);
         updateDriveSpeed(0, dt);
@@ -1979,7 +1980,7 @@ export function createCatSteeringRuntime(ctx) {
     const dz = chase.z - cat.pos.z;
     const d = Math.hypot(dx, dz);
     cat.nav.debugStep = {
-      phase: yLevel <= 0.02 ? "ground" : "elevated",
+      phase: yLevel <= 0.02 ? "ground" : "surface",
       reason: "active",
       direct,
       ignoreDynamic,
@@ -2279,7 +2280,7 @@ export function createCatSteeringRuntime(ctx) {
         now >= turnOnlyRepathCooldownUntil &&
         now >= goalRepathCooldownUntil
       ) {
-        markRepathCause("turn-only", { ignoreDynamic: !!ignoreDynamic, elevated: true });
+        markRepathCause("turn-only", { ignoreDynamic: !!ignoreDynamic, nonFloorSurface: true });
         if (tryEnsurePath(repathState, tempTo, true, !ignoreDynamic, Math.max(0.02, yLevel))) {
           cat.nav.repathAt = now + CAT_NAV.repathInterval * 0.8;
           cat.nav.turnOnlyRepathCooldownUntil = now + 0.8;
@@ -2289,7 +2290,7 @@ export function createCatSteeringRuntime(ctx) {
             d,
             rawYawDelta: rawDy,
             ignoreDynamic: !!ignoreDynamic,
-            elevated: true,
+            nonFloorSurface: true,
           });
           cat.nav.turnOnlyT = 0;
         }
@@ -2387,11 +2388,11 @@ export function createCatSteeringRuntime(ctx) {
         cat.group.position.set(cat.pos.x, yLevel, cat.pos.z);
         cat.nav.stuckT = 0;
         cat.nav.noSteerFrames = 0;
-        markRepathCause("blocked-position-rescue", { ignoreDynamic: !!ignoreDynamic, elevated: true });
+        markRepathCause("blocked-position-rescue", { ignoreDynamic: !!ignoreDynamic, nonFloorSurface: true });
         if (tryEnsurePath(repathState, tempTo, true, !ignoreDynamic, queryY)) {
           cat.nav.repathAt = getClockTime() + CAT_NAV.repathInterval * 0.45;
           bumpDebugCounter("rescueSnap");
-          recordNavEvent("rescue-from-blocked-pos", { x: rescued.x, z: rescued.z, y: queryY, elevated: true });
+          recordNavEvent("rescue-from-blocked-pos", { x: rescued.x, z: rescued.z, y: queryY, nonFloorSurface: true });
         }
         applyTrapRecoveryHold(now);
       }
@@ -2485,8 +2486,8 @@ export function createCatSteeringRuntime(ctx) {
               tempTo.clone(),
             ];
             cat.nav.index = 1;
-            cat.nav.debugStep.reason = "elevated-local-rescue";
-            recordNavEvent("elevated-local-rescue", {
+            cat.nav.debugStep.reason = "surface-local-rescue";
+            recordNavEvent("surface-local-rescue", {
               x: rescueTarget.x,
               z: rescueTarget.z,
               targetX: tempTo.x,
@@ -2541,12 +2542,12 @@ export function createCatSteeringRuntime(ctx) {
           cat.nav.stuckT = Math.max(0, cat.nav.stuckT - dt * 0.25);
           cat.nav.noSteerFrames = 0;
           bumpDebugCounter("escape");
-          recordNavEvent("escape-step", { moved, elevated: true });
+          recordNavEvent("escape-step", { moved, nonFloorSurface: true });
           return false;
         }
       }
 
-      cat.nav.debugStep.reason = "elevated-noStep";
+      cat.nav.debugStep.reason = "surface-noStep";
       cat.group.position.set(cat.pos.x, yLevel, cat.pos.z);
       setLocomotionIntent("idle", 0);
       updateDriveSpeed(0, dt);
@@ -2566,7 +2567,7 @@ export function createCatSteeringRuntime(ctx) {
         if (tryEnsurePath(repathState, tempTo, true, !ignoreDynamic, queryY)) {
           cat.nav.repathAt = getClockTime() + CAT_NAV.repathInterval * 0.62;
           bumpDebugCounter("repath");
-          recordNavEvent("repath-elevated-nostep", { ignoreDynamic: !!ignoreDynamic, y: yLevel });
+          recordNavEvent("repath-surface-nostep", { ignoreDynamic: !!ignoreDynamic, y: yLevel });
         }
       }
       return false;
@@ -2603,11 +2604,11 @@ export function createCatSteeringRuntime(ctx) {
       cat.nav.stuckT += dt;
       bumpDebugCounter("rollback");
       if (getClockTime() >= cat.nav.repathAt) {
-        markRepathCause("rollback-blocked", { ignoreDynamic: !!ignoreDynamic, elevated: true });
+        markRepathCause("rollback-blocked", { ignoreDynamic: !!ignoreDynamic, nonFloorSurface: true });
         if (tryEnsurePath(repathState, tempTo, true, !ignoreDynamic, queryY)) {
           cat.nav.repathAt = getClockTime() + CAT_NAV.repathInterval * 0.5;
           bumpDebugCounter("repath");
-          recordNavEvent("repath-rollback", { ignoreDynamic: !!ignoreDynamic, elevated: true, stuckT: cat.nav.stuckT });
+          recordNavEvent("repath-rollback", { ignoreDynamic: !!ignoreDynamic, nonFloorSurface: true, stuckT: cat.nav.stuckT });
         }
       }
       return false;
@@ -2627,7 +2628,7 @@ export function createCatSteeringRuntime(ctx) {
       cat.nav.noSteerFrames = (cat.nav.noSteerFrames || 0) + 1;
       cat.nav.stuckT += dt * 0.24;
       if ((cat.nav.noSteerFrames || 0) >= 4 && !isNearTargetXZ(target, 0.2)) {
-        cat.nav.debugStep.reason = "elevated-noProgress";
+        cat.nav.debugStep.reason = "surface-noProgress";
         setLocomotionIntent("walkF", 0.55);
         updateDriveSpeed(Math.max(0.08, speedRef * 0.22), dt);
       }
@@ -2643,7 +2644,7 @@ export function createCatSteeringRuntime(ctx) {
         ((cat.nav.noSteerFrames || 0) >= 8 ||
         (cat.nav.stuckT || 0) > 0.62);
       if (shouldForceRepath && nowElevated >= cat.nav.repathAt) {
-        markRepathCause("elevated-no-progress", {
+        markRepathCause("surface-no-progress", {
           ignoreDynamic: !!ignoreDynamic,
           moved,
           y: queryY,
@@ -2653,7 +2654,7 @@ export function createCatSteeringRuntime(ctx) {
         if (tryEnsurePath(repathState, tempTo, true, !ignoreDynamic, queryY)) {
           cat.nav.repathAt = nowElevated + CAT_NAV.repathInterval * 0.88;
           bumpDebugCounter("repath");
-          recordNavEvent("repath-elevated-no-progress", {
+          recordNavEvent("repath-surface-no-progress", {
             ignoreDynamic: !!ignoreDynamic,
             moved,
             y: queryY,
@@ -2702,7 +2703,7 @@ export function createCatSteeringRuntime(ctx) {
     const obstacles = buildCatObstacles(true, true);
     const clearance = getCatPathClearance();
     const fromGround =
-      cat.onTable || cat.group.position.y > 0.08
+      catHasNonFloorSurface(cat)
         ? findSafeGroundPoint(new THREE.Vector3(from.x, 0, from.z))
         : from;
     const minX = ROOM.minX + CAT_NAV.margin + 0.12;

@@ -1,3 +1,5 @@
+import { catHasNonFloorSurface } from "./surface-ids.js";
+
 export function createCatRecoveryRuntime(ctx) {
   const {
     THREE,
@@ -232,7 +234,7 @@ export function createCatRecoveryRuntime(ctx) {
   }
 
   function recoverCatFromPickupTrap(dt) {
-    if (cat.jump || cat.onTable || cat.group.position.y > 0.04) {
+    if (cat.jump || catHasNonFloorSurface(cat, cat.group.position.y, 0.04)) {
       cat.nav.pickupTrapT = 0;
       cat.nav.unstuckCheckAt = getClockTime();
       cat.nav.unstuckCheckPos.copy(cat.pos);

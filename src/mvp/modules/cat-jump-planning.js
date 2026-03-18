@@ -22,7 +22,8 @@ export function createCatJumpPlanningRuntime(ctx) {
   } = ctx;
 
   const SURFACE_CFG = {
-    anchorsPerEdge: 5,
+    anchorsPerimeterTarget: 20,
+    circleAnchors: 10,
     jumpAngleMinDownDeg: 0,
     jumpAngleMaxDownDeg: 60,
     jumpAngleStepDeg: 2,
@@ -132,21 +133,39 @@ export function createCatJumpPlanningRuntime(ctx) {
     );
   }
 
-  function buildRectAnchors(surface, countPerEdge = 5) {
+  function finalizeAnchors(surface, anchors) {
+    const inner = surface.inner || surface.outer;
+    const cx = ((inner?.minX ?? 0) + (inner?.maxX ?? 0)) * 0.5;
+    const cz = ((inner?.minZ ?? 0) + (inner?.maxZ ?? 0)) * 0.5;
+    anchors.sort((a, b) => {
+      const aa = Math.atan2(a.inner.z - cz, a.inner.x - cx);
+      const bb = Math.atan2(b.inner.z - cz, b.inner.x - cx);
+      return aa - bb;
+    });
+    for (let i = 0; i < anchors.length; i++) {
+      anchors[i].id = `${surface.id}:a${i}`;
+      anchors[i].ringIndex = i;
+      anchors[i].nodeId = `node:${surface.id}:inner:${i}`;
+    }
+    return anchors;
+  }
+
+  function getRectAnchorCountPerEdge(surface, perimeterTarget = SURFACE_CFG.anchorsPerimeterTarget) {
+    const sideCount = 4;
+    const totalTarget = Math.max(sideCount, Math.ceil(Number(perimeterTarget) || sideCount));
+    return Math.max(2, Math.ceil(totalTarget / sideCount));
+  }
+
+  function buildRectAnchors(surface, perimeterTarget = SURFACE_CFG.anchorsPerimeterTarget) {
     const anchors = [];
-    const seen = new Set();
-    const n = Math.max(2, countPerEdge | 0);
+    const n = getRectAnchorCountPerEdge(surface, perimeterTarget);
     const inner = surface.inner;
     const outer = surface.outer;
 
     if (inner.minX >= inner.maxX || inner.minZ >= inner.maxZ) return anchors;
 
     const addAnchor = (edgeIndex, t, innerX, innerZ, outerX, outerZ, nx, nz) => {
-      const key = `${Math.round(innerX * 1000)}:${Math.round(innerZ * 1000)}`;
-      if (seen.has(key)) return;
-      seen.add(key);
       anchors.push({
-        id: `${surface.id}:a${anchors.length}`,
         surfaceId: surface.id,
         edgeIndex,
         t,
@@ -159,40 +178,60 @@ export function createCatJumpPlanningRuntime(ctx) {
     for (let i = 0; i < n; i++) {
       const t = n <= 1 ? 0 : i / (n - 1);
       const xI = THREE.MathUtils.lerp(inner.minX, inner.maxX, t);
-      // Outer point shares x with inner point for this edge.
       addAnchor(0, t, xI, inner.maxZ, xI, outer.maxZ, 0, 1);
     }
     for (let i = 0; i < n; i++) {
       const t = n <= 1 ? 0 : i / (n - 1);
       const zI = THREE.MathUtils.lerp(inner.maxZ, inner.minZ, t);
-      // Outer point shares z with inner point for this edge.
       addAnchor(1, t, inner.maxX, zI, outer.maxX, zI, 1, 0);
     }
     for (let i = 0; i < n; i++) {
       const t = n <= 1 ? 0 : i / (n - 1);
       const xI = THREE.MathUtils.lerp(inner.maxX, inner.minX, t);
-      // Outer point shares x with inner point for this edge.
       addAnchor(2, t, xI, inner.minZ, xI, outer.minZ, 0, -1);
     }
     for (let i = 0; i < n; i++) {
       const t = n <= 1 ? 0 : i / (n - 1);
       const zI = THREE.MathUtils.lerp(inner.minZ, inner.maxZ, t);
-      // Outer point shares z with inner point for this edge.
       addAnchor(3, t, inner.minX, zI, outer.minX, zI, -1, 0);
     }
 
-    const cx = (inner.minX + inner.maxX) * 0.5;
-    const cz = (inner.minZ + inner.maxZ) * 0.5;
-    anchors.sort((a, b) => {
-      const aa = Math.atan2(a.inner.z - cz, a.inner.x - cx);
-      const bb = Math.atan2(b.inner.z - cz, b.inner.x - cx);
-      return aa - bb;
-    });
-    for (let i = 0; i < anchors.length; i++) {
-      anchors[i].ringIndex = i;
-      anchors[i].nodeId = `node:${surface.id}:inner:${i}`;
+    return finalizeAnchors(surface, anchors);
+  }
+
+  function buildCircleAnchors(surface, anchorCount = SURFACE_CFG.circleAnchors) {
+    const anchors = [];
+    const centerX = Number(surface.cx ?? surface.centerX ?? surface.x ?? 0);
+    const centerZ = Number(surface.cz ?? surface.centerZ ?? surface.z ?? 0);
+    const innerRadius = Number(surface.innerRadius ?? surface.radius ?? 0);
+    const outerRadius = Number(surface.outerRadius ?? surface.radius ?? innerRadius);
+    const count = Math.max(3, Math.ceil(Number(anchorCount) || 0));
+    if (!(innerRadius > 0) || !(outerRadius > 0)) return anchors;
+
+    for (let i = 0; i < count; i++) {
+      const t = i / count;
+      const angle = t * Math.PI * 2;
+      const nx = Math.cos(angle);
+      const nz = Math.sin(angle);
+      anchors.push({
+        surfaceId: surface.id,
+        edgeIndex: 0,
+        t,
+        inner: new THREE.Vector3(centerX + nx * innerRadius, 0, centerZ + nz * innerRadius),
+        outer: new THREE.Vector3(centerX + nx * outerRadius, 0, centerZ + nz * outerRadius),
+        normal: new THREE.Vector3(nx, 0, nz),
+      });
     }
-    return anchors;
+
+    return finalizeAnchors(surface, anchors);
+  }
+
+  function buildSurfaceAnchors(surface) {
+    const shape = String(surface?.shape || surface?.shapeType || 'rect').toLowerCase();
+    if (shape === 'circle' || shape === 'disc' || shape === 'disk') {
+      return buildCircleAnchors(surface, SURFACE_CFG.circleAnchors);
+    }
+    return buildRectAnchors(surface, SURFACE_CFG.anchorsPerimeterTarget);
   }
 
   function intersectProbeWithSurface(origin, dir, maxDist, surface, sameLevelTolerance = SURFACE_CFG.sameLevelTolerance) {
@@ -252,8 +291,8 @@ export function createCatJumpPlanningRuntime(ctx) {
     surfaces.push(
       makeRectSurface("floor", floorY, floorMinX, floorMaxX, floorMinZ, floorMaxZ, CAT_COLLISION.catBodyRadius)
     );
-    const elevated = getConfiguredElevatedSurfaces();
-    for (const surface of elevated) {
+    const nonFloorSurfaces = getConfiguredElevatedSurfaces();
+    for (const surface of nonFloorSurfaces) {
       surfaces.push(
         makeRectSurface(
           surface.id,
@@ -269,7 +308,7 @@ export function createCatJumpPlanningRuntime(ctx) {
 
     const byId = new Map();
     for (const surface of surfaces) {
-      surface.anchors = buildRectAnchors(surface, SURFACE_CFG.anchorsPerEdge);
+      surface.anchors = buildSurfaceAnchors(surface);
       byId.set(surface.id, surface);
     }
 
@@ -487,8 +526,7 @@ export function createCatJumpPlanningRuntime(ctx) {
       angleDegs.push(minDeg);
     }
 
-    const elevated = surfaces.filter((s) => s.y > floorY + 0.05);
-    for (const source of elevated) {
+    for (const source of surfaces) {
       for (const anchor of source.anchors) {
         const origin = new THREE.Vector3(
           anchor.outer.x + anchor.normal.x * SURFACE_CFG.launchOuterPad,
@@ -508,6 +546,7 @@ export function createCatJumpPlanningRuntime(ctx) {
         );
 
         const candidatesBySurface = new Map();
+        const probeHitsBySurface = new Map();
         for (const angleDeg of angleDegs) {
           const theta = THREE.MathUtils.degToRad(angleDeg);
           const cos = Math.cos(theta);
@@ -536,7 +575,7 @@ export function createCatJumpPlanningRuntime(ctx) {
           }
 
           if (!bestHitForAngle || !bestTargetForAngle) continue;
-          if (candidatesBySurface.has(bestTargetForAngle.id)) continue;
+          if (probeHitsBySurface.has(bestTargetForAngle.id)) continue;
 
           const jumpFrom = bestHitForAngle.point.clone();
           const top = new THREE.Vector3(anchor.inner.x, source.y, anchor.inner.z);
@@ -579,19 +618,24 @@ export function createCatJumpPlanningRuntime(ctx) {
           );
           const staticValidUp = !blockedOnLaunch && !blockedOnTopLatch && !blockedOnJumpUpArc;
           const staticValidDown = !blockedOnJumpDownArc;
-          if (!staticValidUp && !staticValidDown) continue;
 
-          // First hit per surface wins (angle order is steep->shallow).
-          candidatesBySurface.set(bestTargetForAngle.id, {
+          const candidate = {
             hit: bestHitForAngle,
             target: bestTargetForAngle,
             angleDeg,
             staticValidUp,
             staticValidDown,
-          });
+          };
+
+          // First hit per surface wins (angle order is steep->shallow), even when blocked,
+          // so the debug probe view can still show invalid/blocked probe hits in red.
+          probeHitsBySurface.set(bestTargetForAngle.id, candidate);
+          if (staticValidUp || staticValidDown) {
+            candidatesBySurface.set(bestTargetForAngle.id, candidate);
+          }
         }
 
-        if (candidatesBySurface.size === 0) {
+        if (probeHitsBySurface.size === 0) {
           debugProbes.push({
             surfaceId: source.id,
             anchorId: anchor.id,
@@ -604,7 +648,7 @@ export function createCatJumpPlanningRuntime(ctx) {
           continue;
         }
 
-        for (const candidate of candidatesBySurface.values()) {
+        for (const candidate of probeHitsBySurface.values()) {
           const bestHit = candidate.hit;
           const bestTarget = candidate.target;
           debugProbes.push({
@@ -615,7 +659,14 @@ export function createCatJumpPlanningRuntime(ctx) {
             hit: true,
             toSurfaceId: bestTarget.id,
             angleDeg: candidate.angleDeg,
+            staticValidUp: !!candidate.staticValidUp,
+            staticValidDown: !!candidate.staticValidDown,
           });
+        }
+
+        for (const candidate of candidatesBySurface.values()) {
+          const bestHit = candidate.hit;
+          const bestTarget = candidate.target;
           const jumpFrom = bestHit.point;
           const top = cloneXZ(anchor.inner);
           const hook = cloneXZ(anchor.outer);
@@ -759,7 +810,7 @@ export function createCatJumpPlanningRuntime(ctx) {
     return best;
   }
 
-  function isObjectNearLanding(p, y) {
+  function isMovableObjectNearLanding(p, y) {
     const landingObjectRadius = CAT_COLLISION.catBodyRadius * SURFACE_CFG.landingClearanceMul;
     if (!cup.broken && !cup.falling && cup.group.visible) {
       if (Math.abs(cup.group.position.y - y) <= 0.36) {
@@ -782,10 +833,24 @@ export function createCatJumpPlanningRuntime(ctx) {
     return false;
   }
 
-  function isLandingSafe(link, dynamicObstacles, allowPushableBlocked = false) {
+  function normalizeJumpSafetyOptions(options = null) {
+    if (typeof options === "boolean") {
+      return {
+        allowPushableBlocked: !!options,
+        ignoreMovableLandingObjects: false,
+      };
+    }
+    return {
+      allowPushableBlocked: !!options?.allowPushableBlocked,
+      ignoreMovableLandingObjects: !!options?.ignoreMovableLandingObjects,
+    };
+  }
+
+  function isLandingSafe(link, dynamicObstacles, options = null) {
+    const safetyOptions = normalizeJumpSafetyOptions(options);
     if (!link) return false;
     if (link.staticValidUp === false) return false;
-    const linkObstacles = getJumpObstaclesForLink(link, dynamicObstacles, { ignorePushable: !!allowPushableBlocked });
+    const linkObstacles = getJumpObstaclesForLink(link, dynamicObstacles, { ignorePushable: safetyOptions.allowPushableBlocked });
     const toSurface = ensureJumpGraph().surfaces.byId.get(link.toSurfaceId);
     if (!toSurface) return false;
     const landingY = toSurface.y;
@@ -793,7 +858,7 @@ export function createCatJumpPlanningRuntime(ctx) {
     const cupAvoid = CAT_COLLISION.catBodyRadius + CUP_COLLISION.radius + 0.18;
     const p = link.top;
 
-    if (isObjectNearLanding(p, landingY)) return false;
+    if (!safetyOptions.ignoreMovableLandingObjects && isMovableObjectNearLanding(p, landingY)) return false;
     if (isCatPointBlocked(p.x, p.z, linkObstacles, landingClearance, landingY)) return false;
     if (isCatPointBlocked(p.x, p.z, linkObstacles, landingClearance, landingY + 0.18)) return false;
     if (!hasClearTravelLine(link.hook, p, linkObstacles, landingClearance, landingY)) return false;
@@ -805,10 +870,11 @@ export function createCatJumpPlanningRuntime(ctx) {
     return true;
   }
 
-  function isSurfaceJumpUpSafe(link, dynamicObstacles, allowPushableBlocked = false) {
+  function isSurfaceJumpUpSafe(link, dynamicObstacles, options = null) {
+    const safetyOptions = normalizeJumpSafetyOptions(options);
     if (!link) return false;
     if (link.staticValidUp === false) return false;
-    const linkObstacles = getJumpObstaclesForLink(link, dynamicObstacles, { ignorePushable: !!allowPushableBlocked });
+    const linkObstacles = getJumpObstaclesForLink(link, dynamicObstacles, { ignorePushable: safetyOptions.allowPushableBlocked });
     const built = ensureJumpGraph();
     const fromSurface = built.surfaces.byId.get(link.fromSurfaceId);
     const toSurface = built.surfaces.byId.get(link.toSurfaceId);
@@ -823,13 +889,14 @@ export function createCatJumpPlanningRuntime(ctx) {
     if (isSegmentBlocked(link.hook, link.top, landingClearance, toY, toY, linkObstacles)) {
       return false;
     }
-    return isLandingSafe(link, dynamicObstacles, allowPushableBlocked);
+    return isLandingSafe(link, dynamicObstacles, safetyOptions);
   }
 
-  function isSurfaceJumpDownSafe(link, dynamicObstacles, allowPushableBlocked = false) {
+  function isSurfaceJumpDownSafe(link, dynamicObstacles, options = null) {
+    const safetyOptions = normalizeJumpSafetyOptions(options);
     if (!link) return false;
     if (link.staticValidDown === false) return false;
-    const linkObstacles = getJumpObstaclesForLink(link, dynamicObstacles, { ignorePushable: !!allowPushableBlocked });
+    const linkObstacles = getJumpObstaclesForLink(link, dynamicObstacles, { ignorePushable: safetyOptions.allowPushableBlocked });
     const built = ensureJumpGraph();
     const fromSurface = built.surfaces.byId.get(link.fromSurfaceId);
     const toSurface = built.surfaces.byId.get(link.toSurfaceId);
@@ -841,7 +908,7 @@ export function createCatJumpPlanningRuntime(ctx) {
     if (isSegmentBlocked(link.top, link.jumpFrom, anchorClearance, sourceY, landingY, linkObstacles)) {
       return false;
     }
-    if (isObjectNearLanding(link.jumpFrom, landingY)) return false;
+    if (!safetyOptions.ignoreMovableLandingObjects && isMovableObjectNearLanding(link.jumpFrom, landingY)) return false;
     return true;
   }
 
@@ -1291,7 +1358,7 @@ export function createCatJumpPlanningRuntime(ctx) {
       );
       const stageTop = rawStageTop.clone();
       let stageTopWasClamped = false;
-      // Keep down-jump staging strictly inside the same support bounds used by elevated steering.
+      // Keep down-jump staging strictly inside the same support bounds used by surface steering.
       if (toSurface?.inner) {
         const supportPad = 0.006;
         const minX = Number.isFinite(toSurface.inner.minX) ? toSurface.inner.minX + supportPad : stageTop.x;
@@ -1348,6 +1415,19 @@ export function createCatJumpPlanningRuntime(ctx) {
     return computeSurfaceJumpDownTargets("desk", fromTopPoint, desiredGroundPoint);
   }
 
+  function resolveDebugProbeClass(probe) {
+    if (!probe?.hit) return "noTarget";
+    if (probe.validUp) return "validUp";
+    if (probe.blockedByImmovableUp) return "staticBlocked";
+    if (probe.blockedByMovableUp) return "dynamicBlocked";
+    if (probe.staticValidUp !== true && probe.staticValidDown !== true) return "staticBlocked";
+    if (probe.validDown || probe.staticValidDown) return "validDown";
+    if (probe.blockedByImmovableDown) return "staticBlocked";
+    if (probe.blockedByMovableDown) return "dynamicBlocked";
+    return "staticBlocked";
+  }
+
+
   function getSurfaceJumpDebugData() {
     const built = ensureJumpGraph();
     const dynamicObstacles = buildCatObstacles(true, true);
@@ -1365,6 +1445,8 @@ export function createCatJumpPlanningRuntime(ctx) {
       })),
     }));
 
+    const immovableObstacles = dynamicObstacles.filter((obs) => !obs?.pushable);
+
     const links = built.jumpLinks.map((link) => ({
       id: link.id,
       fromSurfaceId: link.fromSurfaceId,
@@ -1377,6 +1459,8 @@ export function createCatJumpPlanningRuntime(ctx) {
       staticValidDown: link.staticValidDown !== false,
       validUp: isSurfaceJumpUpSafe(link, dynamicObstacles),
       validDown: isSurfaceJumpDownSafe(link, dynamicObstacles),
+      immovableValidUp: isSurfaceJumpUpSafe(link, immovableObstacles, { ignoreMovableLandingObjects: true }),
+      immovableValidDown: isSurfaceJumpDownSafe(link, immovableObstacles, { ignoreMovableLandingObjects: true }),
     })).map((entry) => {
       const fromSurface = built.surfaces.byId.get(entry.fromSurfaceId);
       const toSurface = built.surfaces.byId.get(entry.toSurfaceId);
@@ -1389,6 +1473,7 @@ export function createCatJumpPlanningRuntime(ctx) {
       const launchClearance = CAT_NAV.clearance * 0.9;
       const landingClearance = CAT_COLLISION.catBodyRadius * SURFACE_CFG.landingClearanceMul;
       const linkObstacles = getJumpObstaclesForLink(entry, dynamicObstacles);
+      const immovableLinkObstacles = getJumpObstaclesForLink(entry, immovableObstacles);
       const blockedOnLaunch = firstBlockedPointOnSegment(
         launchStart,
         launchToHook,
@@ -1413,14 +1498,50 @@ export function createCatJumpPlanningRuntime(ctx) {
         fromY,
         linkObstacles
       );
+      const immovableBlockedOnLaunch = firstBlockedPointOnSegment(
+        launchStart,
+        launchToHook,
+        launchClearance,
+        fromY,
+        toY,
+        immovableLinkObstacles
+      );
+      const immovableBlockedOnHook = firstBlockedPointOnSegment(
+        hookToTopStart,
+        hookToTopEndTarget,
+        landingClearance,
+        toY,
+        toY,
+        immovableLinkObstacles
+      );
+      const immovableBlockedOnDown = firstBlockedPointOnSegment(
+        hookToTopEndTarget,
+        launchStart,
+        launchClearance,
+        toY,
+        fromY,
+        immovableLinkObstacles
+      );
+      const resolvedValidUp = entry.validUp && !blockedOnLaunch && !blockedOnHook;
+      const resolvedValidDown = entry.validDown && !blockedOnDown;
+      const immovableResolvedValidUp = entry.immovableValidUp && !immovableBlockedOnLaunch && !immovableBlockedOnHook;
+      const immovableResolvedValidDown = entry.immovableValidDown && !immovableBlockedOnDown;
+      const blockedByImmovableUp = entry.staticValidUp && !immovableResolvedValidUp;
+      const blockedByImmovableDown = entry.staticValidDown && !immovableResolvedValidDown;
+      const blockedByMovableUp = entry.staticValidUp && immovableResolvedValidUp && !resolvedValidUp;
+      const blockedByMovableDown = entry.staticValidDown && immovableResolvedValidDown && !resolvedValidDown;
       return {
         ...entry,
         fromY,
         toY,
         launchClearance,
         landingClearance,
-        validUp: entry.validUp && !blockedOnLaunch && !blockedOnHook,
-        validDown: entry.validDown && !blockedOnDown,
+        validUp: resolvedValidUp,
+        validDown: resolvedValidDown,
+        blockedByImmovableUp,
+        blockedByImmovableDown,
+        blockedByMovableUp,
+        blockedByMovableDown,
         upLaunchStart: launchStart,
         upLaunchEnd: blockedOnLaunch ? blockedOnLaunch : launchToHook,
         upLaunchBlocked: !!blockedOnLaunch,
@@ -1442,19 +1563,33 @@ export function createCatJumpPlanningRuntime(ctx) {
     const probes = (built.debugProbes || []).map((p) => {
       const key = `${p.surfaceId}|${p.toSurfaceId}|${p.anchorId}`;
       const linked = linkByProbeKey.get(key);
-      return {
+      const staticValidUp = linked ? !!linked.staticValidUp : !!p.staticValidUp;
+      const staticValidDown = linked ? !!linked.staticValidDown : !!p.staticValidDown;
+      const validUp = !!linked?.validUp;
+      const validDown = !!linked?.validDown;
+      const blockedByImmovableUp = !!linked?.blockedByImmovableUp;
+      const blockedByImmovableDown = !!linked?.blockedByImmovableDown;
+      const blockedByMovableUp = !!linked?.blockedByMovableUp;
+      const blockedByMovableDown = !!linked?.blockedByMovableDown;
+      const probe = {
         surfaceId: p.surfaceId,
         anchorId: p.anchorId,
         toSurfaceId: p.toSurfaceId,
         hit: !!p.hit,
         // Green probe should mean "jump-up is actually valid now", not just "ray hit something".
-        validUp: !!linked?.validUp,
-        validDown: !!linked?.validDown,
-        staticValidUp: linked ? !!linked.staticValidUp : false,
-        staticValidDown: linked ? !!linked.staticValidDown : false,
+        validUp,
+        validDown,
+        staticValidUp,
+        staticValidDown,
+        blockedByImmovableUp,
+        blockedByImmovableDown,
+        blockedByMovableUp,
+        blockedByMovableDown,
         origin: p.origin.clone(),
         end: p.end.clone(),
       };
+      probe.debugClass = resolveDebugProbeClass(probe);
+      return probe;
     });
     const vectorBlockers = (built.debugVectorBlockers || []).map((obs) => ({ ...obs }));
 

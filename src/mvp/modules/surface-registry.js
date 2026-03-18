@@ -52,6 +52,36 @@ function normalizeObstacle(spec, defaults = {}) {
   return out;
 }
 
+function normalizeSurfaceFlags(spec, floorLike) {
+  const rawFlags = spec && typeof spec.flags === "object" && spec.flags ? spec.flags : {};
+  const pickFlag = (primaryKey, legacyValue, defaultValue = false) => {
+    if (rawFlags[primaryKey] != null) return !!rawFlags[primaryKey];
+    if (legacyValue != null) return !!legacyValue;
+    return !!defaultValue;
+  };
+  const flags = {
+    randomPatrol: pickFlag("randomPatrol", spec?.randomPatrol, false),
+    manualPatrol: pickFlag("manualPatrol", spec?.manualPatrol != null ? spec.manualPatrol : true, true),
+    allowCatSpawn: pickFlag("allowCatSpawn", spec?.startSurface, false),
+    allowTrashSpawn: pickFlag("allowTrashSpawn", spec?.spawnTrash, false),
+    allowLaundrySpawn: pickFlag("allowLaundrySpawn", spec?.spawnLaundry, false),
+    allowCatnip: pickFlag("allowCatnip", spec?.allowCatnip != null ? spec.allowCatnip : true, true),
+    floorLike: pickFlag("floorLike", floorLike, floorLike),
+  };
+  for (const [key, value] of Object.entries(rawFlags)) {
+    if (flags[key] != null) continue;
+    flags[key] = !!value;
+  }
+  return flags;
+}
+
+function normalizeAssociatedObjectIds(spec) {
+  const source = spec?.associatedObjectIds ?? spec?.associatedObjects ?? spec?.objectIds;
+  if (source == null) return [];
+  const values = Array.isArray(source) ? source : [source];
+  return values.map((value) => String(value)).filter(Boolean);
+}
+
 function normalizeSurfaceSpec(spec, floorY) {
   if (!spec || typeof spec !== "object") return null;
   const id = String(spec.id || spec.name || "").trim();
@@ -59,6 +89,8 @@ function normalizeSurfaceSpec(spec, floorY) {
   const rect = normalizeRect(spec);
   const y = Number(spec.y);
   if (![rect.minX, rect.maxX, rect.minZ, rect.maxZ, y].every(Number.isFinite)) return null;
+  const floorLike = Math.abs(y - floorY) <= 0.04;
+  const flags = normalizeSurfaceFlags(spec, floorLike);
   const surface = {
     id,
     name: String(spec.name || id),
@@ -67,13 +99,15 @@ function normalizeSurfaceSpec(spec, floorY) {
     minZ: rect.minZ,
     maxZ: rect.maxZ,
     y,
-    floorLike: Math.abs(y - floorY) <= 0.04,
-    randomPatrol: !!spec.randomPatrol,
-    manualPatrol: spec.manualPatrol !== false,
-    startSurface: !!spec.startSurface,
-    spawnTrash: !!spec.spawnTrash,
-    spawnLaundry: !!spec.spawnLaundry,
-    allowCatnip: spec.allowCatnip !== false,
+    floorLike: !!flags.floorLike,
+    randomPatrol: !!flags.randomPatrol,
+    manualPatrol: !!flags.manualPatrol,
+    startSurface: !!flags.allowCatSpawn,
+    spawnTrash: !!flags.allowTrashSpawn,
+    spawnLaundry: !!flags.allowLaundrySpawn,
+    allowCatnip: !!flags.allowCatnip,
+    flags,
+    associatedObjectIds: normalizeAssociatedObjectIds(spec),
     special: cloneMeta(spec.special),
     supports: [],
     blockers: [],
@@ -147,12 +181,15 @@ export function createSurfaceRegistry({ floorBounds, floorY = 0, surfaceSpecs = 
     maxX: floorRect.maxX,
     minZ: floorRect.minZ,
     maxZ: floorRect.maxZ,
-    randomPatrol: true,
-    manualPatrol: true,
-    startSurface: true,
-    spawnTrash: true,
-    spawnLaundry: true,
-    allowCatnip: true,
+    flags: {
+      randomPatrol: true,
+      manualPatrol: true,
+      allowCatSpawn: true,
+      allowTrashSpawn: true,
+      allowLaundrySpawn: true,
+      allowCatnip: true,
+      floorLike: true,
+    },
     special: { type: "floor" },
   });
 
@@ -175,6 +212,8 @@ export function createSurfaceRegistry({ floorBounds, floorY = 0, surfaceSpecs = 
       spawnTrash: surface.spawnTrash,
       spawnLaundry: surface.spawnLaundry,
       allowCatnip: surface.allowCatnip,
+      flags: cloneMeta(surface.flags),
+      associatedObjectIds: Array.isArray(surface.associatedObjectIds) ? [...surface.associatedObjectIds] : [],
       special: cloneMeta(surface.special),
     };
   }
@@ -203,19 +242,32 @@ export function createSurfaceRegistry({ floorBounds, floorY = 0, surfaceSpecs = 
       .map(cloneSurface);
   }
 
+  function surfaceHasCapability(surfaceOrId, capability) {
+    const key = String(capability || "").trim();
+    if (!key) return false;
+    const surface = typeof surfaceOrId === "string" ? byId.get(surfaceOrId) : surfaceOrId;
+    if (!surface) return false;
+    const aliasMap = {
+      randomPatrol: "randomPatrol",
+      manualPatrol: "manualPatrol",
+      startSurface: "allowCatSpawn",
+      allowCatSpawn: "allowCatSpawn",
+      spawnTrash: "allowTrashSpawn",
+      allowTrashSpawn: "allowTrashSpawn",
+      spawnLaundry: "allowLaundrySpawn",
+      allowLaundrySpawn: "allowLaundrySpawn",
+      allowCatnip: "allowCatnip",
+      floorLike: "floorLike",
+    };
+    const flagKey = aliasMap[key] || key;
+    if (surface.flags && Object.prototype.hasOwnProperty.call(surface.flags, flagKey)) {
+      return !!surface.flags[flagKey];
+    }
+    return !!surface[flagKey];
+  }
+
   function getSurfaceIdsByCapability(capability) {
-    const key = String(capability || "");
-    return normalized
-      .filter((surface) => {
-        if (key === "randomPatrol") return surface.randomPatrol;
-        if (key === "manualPatrol") return surface.manualPatrol;
-        if (key === "startSurface") return surface.startSurface;
-        if (key === "spawnTrash") return surface.spawnTrash;
-        if (key === "spawnLaundry") return surface.spawnLaundry;
-        if (key === "allowCatnip") return surface.allowCatnip;
-        return false;
-      })
-      .map((surface) => surface.id);
+    return normalized.filter((surface) => surfaceHasCapability(surface, capability)).map((surface) => surface.id);
   }
 
   function buildNavObstacles() {
@@ -258,6 +310,7 @@ export function createSurfaceRegistry({ floorBounds, floorY = 0, surfaceSpecs = 
     getElevatedSurfaceDefs,
     getSurfaceById,
     getSurfaceIdsByCapability,
+    surfaceHasCapability,
     buildNavObstacles,
     buildStaticBoxes,
   };

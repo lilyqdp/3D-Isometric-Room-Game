@@ -116,9 +116,7 @@ export function createCatModelRuntime(ctx) {
       lastState: "patrol",
       stateT: 0,
       status: "Patrolling",
-      onTable: false,
       debugMoveActive: false,
-      debugMoveSurface: "floor", // floor | elevated
       debugMoveFinalSurfaceId: "floor",
       debugMoveY: 0,
       debugMoveFinalY: 0,
@@ -155,7 +153,6 @@ export function createCatModelRuntime(ctx) {
         route: {
           active: false,
           source: "",
-          surface: "floor",
           surfaceId: "floor",
           finalSurfaceId: "floor",
           y: 0,

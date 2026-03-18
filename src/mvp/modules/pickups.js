@@ -163,7 +163,7 @@ export function createPickupsRuntime(ctx) {
     geometry.computeVertexNormals();
   }
 
-  function addPickup(type, x, z) {
+  function addPickup(type, x, z, options = null) {
     let mesh;
     let body;
     let mass;
@@ -230,7 +230,9 @@ export function createPickupsRuntime(ctx) {
       hitProxy.position.set(0, 0.02, 0);
       mesh.add(hitProxy);
     }
-    mesh.position.set(x, 0.08, z);
+    const spawnY = Number.isFinite(options?.y) ? Number(options.y) : 0.08;
+    const spawnSurfaceId = options?.surfaceId != null ? String(options.surfaceId) : "floor";
+    mesh.position.set(x, spawnY, z);
     mesh.rotation.y = Math.random() * Math.PI;
     mesh.traverse((node) => {
       if (node.isMesh) {
@@ -239,7 +241,7 @@ export function createPickupsRuntime(ctx) {
       }
     });
 
-    body.position.set(x, 0.08, z);
+    body.position.set(x, spawnY, z);
     body.quaternion.setFromEuler(mesh.rotation.x, mesh.rotation.y, mesh.rotation.z);
     body.sleepSpeedLimit = 0.09;
     body.sleepTimeLimit = 0.4;
@@ -250,6 +252,7 @@ export function createPickupsRuntime(ctx) {
       mesh,
       body,
       type,
+      spawnSurfaceId,
       baseMass: mass,
       pulseSeed: Math.random() * 6.28,
       inMotion: false,

@@ -1,3 +1,5 @@
+import { FLOOR_SURFACE_ID, catHasNonFloorSurface, isFloorSurfaceId, isNonFloorSurfaceId, normalizeSurfaceId, setCatSurfaceId, targetSurfaceId } from "./surface-ids.js";
+
 export function createDebugControlsRuntime(ctx) {
   const {
     THREE,
@@ -101,7 +103,7 @@ export function createDebugControlsRuntime(ctx) {
     return navRuntime.findSafeGroundPoint(start);
   }
 
-  function getElevatedSurfaceById(surfaceId) {
+  function getNonFloorSurfaceById(surfaceId) {
     if (!surfaceId || surfaceId === "floor") return null;
     const defs = typeof getSurfaceDefs === "function" ? getSurfaceDefs({ includeFloor: false }) : getElevatedSurfaceDefs(true);
     if (!Array.isArray(defs)) return null;
@@ -115,7 +117,7 @@ export function createDebugControlsRuntime(ctx) {
   function hydrateRoutePointHeights(route = null) {
     const activeRoute = route || cat.nav?.route || null;
     if (!activeRoute) return activeRoute;
-    const targetY = activeRoute.surface === "elevated"
+    const targetY = isNonFloorSurfaceId(activeRoute.surfaceId)
       ? Math.max(0.02, getRoutePointY(activeRoute.target, Number(activeRoute.y) || 0.02))
       : 0;
     const finalSurfaceId = String(activeRoute.finalSurfaceId || activeRoute.surfaceId || "floor");
@@ -143,9 +145,8 @@ export function createDebugControlsRuntime(ctx) {
     if (!route.jumpDown || typeof route.jumpDown.set !== "function") route.jumpDown = new THREE.Vector3(cat.pos.x, 0, cat.pos.z);
     if (typeof route.active !== "boolean") route.active = false;
     if (!route.source) route.source = "";
-    route.surface = route.surface === "elevated" ? "elevated" : "floor";
-    route.surfaceId = String(route.surfaceId || "floor");
-    route.finalSurfaceId = String(route.finalSurfaceId || "floor");
+    route.surfaceId = normalizeSurfaceId(route.surfaceId || route.finalSurfaceId || cat.nav?.surfaceState?.currentSurfaceId);
+    route.finalSurfaceId = normalizeSurfaceId(route.finalSurfaceId || route.surfaceId);
     route.y = Number.isFinite(route.y) ? route.y : 0;
     route.finalY = Number.isFinite(route.finalY) ? route.finalY : 0;
     route.jumpDownY = Number.isFinite(route.jumpDownY) ? route.jumpDownY : 0;
@@ -176,9 +177,8 @@ export function createDebugControlsRuntime(ctx) {
     const wasActive = !!route.active;
     const now = typeof getClockTime === "function" ? Number(getClockTime()) : 0;
     route.active = !!cat.debugMoveActive;
-    route.surface = cat.debugMoveSurface === "elevated" ? "elevated" : "floor";
-    route.surfaceId = String(cat.debugMoveSurfaceId || "floor");
-    route.finalSurfaceId = String(cat.debugMoveFinalSurfaceId || "floor");
+    route.surfaceId = normalizeSurfaceId(cat.debugMoveSurfaceId || cat.debugMoveFinalSurfaceId || (Number(cat.debugMoveY) > 0.02 ? cat.nav?.surfaceState?.currentSurfaceId : FLOOR_SURFACE_ID));
+    route.finalSurfaceId = normalizeSurfaceId(cat.debugMoveFinalSurfaceId || route.surfaceId);
     route.y = Number.isFinite(cat.debugMoveY) ? cat.debugMoveY : 0;
     route.finalY = Number.isFinite(cat.debugMoveFinalY) ? cat.debugMoveFinalY : 0;
     route.jumpDownY = Number.isFinite(cat.debugMoveJumpDownY) ? cat.debugMoveJumpDownY : 0;
@@ -210,23 +210,32 @@ export function createDebugControlsRuntime(ctx) {
   }
 
   function getCurrentCatSurface(fromPos = cat.pos) {
-    if (!cat.onTable && cat.group.position.y <= 0.08) {
-      return { id: "floor", y: 0 };
+    if (!catHasNonFloorSurface(cat)) {
+      return { id: FLOOR_SURFACE_ID, y: 0 };
     }
-    const elevated = getElevatedSurfaceAt(fromPos, cat.group.position.y);
-    if (elevated) {
+    const surface = getNonFloorSurfaceAt(fromPos, cat.group.position.y);
+    if (surface) {
       return {
-        id: String(elevated.id || elevated.name || "desk"),
-        y: Number.isFinite(elevated.y) ? elevated.y : Math.max(0.02, cat.group.position.y),
+        id: normalizeSurfaceId(surface.id || surface.name || cat.nav?.surfaceState?.currentSurfaceId, FLOOR_SURFACE_ID),
+        y: Number.isFinite(surface.y) ? surface.y : Math.max(0.02, cat.group.position.y),
       };
     }
-    const fallbackId = cat.debugMoveSurfaceId && cat.debugMoveSurfaceId !== "floor"
-      ? String(cat.debugMoveSurfaceId)
-      : "desk";
+    const fallbackId = normalizeSurfaceId(
+      cat.nav?.surfaceState?.currentSurfaceId || cat.debugMoveSurfaceId || FLOOR_SURFACE_ID,
+      FLOOR_SURFACE_ID
+    );
     const fallbackY = Number.isFinite(cat.group.position.y)
       ? Math.max(0.02, cat.group.position.y)
-      : (Number.isFinite(cat.debugMoveY) ? Math.max(0.02, cat.debugMoveY) : desk.topY + 0.02);
+      : (Number.isFinite(cat.debugMoveY) ? Math.max(0.02, cat.debugMoveY) : 0.02);
     return { id: fallbackId, y: fallbackY };
+  }
+
+  function getTargetSurfaceId(target, fallback = FLOOR_SURFACE_ID) {
+    return targetSurfaceId(target, fallback);
+  }
+
+  function targetUsesNonFloorSurface(target) {
+    return isNonFloorSurfaceId(getTargetSurfaceId(target));
   }
 
   function pointInTriangleXZ(px, pz, ax, az, bx, bz, cx, cz) {
@@ -303,16 +312,15 @@ export function createDebugControlsRuntime(ctx) {
     return false;
   }
 
-  function buildElevatedWaypointPlan(surface, wantedPoint, fromPos = cat.pos) {
+  function buildSurfaceWaypointPlan(surface, wantedPoint, fromPos = cat.pos) {
     const snappedPoint = findSurfaceTeleportPoint(surface, wantedPoint);
     const targetX = snappedPoint.x;
     const targetZ = snappedPoint.z;
     const target = new THREE.Vector3(targetX, 0, targetZ);
-    const surfaceId = String(surface?.id || surface?.name || "desk");
+    const surfaceId = normalizeSurfaceId(surface?.id || surface?.name || FLOOR_SURFACE_ID);
     const sourceSurface = getCurrentCatSurface(fromPos);
     if (sourceSurface.id === surfaceId) {
       return {
-        surface: "elevated",
         surfaceId,
         point: new THREE.Vector3(targetX, surface.y, targetZ),
         finalSurfaceId: surfaceId,
@@ -333,12 +341,12 @@ export function createDebugControlsRuntime(ctx) {
         )
       : navRuntime.bestDeskJumpAnchor(planningStart, target);
     if (!anchor) {
-      // Fallback: if direct elevated->elevated linking is unavailable, route via floor
-      // and keep final target on requested elevated surface.
+      // Fallback: if direct surface-to-surface linking is unavailable, route via floor
+      // and keep final target on the requested surface.
       if (sourceSurface.id !== "floor") {
         const floorPoint = clampToRoomFloor(wantedPoint);
         return {
-          surface: "floor",
+          surfaceId: FLOOR_SURFACE_ID,
           point: floorPoint.clone(),
           floorPoint,
           finalSurfaceId: surfaceId,
@@ -362,7 +370,7 @@ export function createDebugControlsRuntime(ctx) {
       if (sourceSurface.id !== "floor") {
         const floorPoint = clampToRoomFloor(wantedPoint);
         return {
-          surface: "floor",
+          surfaceId: FLOOR_SURFACE_ID,
           point: floorPoint.clone(),
           floorPoint,
           finalSurfaceId: surfaceId,
@@ -375,14 +383,14 @@ export function createDebugControlsRuntime(ctx) {
     if (hopSurfaceId === "floor") {
       const hopFloor = clampToRoomFloor(jumpTargets.top);
       return {
-        surface: "floor",
+        surfaceId: FLOOR_SURFACE_ID,
         point: hopFloor.clone(),
         floorPoint: hopFloor,
         finalSurfaceId: surfaceId,
         finalPoint: new THREE.Vector3(targetX, surface.y, targetZ),
       };
     }
-    const hopSurfaceDef = getElevatedSurfaceById(hopSurfaceId);
+    const hopSurfaceDef = getNonFloorSurfaceById(hopSurfaceId);
     const hopY = Number.isFinite(hopSurfaceDef?.y)
       ? hopSurfaceDef.y
       : (hopSurfaceId === surfaceId ? surface.y : jumpTargets.top.y);
@@ -390,7 +398,6 @@ export function createDebugControlsRuntime(ctx) {
       ? new THREE.Vector3(targetX, hopY, targetZ)
       : new THREE.Vector3(jumpTargets.top.x, hopY, jumpTargets.top.z);
     return {
-      surface: "elevated",
       surfaceId: hopSurfaceId,
       point: hopPoint,
       finalSurfaceId: surfaceId,
@@ -416,9 +423,9 @@ export function createDebugControlsRuntime(ctx) {
       const surface = hit.object.userData?.catSurface;
       if (surface) {
         const surfaceY = Number.isFinite(surface.y) ? surface.y : point.y + 0.02;
-        const plan = buildElevatedWaypointPlan(
+        const plan = buildSurfaceWaypointPlan(
           {
-            id: surface.id || surface.name || "desk",
+            id: normalizeSurfaceId(surface.id || surface.name || FLOOR_SURFACE_ID),
             minX: Number.isFinite(surface.minX) ? surface.minX : point.x,
             maxX: Number.isFinite(surface.maxX) ? surface.maxX : point.x,
             minZ: Number.isFinite(surface.minZ) ? surface.minZ : point.z,
@@ -432,16 +439,16 @@ export function createDebugControlsRuntime(ctx) {
         continue;
       }
 
-      const elevated = getElevatedSurfaceAt(point, point.y);
-      if (elevated) {
-        const plan = buildElevatedWaypointPlan(elevated, point, cat.pos);
+      const hitSurface = getNonFloorSurfaceAt(point, point.y);
+      if (hitSurface) {
+        const plan = buildSurfaceWaypointPlan(hitSurface, point, cat.pos);
         if (plan) return plan;
       }
 
       const floorPoint = clampToRoomFloor(point);
       if (hasNavAreaAt(floorPoint.x, floorPoint.z, 0)) {
         return {
-          surface: "floor",
+          surfaceId: FLOOR_SURFACE_ID,
           point: floorPoint.clone(),
           floorPoint,
         };
@@ -451,10 +458,10 @@ export function createDebugControlsRuntime(ctx) {
     if (!raycaster.ray.intersectPlane(floorPlane, tempV3)) return null;
     const floorPoint = clampToRoomFloor(tempV3);
     if (!hasNavAreaAt(floorPoint.x, floorPoint.z, 0)) return null;
-    return { surface: "floor", point: floorPoint.clone(), floorPoint };
+    return { surfaceId: FLOOR_SURFACE_ID, point: floorPoint.clone(), floorPoint };
   }
 
-  function getElevatedSurfaceAt(point, y) {
+  function getNonFloorSurfaceAt(point, y) {
     if (y <= 0.08) return null;
     const surfaces = typeof getSurfaceDefs === "function" ? getSurfaceDefs({ includeFloor: false }) : getElevatedSurfaceDefs(true);
     let best = null;
@@ -505,19 +512,17 @@ export function createDebugControlsRuntime(ctx) {
         };
         const surfacePoint = findSurfaceTeleportPoint(surfaceDef, point);
         return {
-          surface: "elevated",
-          surfaceId: String(surface.id || surface.name || "desk"),
+          surfaceId: normalizeSurfaceId(surface.id || surface.name || FLOOR_SURFACE_ID),
           point: surfacePoint,
           floorPoint: clampToRoomFloor(point),
         };
       }
 
-      const elevated = getElevatedSurfaceAt(point, point.y);
-      if (elevated) {
-        const surfacePoint = findSurfaceTeleportPoint(elevated, point);
+      const hitSurface = getNonFloorSurfaceAt(point, point.y);
+      if (hitSurface) {
+        const surfacePoint = findSurfaceTeleportPoint(hitSurface, point);
         return {
-          surface: "elevated",
-          surfaceId: String(elevated.id || elevated.name || "desk"),
+          surfaceId: normalizeSurfaceId(hitSurface.id || hitSurface.name || FLOOR_SURFACE_ID),
           point: surfacePoint,
           floorPoint: clampToRoomFloor(point),
         };
@@ -525,14 +530,14 @@ export function createDebugControlsRuntime(ctx) {
 
       const floorPoint = clampToRoomFloor(point);
       if (hasNavAreaAt(floorPoint.x, floorPoint.z, 0)) {
-        return { surface: "floor", point: floorPoint.clone(), floorPoint };
+        return { surfaceId: FLOOR_SURFACE_ID, point: floorPoint.clone(), floorPoint };
       }
     }
 
     if (!raycaster.ray.intersectPlane(floorPlane, tempV3)) return null;
     const floorPoint = clampToRoomFloor(tempV3);
     if (!hasNavAreaAt(floorPoint.x, floorPoint.z, 0)) return null;
-    return { surface: "floor", point: floorPoint.clone(), floorPoint };
+    return { surfaceId: FLOOR_SURFACE_ID, point: floorPoint.clone(), floorPoint };
   }
 
   function updateDebugJumpDownPlan(towardGroundPoint = null, force = false, desiredLandingSurfaceId = null) {
@@ -554,8 +559,8 @@ export function createDebugControlsRuntime(ctx) {
         return true;
       }
     }
-    const sourceSurface = getElevatedSurfaceAt(cat.pos, cat.group.position.y);
-    const surfaceId = String(sourceSurface?.id || cat.debugMoveSurfaceId || "desk");
+    const sourceSurface = getNonFloorSurfaceAt(cat.pos, cat.group.position.y);
+    const surfaceId = normalizeSurfaceId(sourceSurface?.id || cat.debugMoveSurfaceId || cat.nav?.surfaceState?.currentSurfaceId || FLOOR_SURFACE_ID);
     const fromY = Number.isFinite(sourceSurface?.y)
       ? sourceSurface.y
       : (Number.isFinite(cat.debugMoveY) && cat.debugMoveY > 0.02 ? cat.debugMoveY : desk.topY + 0.02);
@@ -566,7 +571,7 @@ export function createDebugControlsRuntime(ctx) {
     cat.nav.jumpDownDebug.planSourceSurfaceId = surfaceId;
     cat.nav.jumpDownDebug.planDesiredLandingSurfaceId =
       desiredLandingSurfaceId == null || desiredLandingSurfaceId === ""
-        ? String(cat.nav.jumpDownLandingSurfaceId || "floor")
+        ? normalizeSurfaceId(cat.nav.jumpDownLandingSurfaceId || FLOOR_SURFACE_ID)
         : String(desiredLandingSurfaceId);
     cat.nav.jumpDownDebug.planFromX = fromTopPoint.x;
     cat.nav.jumpDownDebug.planFromY = fromTopPoint.y;
@@ -603,13 +608,11 @@ export function createDebugControlsRuntime(ctx) {
   }
 
   function moveCatToDebugClickTarget() {
-    if (cat.jump || (!cat.onTable && cat.group.position.y > 0.08)) return false;
+    if (cat.jump || (!catHasNonFloorSurface(cat) && cat.group.position.y > 0.08)) return false;
     const target = getMouseDebugSurfaceTarget();
     if (!target) return false;
 
-    const finalSurfaceId = String(
-      target.finalSurfaceId || (target.surface === "elevated" ? target.surfaceId || "desk" : "floor")
-    );
+    const finalSurfaceId = normalizeSurfaceId(target.finalSurfaceId || getTargetSurfaceId(target));
     const rawFinalPoint = target.finalPoint || target.point || target.floorPoint;
     if (!rawFinalPoint) return false;
     const finalPoint = finalSurfaceId === "floor"
@@ -659,12 +662,9 @@ export function createDebugControlsRuntime(ctx) {
     cat.nav.jumpDownLandingSurfaceId = null;
     navRuntime.clearActiveJump();
     cat.debugMoveActive = false;
-    cat.debugMoveSurface = target.surface === "elevated" ? "elevated" : "floor";
-    cat.debugMoveSurfaceId = target.surface === "elevated" ? String(target.surfaceId || "desk") : "floor";
-    cat.debugMoveY = target.surface === "elevated" ? target.point.y : 0;
-    cat.debugMoveFinalSurfaceId = String(
-      target.finalSurfaceId || (target.surface === "elevated" ? target.surfaceId || "desk" : "floor")
-    );
+    cat.debugMoveSurfaceId = getTargetSurfaceId(target);
+    cat.debugMoveY = isNonFloorSurfaceId(cat.debugMoveSurfaceId) ? target.point.y : 0;
+    cat.debugMoveFinalSurfaceId = normalizeSurfaceId(target.finalSurfaceId || cat.debugMoveSurfaceId);
     const finalTeleportPoint =
       target.finalPoint || target.point;
     cat.debugMoveFinalY =
@@ -675,7 +675,7 @@ export function createDebugControlsRuntime(ctx) {
     cat.debugMoveDirectJump = false;
     cat.debugMoveSitSeconds = 0;
     const landingPoint =
-      cat.debugMoveSurface === "floor" ? navRuntime.findSafeGroundPoint(target.floorPoint) : target.point.clone();
+      isFloorSurfaceId(cat.debugMoveSurfaceId) ? navRuntime.findSafeGroundPoint(target.floorPoint) : target.point.clone();
     cat.debugMoveTarget.copy(landingPoint);
     if (target.jumpAnchor) cat.debugMoveJumpAnchor.copy(target.jumpAnchor);
     else cat.debugMoveJumpAnchor.copy(landingPoint);
@@ -686,16 +686,15 @@ export function createDebugControlsRuntime(ctx) {
     cat.debugMoveJumpDownY = 0;
     cat.pos.set(landingPoint.x, 0, landingPoint.z);
     cat.group.position.set(landingPoint.x, cat.debugMoveY, landingPoint.z);
-    cat.onTable = cat.debugMoveY > 0.02;
+    setCatSurfaceId(cat, cat.debugMoveSurfaceId, "debug-teleport", Number(getClockTime?.() || 0), 1.2);
     cat.tableRoamTarget.set(landingPoint.x, 0, landingPoint.z);
-    if (cat.onTable) {
+    if (isNonFloorSurfaceId(cat.debugMoveSurfaceId)) {
       const teleportedSurfaceId = String(cat.debugMoveSurfaceId || "");
       const teleportedToDesk = teleportedSurfaceId === "desk";
       cat.state = teleportedToDesk && !cup.broken && !cup.falling ? "toCup" : "patrol";
       cat.lastState = teleportedToDesk ? "debugTeleport" : "debugMove";
       cat.manualPatrolActive = false;
       cat.debugMoveActive = false;
-      cat.debugMoveSurface = "elevated";
       cat.nextTableRoamAt = 0;
     } else {
       cat.state = "patrol";

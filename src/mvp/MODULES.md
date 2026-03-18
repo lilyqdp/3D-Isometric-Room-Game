@@ -6,7 +6,7 @@ Line counts below are approximate and will drift as the project changes.
 
 - `/src/mvp/main.js` (~1601 lines)
   - app composition root and frame loop.
-  - wires subsystem runtimes, UI hooks, game-state transitions, simulation ticks, and top-level update order.
+  - wires subsystem runtimes, normalized surface definitions/flags, top-level update order, simulation ticks, and game-state transitions.
 
 - `/src/mvp/modules/main-debug-camera.js` (~129 lines)
   - export: `createMainDebugCameraRuntime`.
@@ -20,9 +20,18 @@ Line counts below are approximate and will drift as the project changes.
   - export: `animateCatPoseRuntime`.
   - animation clip blending, pose progression, turn/idle/walk/run selection, and state-driven animation helpers.
 
-- `/src/mvp/modules/cat-state-machine.js` (~3048 lines)
+- `/src/mvp/modules/surface-ids.js` (~63 lines)
+  - shared surface identity helpers.
+  - normalizes surface IDs, treats floor as a first-class surface ID, and owns the cat's authoritative `surfaceState` helpers used by navigation, steering, debug, and state-machine code.
+
+- `/src/mvp/modules/surface-registry.js` (~317 lines)
+  - exports shared surface registry helpers.
+  - generalized surface metadata, normalized shape/dimensions/flags, associated-object IDs, obstacle/support descriptors, and per-surface lookup/ownership helpers used by routing, spawning, and jump planning.
+
+- `/src/mvp/modules/cat-state-machine.js` (~3063 lines)
   - export: `updateCatStateMachineRuntime`.
   - top-level cat behavior orchestration, patrol/catnip/window/cup state transitions, route requests, route execution handoff, and recovery decisions.
+  - generic movement state should read/write concrete surface IDs here rather than old `onTable`/`elevated` terminology; desk-specific behavior still lives here only where it is truly desk/cup gameplay.
 
 - `/src/mvp/modules/cat-state-machine-utils.js` (~524 lines)
   - export: `createCatStateMachineUtilsRuntime`.
@@ -42,7 +51,7 @@ Line counts below are approximate and will drift as the project changes.
 
 - `/src/mvp/modules/cat-locomotion.js` (~17 lines)
   - exports shared locomotion helpers.
-  - small shared movement/clip selection utilities used by steering so ground and elevated locomotion stay aligned.
+  - small shared movement/clip selection utilities used by steering so ground and surface locomotion stay aligned.
 
 - `/src/mvp/modules/cat-pathfinding.js` (~2409 lines)
   - export: `createCatPathfindingRuntime`.
@@ -54,15 +63,16 @@ Line counts below are approximate and will drift as the project changes.
 
 - `/src/mvp/modules/cat-steering.js` (~2784 lines)
   - export: `createCatSteeringRuntime`.
-  - low-level movement, turning, route-segment execution, repath triggers, local rescue behavior, elevated obstacle handling, and path-following runtime.
+  - low-level movement, turning, route-segment execution, repath triggers, local rescue behavior, surface obstacle handling, and path-following runtime.
 
 - `/src/mvp/modules/cat-steering-debug.js` (~77 lines)
   - export: `createCatSteeringDebugRuntime`.
   - nav debug counters, telemetry events, repath-cause tracking, and route-loop diagnostics helpers.
 
-- `/src/mvp/modules/cat-jump-planning.js` (~1473 lines)
+- `/src/mvp/modules/cat-jump-planning.js` (~1608 lines)
   - export: `createCatJumpPlanningRuntime`.
   - jump probes/links, weighted jump graph planning, surface transition routing, and jump approach/landing point generation.
+  - owns the generalized probe/link classification used by the debug overlay, including floor-as-surface probes, per-shape anchor counts, and blocked-state distinctions (valid, down-only, no-target, immovable-blocked, movable-blocked).
 
 - `/src/mvp/modules/cat-jump-runtime.js` (~215 lines)
   - export: `createCatJumpRuntime`.
@@ -90,35 +100,34 @@ Line counts below are approximate and will drift as the project changes.
 
 - `/src/mvp/modules/pickups.js` (~789 lines)
   - export: `createPickupsRuntime`.
-  - pickup spawning/drag/drop/bucket resolution and pickup body interaction data.
+  - pickup spawning/drag/drop/bucket resolution, pickup body interaction data, and spawn-surface bookkeeping for loose clutter.
 
-- `/src/mvp/modules/spawning.js` (~265 lines)
+- `/src/mvp/modules/spawning.js` (~382 lines)
   - exports: `pickRandomCatSpawnPoint`, `addRandomPickups`, `spawnRandomPickup`.
   - spawn search and endless-mode spawn budgeting.
+  - surface capability/flag-driven spawn selection for trash/laundry/catnip-style placement instead of hardcoding floor-only checks.
 
 - `/src/mvp/modules/room.js` (~567 lines)
   - exports: `makeRoomCorner`, `makeDesk`, `makeBins`, `makeChair`, `makeShelf`, `makeHoverShelf`, `makeWindowSill`.
   - room/furniture geometry setup.
 
-- `/src/mvp/modules/surface-registry.js` (~238 lines)
-  - exports shared surface registry helpers.
-  - generalized surface metadata, per-surface lookup/ownership helpers, and surface descriptors used by routing/jump planning.
-
 - `/src/mvp/modules/physics.js` (~94 lines)
   - export: `setupPhysicsWorld`.
   - cannon world init and static collider registration.
 
-- `/src/mvp/modules/debug-overlay.js` (~2717 lines)
+- `/src/mvp/modules/debug-overlay.js` (~2845 lines)
   - export: `createDebugOverlayRuntime`.
   - debug render/toggle system, nav telemetry, perf telemetry, route timeline/path profiler panels, and advanced debug visual layers.
+  - jump-link/probe visuals should stay aligned with jump-planning classifications so blocked colors mean the same thing in both panels and line overlays.
 
 - `/src/mvp/modules/debug-overlay-stats.js` (~32 lines)
   - exports: `formatDebugNumber`, `pushDebugPerfValue`, `debugPerfMean`, `debugPerfMax`, `debugPerfPercentile`.
   - shared numeric/perf helper utilities for debug overlay telemetry.
 
-- `/src/mvp/modules/debug-controls.js` (~718 lines)
+- `/src/mvp/modules/debug-controls.js` (~717 lines)
   - export: `createDebugControlsRuntime`.
   - debug target selection, right-click patrol requests, teleport controls, and debug interaction input behavior.
+  - debug route requests and teleports should carry concrete `surfaceId` data instead of generic floor/elevated labels.
 
 - `/src/mvp/modules/ui-system.js` (~67 lines)
   - export: `createUIRuntime`.
@@ -130,3 +139,4 @@ Line counts below are approximate and will drift as the project changes.
 Maintenance note:
 
 - If module files change meaningfully, update this file in the same commit.
+- Keep this file focused on ownership changes and architectural shifts; avoid restating small helper-level edits.

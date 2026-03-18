@@ -16,6 +16,7 @@ import { createUIRuntime } from "./modules/ui-system.js";
 import { createCatModelRuntime } from "./modules/cat-model-loader.js";
 import { createDebugControlsRuntime } from "./modules/debug-controls.js";
 import { createMainDebugCameraRuntime } from "./modules/main-debug-camera.js";
+import { FLOOR_SURFACE_ID, catHasNonFloorSurface, ensureCatSurfaceState, isFloorSurfaceId, isNonFloorSurfaceId, normalizeSurfaceId, setCatSurfaceId } from "./modules/surface-ids.js";
 
 // --- UI screens ---
 const startMenu = document.getElementById("startMenu");
@@ -468,9 +469,11 @@ const SURFACE_SPECS = [
     minZ: desk.pos.z - desk.sizeZ * 0.5,
     maxZ: desk.pos.z + desk.sizeZ * 0.5,
     y: desk.topY + 0.02,
-    randomPatrol: true,
-    manualPatrol: true,
-    allowCatnip: true,
+    flags: {
+      randomPatrol: true,
+      manualPatrol: true,
+      allowCatnip: true,
+    },
     special: { type: "desk", cupLoss: true },
     supports: [
       { x: desk.pos.x - 1.45, z: desk.pos.z - 0.8, hx: 0.13, hz: 0.13, topY: 1.02, mode: "soft", navPad: 0.03, steerPad: 0.01, collisionPad: 0 },
@@ -487,9 +490,11 @@ const SURFACE_SPECS = [
     minZ: chair.pos.z - chair.sizeZ * 0.5,
     maxZ: chair.pos.z + chair.sizeZ * 0.5,
     y: chair.seatY + 0.02,
-    randomPatrol: false,
-    manualPatrol: true,
-    allowCatnip: true,
+    flags: {
+      randomPatrol: false,
+      manualPatrol: true,
+      allowCatnip: true,
+    },
     supports: [
       { x: chair.pos.x - chair.legInsetX, z: chair.pos.z - chair.legInsetZ, hx: chair.legHalfX + 0.03, hz: chair.legHalfZ + 0.03, topY: chair.seatY - chair.seatThickness, mode: "soft", navPad: 0.03, steerPad: 0.01, collisionPad: 0 },
       { x: chair.pos.x + chair.legInsetX, z: chair.pos.z - chair.legInsetZ, hx: chair.legHalfX + 0.03, hz: chair.legHalfZ + 0.03, topY: chair.seatY - chair.seatThickness, mode: "soft", navPad: 0.03, steerPad: 0.01, collisionPad: 0 },
@@ -517,9 +522,11 @@ const SURFACE_SPECS = [
     minZ: shelf.pos.z - shelf.depth * 0.5,
     maxZ: shelf.pos.z + shelf.depth * 0.5,
     y: shelf.surfaceY + 0.02,
-    randomPatrol: false,
-    manualPatrol: true,
-    allowCatnip: true,
+    flags: {
+      randomPatrol: false,
+      manualPatrol: true,
+      allowCatnip: true,
+    },
     supports: (() => {
       const insetX = shelf.width * 0.5 - shelf.postHalf;
       const insetZ = shelf.depth * 0.5 - shelf.postHalf;
@@ -551,9 +558,11 @@ const SURFACE_SPECS = [
     minZ: hoverShelf.pos.z - hoverShelf.depth * 0.5,
     maxZ: hoverShelf.pos.z + hoverShelf.depth * 0.5,
     y: hoverShelf.surfaceY + 0.02,
-    randomPatrol: false,
-    manualPatrol: true,
-    allowCatnip: true,
+    flags: {
+      randomPatrol: false,
+      manualPatrol: true,
+      allowCatnip: true,
+    },
     special: { type: "platform" },
   },
   {
@@ -564,9 +573,11 @@ const SURFACE_SPECS = [
     minZ: windowSill.pos.z - windowSill.depth * 0.5,
     maxZ: windowSill.pos.z + windowSill.depth * 0.5,
     y: windowSill.surfaceY + 0.02,
-    randomPatrol: false,
-    manualPatrol: true,
-    allowCatnip: true,
+    flags: {
+      randomPatrol: false,
+      manualPatrol: true,
+      allowCatnip: true,
+    },
     special: { type: "windowSill", windowTarget: true },
   },
 ];
@@ -982,7 +993,7 @@ function findLooseElevatedSurfaceAt(x, z, y, preferredSurfaceId = "") {
 
 function getCurrentCatSurfaceIdForSpawnReach() {
   const y = Number.isFinite(cat.group.position.y) ? cat.group.position.y : 0;
-  if (y <= 0.08 && !cat.onTable) return "floor";
+  if (isFloorSurfaceId(cat.nav?.surfaceState?.currentSurfaceId) && y <= 0.08) return FLOOR_SURFACE_ID;
 
   const routeSurfaceId =
     cat.nav?.route?.active && cat.nav?.route?.surfaceId && cat.nav.route.surfaceId !== "floor"
@@ -1016,17 +1027,17 @@ function getCurrentCatSurfaceIdForSpawnReach() {
   const loose = findLooseElevatedSurfaceAt(cat.pos.x, cat.pos.z, y, hintedSurfaceId);
   if (loose) return String(loose.id || loose.name || hintedSurfaceId || "floor");
 
-  return y <= 0.08 ? "floor" : hintedSurfaceId || routeFinalSurfaceId || "floor";
+  return y <= 0.08 ? FLOOR_SURFACE_ID : normalizeSurfaceId(hintedSurfaceId || routeFinalSurfaceId);
 }
 
 function getSpawnReachStart() {
   const floorStart = new THREE.Vector3(cat.pos.x, 0, cat.pos.z);
-  if (!(cat.onTable || cat.group.position.y > 0.08)) {
+  if (!catHasNonFloorSurface(cat)) {
     return navRuntime.findSafeGroundPoint(floorStart);
   }
 
   const surfaceId = getCurrentCatSurfaceIdForSpawnReach();
-  if (!surfaceId || surfaceId === "floor") {
+  if (isFloorSurfaceId(surfaceId)) {
     return navRuntime.findSafeGroundPoint(floorStart);
   }
 
@@ -1052,14 +1063,17 @@ function spawnPickupOfType(type) {
     type,
     catSpawn: reachStart,
     camera,
-    ROOM,
-    CAT_NAV,
     CAT_COLLISION,
     pickups,
     pickupRadius,
     buildCatObstacles: navRuntime.buildCatObstacles,
     isCatPointBlocked: navRuntime.isCatPointBlocked,
     canReachGroundTarget: navRuntime.canReachGroundTarget,
+    bestSurfaceJumpAnchor: navRuntime.bestSurfaceJumpAnchor,
+    computeSurfaceJumpTargets: navRuntime.computeSurfaceJumpTargets,
+    findSafeGroundPoint: navRuntime.findSafeGroundPoint,
+    getSurfaceDefs,
+    getSurfaceIdsByCapability,
     addPickup: pickupsRuntime.addPickup,
   });
   if (!spawned) return false;
@@ -1125,13 +1139,16 @@ function resetGame() {
   addRandomPickups({
     catSpawn,
     camera,
-    ROOM,
-    CAT_NAV,
     CAT_COLLISION,
     SPAWN_COUNTS,
     buildCatObstacles: navRuntime.buildCatObstacles,
     isCatPointBlocked: navRuntime.isCatPointBlocked,
     canReachGroundTarget: navRuntime.canReachGroundTarget,
+    bestSurfaceJumpAnchor: navRuntime.bestSurfaceJumpAnchor,
+    computeSurfaceJumpTargets: navRuntime.computeSurfaceJumpTargets,
+    findSafeGroundPoint: navRuntime.findSafeGroundPoint,
+    getSurfaceDefs,
+    getSurfaceIdsByCapability,
     addPickup: pickupsRuntime.addPickup,
   });
   game.total = pickups.length;
@@ -1144,10 +1161,8 @@ function resetGame() {
   cat.lastState = "patrol";
   cat.stateT = 0;
   cat.status = "Patrolling";
-  cat.onTable = false;
-  cat.debugMoveActive = false;
-  cat.debugMoveSurface = "floor";
-  cat.debugMoveSurfaceId = "floor";
+    cat.debugMoveActive = false;
+    cat.debugMoveSurfaceId = "floor";
   cat.debugMoveFinalSurfaceId = "floor";
   cat.debugMoveY = 0;
   cat.debugMoveFinalY = 0;
@@ -1191,8 +1206,7 @@ function resetGame() {
   if (!cat.nav.route.jumpDown || typeof cat.nav.route.jumpDown.set !== "function") cat.nav.route.jumpDown = new THREE.Vector3();
   cat.nav.route.active = false;
   cat.nav.route.source = "";
-  cat.nav.route.surface = "floor";
-  cat.nav.route.surfaceId = "floor";
+    cat.nav.route.surfaceId = "floor";
   cat.nav.route.finalSurfaceId = "floor";
   cat.nav.route.y = 0;
   cat.nav.route.finalY = 0;
@@ -1217,6 +1231,16 @@ function resetGame() {
   cat.nav.route.landing.set(cat.pos.x, 0, cat.pos.z);
   cat.nav.route.jumpOff.set(cat.pos.x, 0, cat.pos.z);
   cat.nav.route.jumpDown.set(cat.pos.x, 0, cat.pos.z);
+  const surfaceState = ensureCatSurfaceState(cat);
+  if (surfaceState) {
+    surfaceState.currentSurfaceId = FLOOR_SURFACE_ID;
+    surfaceState.lastStableSurfaceId = FLOOR_SURFACE_ID;
+    surfaceState.authority = "spawn";
+    surfaceState.authoritativeUntil = 0;
+    surfaceState.updatedAt = clockTime;
+  } else {
+    setCatSurfaceId(cat, FLOOR_SURFACE_ID, "spawn", clockTime, 0);
+  }
   clearCatNavPath(true);
   cat.nav.anchorReplanAt = 0;
   cat.nav.anchorLandingCheckAt = 0;
@@ -1309,22 +1333,97 @@ function isDraggingPickup(pickup) {
   return pickupsRuntime.isDraggingPickup(pickup);
 }
 
+function ensurePathProfilerMetric(name) {
+  if (!cat.nav || typeof cat.nav !== "object") cat.nav = {};
+  if (!cat.nav.pathProfiler || typeof cat.nav.pathProfiler !== "object") {
+    cat.nav.pathProfiler = {
+      createdAt: clockTime,
+      metrics: {},
+      counters: {},
+      events: [],
+      lastSlowEvent: null,
+    };
+  }
+  const profiler = cat.nav.pathProfiler;
+  if (!profiler.metrics || typeof profiler.metrics !== "object") profiler.metrics = {};
+  if (!Array.isArray(profiler.events)) profiler.events = [];
+  if (!profiler.metrics[name] || typeof profiler.metrics[name] !== "object") {
+    profiler.metrics[name] = {
+      calls: 0,
+      totalMs: 0,
+      maxMs: 0,
+      lastMs: 0,
+      slowCount: 0,
+      samples: [],
+      lastMeta: null,
+    };
+  }
+  const metric = profiler.metrics[name];
+  if (!Array.isArray(metric.samples)) metric.samples = [];
+  return { profiler, metric };
+}
+
+function finishPointerProfilerMetric(name, startedAt, meta = null, slowMs = 4) {
+  const elapsed = Math.max(0, performance.now() - startedAt);
+  const { profiler, metric } = ensurePathProfilerMetric(name);
+  metric.calls += 1;
+  metric.totalMs += elapsed;
+  metric.lastMs = elapsed;
+  metric.maxMs = Math.max(metric.maxMs || 0, elapsed);
+  metric.lastMeta = meta && typeof meta === "object" ? { ...meta, t: clockTime } : null;
+  metric.samples.push(elapsed);
+  if (metric.samples.length > 180) metric.samples.splice(0, metric.samples.length - 180);
+  if (elapsed >= slowMs) {
+    metric.slowCount = (Number(metric.slowCount) || 0) + 1;
+    profiler.events.push({
+      kind: String(name || "pointer"),
+      ms: elapsed,
+      t: clockTime,
+      ...(meta && typeof meta === "object" ? meta : {}),
+    });
+    if (profiler.events.length > 24) profiler.events.splice(0, profiler.events.length - 24);
+    profiler.lastSlowEvent = profiler.events[profiler.events.length - 1] || null;
+  }
+  return elapsed;
+}
+
 function onPointerDown(event) {
-  if (game.state !== "playing") return;
-  setMouseFromEvent(event);
+  const startedAt = performance.now();
+  let phase = "noop";
+  try {
+    if (game.state !== "playing") {
+      phase = "not-playing";
+      return;
+    }
+    setMouseFromEvent(event);
 
-  if (event.button === 2 && debugRuntime.isDebugVisible()) {
-    event.preventDefault();
-    debugControlsRuntime.moveCatToDebugClickTarget();
-    return;
+    if (event.button === 2 && debugRuntime.isDebugVisible()) {
+      event.preventDefault();
+      debugControlsRuntime.moveCatToDebugClickTarget();
+      phase = "debug-click";
+      return;
+    }
+
+    if (game.placeCatnipMode) {
+      placeCatnipFromMouse();
+      phase = "catnip-click";
+      return;
+    }
+
+    pickupsRuntime.onPointerDown(event);
+    phase = "pickup-pointer";
+  } finally {
+    finishPointerProfilerMetric(
+      phase === "catnip-click" ? "pointerCatnipClick" : "pointerDown",
+      startedAt,
+      {
+        phase,
+        button: Number.isFinite(event?.button) ? event.button : -1,
+        result: phase,
+      },
+      phase === "catnip-click" ? 2.5 : 4
+    );
   }
-
-  if (game.placeCatnipMode) {
-    placeCatnipFromMouse();
-    return;
-  }
-
-  pickupsRuntime.onPointerDown(event);
 }
 
 function onCanvasContextMenu(event) {
@@ -1362,6 +1461,12 @@ function getSurfaceDefs(options = undefined) {
 
 function getSurfaceById(surfaceId) {
   return surfaceRegistry.getSurfaceById(surfaceId);
+}
+
+function getSurfaceIdsByCapability(capability) {
+  return typeof surfaceRegistry.getSurfaceIdsByCapability === "function"
+    ? surfaceRegistry.getSurfaceIdsByCapability(capability)
+    : [];
 }
 
 function getElevatedSurfaceDefs(includeDesk = true) {
@@ -1473,8 +1578,12 @@ function simulateStep(stepDt, perfSample = null) {
   clockTime += stepDt;
   const openTarget = clockTime < game.windowOpenUntil ? 1 : 0;
   const openNow = Number(windowSillRuntime?.root?.userData?.openAmount || 0);
+  const windowStartAt = perfSample ? performance.now() : 0;
   const nextOpen = THREE.MathUtils.damp(openNow, openTarget, 9.0, stepDt);
   windowSillRuntime.setOpenAmount(nextOpen);
+  if (perfSample) {
+    perfSample.windowMs += performance.now() - windowStartAt;
+  }
 
   if (game.state === "playing") {
     let tStart = perfSample ? performance.now() : 0;
@@ -1535,12 +1644,21 @@ function animate() {
     simSteps: 0,
     simulatedDtMs: 0,
     simMs: 0,
+    windowMs: 0,
     physicsMs: 0,
     pickupsMs: 0,
     spawnMs: 0,
     catMs: 0,
     cupMs: 0,
     shatterMs: 0,
+    debugCameraMs: 0,
+    debugViewMs: 0,
+    controlsMs: 0,
+    uiMs: 0,
+    renderMs: 0,
+    postRenderMs: 0,
+    accountedMs: 0,
+    unaccountedMs: 0,
     drawCalls: 0,
     triangles: 0,
     lines: 0,
@@ -1570,7 +1688,9 @@ function animate() {
     }
   }
 
+  let stageStartAt = performance.now();
   debugCameraRuntime.updateDebugCameraControls(frameDt);
+  perfSample.debugCameraMs += performance.now() - stageStartAt;
 
   if (!debugRuntime.isDebugVisible()) {
     controls.target.x = THREE.MathUtils.clamp(controls.target.x, TARGET_BOUNDS.minX, TARGET_BOUNDS.maxX);
@@ -1578,17 +1698,40 @@ function animate() {
     controls.target.y = THREE.MathUtils.clamp(controls.target.y, TARGET_BOUNDS.minY, TARGET_BOUNDS.maxY);
   }
 
+  stageStartAt = performance.now();
   updateDebugView();
+  perfSample.debugViewMs += performance.now() - stageStartAt;
+
+  stageStartAt = performance.now();
   controls.update();
+  perfSample.controlsMs += performance.now() - stageStartAt;
+
+  stageStartAt = performance.now();
   updateUI();
+  perfSample.uiMs += performance.now() - stageStartAt;
+
+  stageStartAt = performance.now();
   renderer.render(scene, camera);
-  perfSample.frameMs = performance.now() - frameStartAt;
+  perfSample.renderMs += performance.now() - stageStartAt;
+
+  const postRenderStartAt = performance.now();
+  perfSample.frameMs = postRenderStartAt - frameStartAt;
   perfSample.drawCalls = Number(renderer.info?.render?.calls || 0);
   perfSample.triangles = Number(renderer.info?.render?.triangles || 0);
   perfSample.lines = Number(renderer.info?.render?.lines || 0);
   perfSample.points = Number(renderer.info?.render?.points || 0);
   perfSample.geometries = Number(renderer.info?.memory?.geometries || 0);
   perfSample.textures = Number(renderer.info?.memory?.textures || 0);
+  perfSample.postRenderMs += performance.now() - postRenderStartAt;
+  perfSample.accountedMs =
+    perfSample.simMs +
+    perfSample.debugCameraMs +
+    perfSample.debugViewMs +
+    perfSample.controlsMs +
+    perfSample.uiMs +
+    perfSample.renderMs +
+    perfSample.postRenderMs;
+  perfSample.unaccountedMs = Math.max(0, perfSample.frameMs - perfSample.accountedMs);
   if (typeof debugRuntime.updatePerformanceSample === "function") {
     debugRuntime.updatePerformanceSample(perfSample, clockTime);
   }
