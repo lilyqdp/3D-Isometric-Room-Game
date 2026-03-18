@@ -473,10 +473,10 @@ const SURFACE_SPECS = [
     allowCatnip: true,
     special: { type: "desk", cupLoss: true },
     supports: [
-      { x: desk.pos.x - 1.45, z: desk.pos.z - 0.8, hx: 0.13, hz: 0.13, topY: 1.02, navPad: 0.03 },
-      { x: desk.pos.x + 1.45, z: desk.pos.z - 0.8, hx: 0.13, hz: 0.13, topY: 1.02, navPad: 0.03 },
-      { x: desk.pos.x - 1.45, z: desk.pos.z + 0.8, hx: 0.13, hz: 0.13, topY: 1.02, navPad: 0.03 },
-      { x: desk.pos.x + 1.45, z: desk.pos.z + 0.8, hx: 0.13, hz: 0.13, topY: 1.02, navPad: 0.03 },
+      { x: desk.pos.x - 1.45, z: desk.pos.z - 0.8, hx: 0.13, hz: 0.13, topY: 1.02, mode: "soft", navPad: 0.03, steerPad: 0.01, collisionPad: 0 },
+      { x: desk.pos.x + 1.45, z: desk.pos.z - 0.8, hx: 0.13, hz: 0.13, topY: 1.02, mode: "soft", navPad: 0.03, steerPad: 0.01, collisionPad: 0 },
+      { x: desk.pos.x - 1.45, z: desk.pos.z + 0.8, hx: 0.13, hz: 0.13, topY: 1.02, mode: "soft", navPad: 0.03, steerPad: 0.01, collisionPad: 0 },
+      { x: desk.pos.x + 1.45, z: desk.pos.z + 0.8, hx: 0.13, hz: 0.13, topY: 1.02, mode: "soft", navPad: 0.03, steerPad: 0.01, collisionPad: 0 },
     ],
   },
   {
@@ -491,10 +491,10 @@ const SURFACE_SPECS = [
     manualPatrol: true,
     allowCatnip: true,
     supports: [
-      { x: chair.pos.x - chair.legInsetX, z: chair.pos.z - chair.legInsetZ, hx: chair.legHalfX + 0.03, hz: chair.legHalfZ + 0.03, topY: chair.seatY - chair.seatThickness, navPad: 0.03 },
-      { x: chair.pos.x + chair.legInsetX, z: chair.pos.z - chair.legInsetZ, hx: chair.legHalfX + 0.03, hz: chair.legHalfZ + 0.03, topY: chair.seatY - chair.seatThickness, navPad: 0.03 },
-      { x: chair.pos.x - chair.legInsetX, z: chair.pos.z + chair.legInsetZ, hx: chair.legHalfX + 0.03, hz: chair.legHalfZ + 0.03, topY: chair.seatY - chair.seatThickness, navPad: 0.03 },
-      { x: chair.pos.x + chair.legInsetX, z: chair.pos.z + chair.legInsetZ, hx: chair.legHalfX + 0.03, hz: chair.legHalfZ + 0.03, topY: chair.seatY - chair.seatThickness, navPad: 0.03 },
+      { x: chair.pos.x - chair.legInsetX, z: chair.pos.z - chair.legInsetZ, hx: chair.legHalfX + 0.03, hz: chair.legHalfZ + 0.03, topY: chair.seatY - chair.seatThickness, mode: "soft", navPad: 0.03, steerPad: 0.01, collisionPad: 0 },
+      { x: chair.pos.x + chair.legInsetX, z: chair.pos.z - chair.legInsetZ, hx: chair.legHalfX + 0.03, hz: chair.legHalfZ + 0.03, topY: chair.seatY - chair.seatThickness, mode: "soft", navPad: 0.03, steerPad: 0.01, collisionPad: 0 },
+      { x: chair.pos.x - chair.legInsetX, z: chair.pos.z + chair.legInsetZ, hx: chair.legHalfX + 0.03, hz: chair.legHalfZ + 0.03, topY: chair.seatY - chair.seatThickness, mode: "soft", navPad: 0.03, steerPad: 0.01, collisionPad: 0 },
+      { x: chair.pos.x + chair.legInsetX, z: chair.pos.z + chair.legInsetZ, hx: chair.legHalfX + 0.03, hz: chair.legHalfZ + 0.03, topY: chair.seatY - chair.seatThickness, mode: "soft", navPad: 0.03, steerPad: 0.01, collisionPad: 0 },
     ],
     blockers: [
       {
@@ -524,10 +524,10 @@ const SURFACE_SPECS = [
       const insetX = shelf.width * 0.5 - shelf.postHalf;
       const insetZ = shelf.depth * 0.5 - shelf.postHalf;
       return [
-        { x: shelf.pos.x - insetX, z: shelf.pos.z - insetZ, hx: shelf.postHalf + 0.02, hz: shelf.postHalf + 0.02, topY: shelf.surfaceY - shelf.boardThickness, navPad: 0.02 },
-        { x: shelf.pos.x + insetX, z: shelf.pos.z - insetZ, hx: shelf.postHalf + 0.02, hz: shelf.postHalf + 0.02, topY: shelf.surfaceY - shelf.boardThickness, navPad: 0.02 },
-        { x: shelf.pos.x - insetX, z: shelf.pos.z + insetZ, hx: shelf.postHalf + 0.02, hz: shelf.postHalf + 0.02, topY: shelf.surfaceY - shelf.boardThickness, navPad: 0.02 },
-        { x: shelf.pos.x + insetX, z: shelf.pos.z + insetZ, hx: shelf.postHalf + 0.02, hz: shelf.postHalf + 0.02, topY: shelf.surfaceY - shelf.boardThickness, navPad: 0.02 },
+        { x: shelf.pos.x - insetX, z: shelf.pos.z - insetZ, hx: shelf.postHalf + 0.02, hz: shelf.postHalf + 0.02, topY: shelf.surfaceY - shelf.boardThickness, mode: "soft", navPad: 0.02, steerPad: 0.01, collisionPad: 0 },
+        { x: shelf.pos.x + insetX, z: shelf.pos.z - insetZ, hx: shelf.postHalf + 0.02, hz: shelf.postHalf + 0.02, topY: shelf.surfaceY - shelf.boardThickness, mode: "soft", navPad: 0.02, steerPad: 0.01, collisionPad: 0 },
+        { x: shelf.pos.x - insetX, z: shelf.pos.z + insetZ, hx: shelf.postHalf + 0.02, hz: shelf.postHalf + 0.02, topY: shelf.surfaceY - shelf.boardThickness, mode: "soft", navPad: 0.02, steerPad: 0.01, collisionPad: 0 },
+        { x: shelf.pos.x + insetX, z: shelf.pos.z + insetZ, hx: shelf.postHalf + 0.02, hz: shelf.postHalf + 0.02, topY: shelf.surfaceY - shelf.boardThickness, mode: "soft", navPad: 0.02, steerPad: 0.01, collisionPad: 0 },
       ];
     })(),
     blockers: [

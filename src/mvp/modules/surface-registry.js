@@ -20,8 +20,17 @@ function normalizeObstacle(spec, defaults = {}) {
     y: Number(spec.y),
     h: Number(spec.h),
     navPad: Number.isFinite(Number(spec.navPad)) ? Number(spec.navPad) : (defaults.navPad ?? 0),
+    steerPad: Number.isFinite(Number(spec.steerPad)) ? Number(spec.steerPad) : (defaults.steerPad ?? defaults.navPad ?? 0),
+    collisionPad: Number.isFinite(Number(spec.collisionPad)) ? Number(spec.collisionPad) : (defaults.collisionPad ?? 0),
+    mode: spec.mode || defaults.mode,
     tag: spec.tag || defaults.tag || "",
   };
+  if (spec.blocksRuntime != null) out.blocksRuntime = !!spec.blocksRuntime;
+  else if (defaults.blocksRuntime != null) out.blocksRuntime = !!defaults.blocksRuntime;
+  if (spec.blocksPath != null) out.blocksPath = !!spec.blocksPath;
+  else if (defaults.blocksPath != null) out.blocksPath = !!defaults.blocksPath;
+  if (spec.pushable != null) out.pushable = !!spec.pushable;
+  else if (defaults.pushable != null) out.pushable = !!defaults.pushable;
   if (kind === "circle") {
     out.r = Number(spec.r);
   } else {
@@ -83,6 +92,13 @@ function normalizeSurfaceSpec(spec, floorY) {
       },
       {
         surfaceId: id,
+        mode: support.mode || "soft",
+        navPad: Number.isFinite(Number(support.navPad)) ? Number(support.navPad) : 0.03,
+        steerPad: Number.isFinite(Number(support.steerPad)) ? Number(support.steerPad) : 0.01,
+        collisionPad: Number.isFinite(Number(support.collisionPad)) ? Number(support.collisionPad) : 0,
+        blocksRuntime: support.blocksRuntime != null ? !!support.blocksRuntime : false,
+        blocksPath: support.blocksPath != null ? !!support.blocksPath : true,
+        pushable: support.pushable != null ? !!support.pushable : false,
         jumpIgnoreSurfaceIds: support.jumpIgnoreSurfaceIds || [id],
         tag: support.tag || "surfaceSupport",
       }
@@ -92,7 +108,17 @@ function normalizeSurfaceSpec(spec, floorY) {
 
   const blockers = Array.isArray(spec.blockers) ? spec.blockers : [];
   for (const blocker of blockers) {
-    const obstacle = normalizeObstacle(blocker, { surfaceId: id, tag: blocker.tag || "surfaceBlocker" });
+    const obstacle = normalizeObstacle(blocker, {
+      surfaceId: id,
+      mode: blocker.mode || "hard",
+      navPad: Number.isFinite(Number(blocker.navPad)) ? Number(blocker.navPad) : 0.02,
+      steerPad: Number.isFinite(Number(blocker.steerPad)) ? Number(blocker.steerPad) : 0.02,
+      collisionPad: Number.isFinite(Number(blocker.collisionPad)) ? Number(blocker.collisionPad) : 0,
+      blocksRuntime: blocker.blocksRuntime != null ? !!blocker.blocksRuntime : true,
+      blocksPath: blocker.blocksPath != null ? !!blocker.blocksPath : true,
+      pushable: blocker.pushable != null ? !!blocker.pushable : false,
+      tag: blocker.tag || "surfaceBlocker",
+    });
     if (obstacle) surface.blockers.push(obstacle);
   }
 
