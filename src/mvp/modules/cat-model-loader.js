@@ -214,6 +214,7 @@ export function createCatModelRuntime(ctx) {
         lastSurfaceHopTo: "",
         lastSurfaceHopAt: 0,
         surfaceHopTrail: [],
+        functionTrace: [],
         surfaceState: {
           currentSurfaceId: "floor",
           authority: "spawn",

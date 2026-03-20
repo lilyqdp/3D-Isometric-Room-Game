@@ -6,13 +6,12 @@ export function createCatStateMachineUtilsRuntime(ctx) {
     getClockTime,
     game,
     cat,
-    desk,
     windowSill,
     CAT_COLLISION,
     getSurfaceDefs,
     getSurfaceById,
-    getElevatedSurfaceDefs,
     catnipMouthOffset = 0.34,
+    recordFunctionTrace = null,
   } = ctx;
 
   const catnipApproachTarget = new THREE.Vector3();
@@ -34,6 +33,13 @@ export function createCatStateMachineUtilsRuntime(ctx) {
     state.authoritativeUntil = now + Math.max(0, Number(stickySeconds) || 0);
     state.lastStableSurfaceId = resolvedSurfaceId;
     return resolvedSurfaceId;
+  }
+
+  function traceSurfaceResolve(surfaceId, via = "") {
+    if (typeof recordFunctionTrace === "function") {
+      recordFunctionTrace("getCurrentCatSurfaceId", `result=${surfaceId || "floor"} via=${via || "na"}`);
+    }
+    return surfaceId;
   }
 
   function matchesAuthoritativeSurface(surfaceId, x, z, y, pad = 0.3, yPad = 0.85) {
@@ -91,8 +97,7 @@ export function createCatStateMachineUtilsRuntime(ctx) {
   function getNonFloorSurfaceById(surfaceId) {
     if (!surfaceId || isFloorSurfaceId(surfaceId)) return null;
     if (typeof getSurfaceById === "function") return getSurfaceById(surfaceId);
-    if (typeof getElevatedSurfaceDefs !== "function") return null;
-    const defs = getElevatedSurfaceDefs(true);
+    const defs = typeof getSurfaceDefs === "function" ? getSurfaceDefs({ includeFloor: false }) : [];
     if (!Array.isArray(defs)) return null;
     return defs.find((s) => String(s?.id || s?.name || "") === String(surfaceId)) || null;
   }
@@ -122,7 +127,7 @@ export function createCatStateMachineUtilsRuntime(ctx) {
   }
 
   function findBestNonFloorSurfaceAt(x, z, y, pad = 0.18, maxDy = 0.58, preferredSurfaceId = "") {
-    const defs = typeof getSurfaceDefs === "function" ? getSurfaceDefs({ includeFloor: false }) : (typeof getElevatedSurfaceDefs === "function" ? getElevatedSurfaceDefs(true) : []);
+    const defs = typeof getSurfaceDefs === "function" ? getSurfaceDefs({ includeFloor: false }) : [];
     if (!Array.isArray(defs)) return null;
     let best = null;
     let bestScore = Infinity;
@@ -154,7 +159,7 @@ export function createCatStateMachineUtilsRuntime(ctx) {
   }
 
   function findLooseNonFloorSurfaceAt(x, z, y, preferredSurfaceId = "") {
-    const defs = typeof getSurfaceDefs === "function" ? getSurfaceDefs({ includeFloor: false }) : (typeof getElevatedSurfaceDefs === "function" ? getElevatedSurfaceDefs(true) : []);
+    const defs = typeof getSurfaceDefs === "function" ? getSurfaceDefs({ includeFloor: false }) : [];
     if (!Array.isArray(defs) || defs.length === 0) return null;
 
     let best = null;
@@ -172,6 +177,8 @@ export function createCatStateMachineUtilsRuntime(ctx) {
       const dz = z < sz0 ? sz0 - z : z > sz1 ? z - sz1 : 0;
       const dy = Math.abs(sy - y);
       if (dy > 1.15) continue;
+      const planarGap = Math.hypot(dx, dz);
+      if (planarGap > 0.72) continue;
 
       const surfaceId = String(s.id || s.name || "");
       const preferredBias = preferredSurfaceId && surfaceId === String(preferredSurfaceId) ? -0.18 : 0;
@@ -200,10 +207,9 @@ export function createCatStateMachineUtilsRuntime(ctx) {
         ? normalizeSurfaceId(cat.nav.route.approachSurfaceId)
         : "";
     const hintedSurfaceId =
-      routeApproachSurfaceId ||
       routeSurfaceId ||
       routeFinalSurfaceId ||
-      (cat.debugMoveSurfaceId && !isFloorSurfaceId(cat.debugMoveSurfaceId) ? normalizeSurfaceId(cat.debugMoveSurfaceId) : "");
+      routeApproachSurfaceId;
 
     const jumpAuthoritySurfaceId = getJumpAuthoritativeSurfaceId(y);
     if (jumpAuthoritySurfaceId && matchesAuthoritativeSurface(jumpAuthoritySurfaceId, cat.pos.x, cat.pos.z, y, 0.52, 1.12)) {
@@ -218,7 +224,7 @@ export function createCatStateMachineUtilsRuntime(ctx) {
         resolvedSurfaceId: jumpAuthoritySurfaceId,
         y,
       };
-      return jumpAuthoritySurfaceId;
+      return traceSurfaceResolve(jumpAuthoritySurfaceId, "jump");
     }
 
     const routeAuthoritySurfaceId = getRouteAuthoritativeSurfaceId(y);
@@ -234,7 +240,7 @@ export function createCatStateMachineUtilsRuntime(ctx) {
         resolvedSurfaceId: routeAuthoritySurfaceId,
         y,
       };
-      return routeAuthoritySurfaceId;
+      return traceSurfaceResolve(routeAuthoritySurfaceId, "route");
     }
 
     const stickySurfaceId =
@@ -253,22 +259,7 @@ export function createCatStateMachineUtilsRuntime(ctx) {
         resolvedSurfaceId: stickySurfaceId,
         y,
       };
-      return stickySurfaceId;
-    }
-
-    if (y <= 0.08 && isFloorSurfaceId(state.currentSurfaceId)) {
-      const resolved = setAuthoritativeCatSurfaceId("floor", "grounded", 0.4);
-      cat.nav.surfaceResolveDebug = {
-        strictSurfaceId: "floor",
-        hintedSurfaceId,
-        looseSurfaceId: "",
-        authoritativeSurfaceId: stickySurfaceId,
-        authoritativeSource: state.authority || "grounded",
-        stateSurfaceId: state.currentSurfaceId || "",
-        resolvedSurfaceId: resolved,
-        y,
-      };
-      return resolved;
+      return traceSurfaceResolve(stickySurfaceId, state.authority || "sticky");
     }
 
     const strict = findBestNonFloorSurfaceAt(cat.pos.x, cat.pos.z, y, 0.08, 0.34, hintedSurfaceId || stickySurfaceId);
@@ -284,16 +275,30 @@ export function createCatStateMachineUtilsRuntime(ctx) {
         resolvedSurfaceId: resolved,
         y,
       };
-      return resolved;
+      return traceSurfaceResolve(resolved, "strict-match");
+    }
+
+    if (y <= 0.12) {
+      const resolved = setAuthoritativeCatSurfaceId("floor", "grounded", 0.4);
+      cat.nav.surfaceResolveDebug = {
+        strictSurfaceId: "floor",
+        hintedSurfaceId,
+        looseSurfaceId: "",
+        authoritativeSurfaceId: stickySurfaceId,
+        authoritativeSource: state.authority || "grounded",
+        stateSurfaceId: state.currentSurfaceId || "",
+        resolvedSurfaceId: resolved,
+        y,
+      };
+      return traceSurfaceResolve(resolved, "grounded");
     }
 
     for (const fallbackId of [
       stickySurfaceId,
       hintedSurfaceId,
-      routeApproachSurfaceId,
       routeSurfaceId,
       routeFinalSurfaceId,
-      cat.debugMoveSurfaceId,
+      routeApproachSurfaceId,
       cat.nav?.lastSurfaceHopTo,
       cat.nav?.lastSurfaceHopFrom,
     ]) {
@@ -310,7 +315,7 @@ export function createCatStateMachineUtilsRuntime(ctx) {
           resolvedSurfaceId: resolved,
           y,
         };
-        return resolved;
+        return traceSurfaceResolve(resolved, "near-match");
       }
     }
 
@@ -327,7 +332,7 @@ export function createCatStateMachineUtilsRuntime(ctx) {
         resolvedSurfaceId: resolved,
         y,
       };
-      return resolved;
+      return traceSurfaceResolve(resolved, "loose-match");
     }
 
     const resolved = setAuthoritativeCatSurfaceId(y <= 0.12 ? FLOOR_SURFACE_ID : normalizeSurfaceId(hintedSurfaceId || routeFinalSurfaceId || state.lastStableSurfaceId), "fallback", 0.45);
@@ -341,7 +346,7 @@ export function createCatStateMachineUtilsRuntime(ctx) {
       resolvedSurfaceId: resolved,
       y,
     };
-    return resolved;
+    return traceSurfaceResolve(resolved, "fallback");
   }
 
   function ensureSurfaceHopTrail() {
@@ -369,53 +374,12 @@ export function createCatStateMachineUtilsRuntime(ctx) {
   }
 
   function getAvoidSurfaceIdsForHop(sourceSurfaceId, finalSurfaceId) {
-    const sourceId = String(sourceSurfaceId || "floor");
-    const finalId = String(finalSurfaceId || "floor");
-    // Surface-to-surface travel often *needs* to revisit the previous helper
-    // surface (for example hoverShelf -> desk -> shelf -> windowSill). Avoidance
-    // heuristics were hiding those valid corridors, so only keep them for routes
-    // that actually involve the floor.
-    if (sourceId !== "floor" && finalId !== "floor") return [];
-
-    const avoid = new Set();
-    const clockTime = getClockTime();
-
-    const lastHopAge = clockTime - Number(cat.nav.lastSurfaceHopAt || 0);
-    if (
-      lastHopAge <= 2.1 &&
-      cat.nav.lastSurfaceHopTo &&
-      cat.nav.lastSurfaceHopFrom &&
-      String(cat.nav.lastSurfaceHopTo) === sourceId
-    ) {
-      const backtrackId = String(cat.nav.lastSurfaceHopFrom);
-      if (backtrackId && backtrackId !== sourceId && backtrackId !== finalId) avoid.add(backtrackId);
-    }
-
-    const trail = ensureSurfaceHopTrail();
-    const seenRecent = new Set();
-    for (let i = trail.length - 1; i >= 0 && seenRecent.size < 2; i--) {
-      const hop = trail[i];
-      if (!hop || !Number.isFinite(hop.at) || clockTime - hop.at > 8.0) continue;
-      const hopTo = String(hop.to || "");
-      if (!hopTo || hopTo === "floor" || hopTo === sourceId || hopTo === finalId) continue;
-      if (seenRecent.has(hopTo)) continue;
-      seenRecent.add(hopTo);
-      avoid.add(hopTo);
-    }
-
-    return Array.from(avoid);
-  }
-
-  function isCatOnDeskNow() {
-    const y = Number.isFinite(cat.group.position.y) ? cat.group.position.y : 0;
-    if (Math.abs(y - (desk.topY + 0.02)) > 0.24) return false;
-    const pad = 0.2;
-    return (
-      cat.pos.x >= desk.pos.x - desk.sizeX * 0.5 - pad &&
-      cat.pos.x <= desk.pos.x + desk.sizeX * 0.5 + pad &&
-      cat.pos.z >= desk.pos.z - desk.sizeZ * 0.5 - pad &&
-      cat.pos.z <= desk.pos.z + desk.sizeZ * 0.5 + pad
-    );
+    void sourceSurfaceId;
+    void finalSurfaceId;
+    // The directed surface graph already prevents loops. Extra avoid heuristics
+    // were hiding valid minimum-jump paths, especially when returning to floor
+    // through helper surfaces like hoverShelf -> desk -> floor.
+    return [];
   }
 
   function clearCatnipApproachLock() {
@@ -509,7 +473,6 @@ export function createCatStateMachineUtilsRuntime(ctx) {
     recordSurfaceHop,
     setJumpDownDebug,
     getAvoidSurfaceIdsForHop,
-    isCatOnDeskNow,
     clearCatnipApproachLock,
     getCatnipApproachTarget,
     faceCatnip,

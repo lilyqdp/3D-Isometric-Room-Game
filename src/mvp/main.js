@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import * as CANNON from "./vendor/cannon-es.js";
-import { makeBins, makeChair, makeDesk, makeHoverShelf, makeRoomCorner, makeShelf, makeWindowSill } from "./modules/room.js";
+import { makeBins, makeChair, makeDesk, makeHoverShelf, makePlatform, makeRoomCorner, makeShelf, makeWindowSill } from "./modules/room.js";
 import { createSurfaceRegistry } from "./modules/surface-registry.js";
 import { setupPhysicsWorld } from "./modules/physics.js";
 import { addRandomPickups, pickRandomCatSpawnPoint, spawnRandomPickup } from "./modules/spawning.js";
@@ -176,6 +176,30 @@ const hoverShelf = {
   // Keep this much higher so floor->hoverShelf jump links are invalid.
   surfaceY: desk.topY * 2,
   thickness: 0.08,
+};
+
+const lowerPlatform = {
+  id: "lowerPlatform",
+  // Aligned with hoverShelf on X so the jump probes have a clean direct connection.
+  pos: new THREE.Vector3(hoverShelf.pos.x, 0, -3.95),
+  width: 0.95,
+  depth: 0.72,
+  surfaceY: hoverShelf.surfaceY,
+  thickness: 0.08,
+};
+
+const upperPlatform = {
+  id: "upperPlatform",
+  // Keep it aligned on X, place it at a fixed Z, and only moderately above lowerPlatform.
+  pos: new THREE.Vector3(
+    lowerPlatform.pos.x,
+    0,
+    -4.70
+  ),
+  width: lowerPlatform.width,
+  depth: lowerPlatform.depth,
+  surfaceY: lowerPlatform.surfaceY + 0.6,
+  thickness: lowerPlatform.thickness,
 };
 
 const windowSill = {
@@ -404,6 +428,8 @@ makeDesk(scene, desk);
 makeChair(scene, chair);
 makeShelf(scene, shelf);
 makeHoverShelf(scene, hoverShelf);
+makePlatform(scene, lowerPlatform);
+makePlatform(scene, upperPlatform);
 const windowSillRuntime = makeWindowSill(scene, windowSill);
 makeBins({
   scene,
@@ -566,6 +592,36 @@ const SURFACE_SPECS = [
     special: { type: "platform" },
   },
   {
+    id: lowerPlatform.id,
+    name: lowerPlatform.id,
+    minX: lowerPlatform.pos.x - lowerPlatform.width * 0.5,
+    maxX: lowerPlatform.pos.x + lowerPlatform.width * 0.5,
+    minZ: lowerPlatform.pos.z - lowerPlatform.depth * 0.5,
+    maxZ: lowerPlatform.pos.z + lowerPlatform.depth * 0.5,
+    y: lowerPlatform.surfaceY + 0.02,
+    flags: {
+      randomPatrol: false,
+      manualPatrol: true,
+      allowCatnip: true,
+    },
+    special: { type: "platform" },
+  },
+  {
+    id: upperPlatform.id,
+    name: upperPlatform.id,
+    minX: upperPlatform.pos.x - upperPlatform.width * 0.5,
+    maxX: upperPlatform.pos.x + upperPlatform.width * 0.5,
+    minZ: upperPlatform.pos.z - upperPlatform.depth * 0.5,
+    maxZ: upperPlatform.pos.z + upperPlatform.depth * 0.5,
+    y: upperPlatform.surfaceY + 0.02,
+    flags: {
+      randomPatrol: false,
+      manualPatrol: true,
+      allowCatnip: true,
+    },
+    special: { type: "platform" },
+  },
+  {
     id: windowSill.id,
     name: windowSill.id,
     minX: windowSill.pos.x - windowSill.width * 0.5,
@@ -673,9 +729,42 @@ const pickupsRuntime = createPickupsRuntime({
   controls,
   addMess,
   binVisuals,
+  getSurfaceDefs,
   getClockTime: () => clockTime,
   onAllSorted: win,
 });
+
+let debugRuntime = null;
+
+function shouldRecordFunctionTrace() {
+  return !!debugRuntime?.shouldRecordFunctionTrace?.();
+}
+
+function recordFunctionTrace(name, details = "") {
+  if (!shouldRecordFunctionTrace()) return;
+  if (!cat?.nav) return;
+  if (!Array.isArray(cat.nav.functionTrace)) cat.nav.functionTrace = [];
+  const trace = cat.nav.functionTrace;
+  const entry = {
+    t: clockTime,
+    name: String(name || "fn"),
+    details: typeof details === "string" ? details : "",
+    count: 1,
+  };
+  const prev = trace[trace.length - 1];
+  if (
+    prev &&
+    prev.name === entry.name &&
+    prev.details === entry.details &&
+    Math.abs((entry.t || 0) - (prev.t || 0)) <= 0.18
+  ) {
+    prev.t = entry.t;
+    prev.count = (Number(prev.count) || 1) + 1;
+    return;
+  }
+  trace.push(entry);
+  if (trace.length > 220) trace.splice(0, trace.length - 220);
+}
 
 const navRuntime = createCatNavigationRuntime({
   THREE,
@@ -699,10 +788,10 @@ const navRuntime = createCatNavigationRuntime({
   isDraggingPickup: (pickup) => pickupsRuntime.isDraggingPickup(pickup),
   getSurfaceDefs,
   getSurfaceById,
-  getElevatedSurfaceDefs,
   clearCatNavPath,
   resetCatUnstuckTracking,
   getClockTime: () => clockTime,
+  recordFunctionTrace,
 });
 
 const cupRuntime = createCupRuntime({
@@ -749,11 +838,10 @@ const catnipRuntime = createCatnipRuntime({
   computeSurfaceJumpTargets: navRuntime.computeSurfaceJumpTargets,
   getSurfaceDefs,
   getSurfaceById,
-  getElevatedSurfaceDefs,
   getClockTime: () => clockTime,
 });
 
-const debugRuntime = createDebugOverlayRuntime({
+debugRuntime = createDebugOverlayRuntime({
   THREE,
   scene,
   physics,
@@ -830,7 +918,6 @@ const debugControlsRuntime = createDebugControlsRuntime({
   resetCatUnstuckTracking,
   getSurfaceDefs,
   getSurfaceById,
-  getElevatedSurfaceDefs,
 });
 const debugCameraRuntime = createMainDebugCameraRuntime({
   THREE,
@@ -900,7 +987,7 @@ function addMess(amount) {
 
 function getElevatedSurfaceById(surfaceId) {
   if (!surfaceId || surfaceId === "floor") return null;
-  const defs = getElevatedSurfaceDefs(true);
+  const defs = getSurfaceDefs({ includeFloor: false });
   if (!Array.isArray(defs)) return null;
   return defs.find((s) => String(s?.id || s?.name || "") === String(surfaceId)) || null;
 }
@@ -929,7 +1016,7 @@ function scoreElevatedSurfaceAtPoint(x, z, y, surface, pad = 0.18, preferredSurf
 }
 
 function findBestElevatedSurfaceAt(x, z, y, pad = 0.18, maxDy = 0.58, preferredSurfaceId = "") {
-  const defs = getElevatedSurfaceDefs(true);
+  const defs = getSurfaceDefs({ includeFloor: false });
   if (!Array.isArray(defs)) return null;
   let best = null;
   let bestScore = Infinity;
@@ -961,7 +1048,7 @@ function isNearElevatedSurface(x, z, y, surface, pad = 0.28, yPad = 0.7) {
 }
 
 function findLooseElevatedSurfaceAt(x, z, y, preferredSurfaceId = "") {
-  const defs = getElevatedSurfaceDefs(true);
+  const defs = getSurfaceDefs({ includeFloor: false });
   if (!Array.isArray(defs) || defs.length === 0) return null;
 
   let best = null;
@@ -1130,7 +1217,6 @@ function resetGame() {
     camera,
     ROOM,
     CAT_NAV,
-    desk,
     buildCatObstacles: navRuntime.buildCatObstacles,
     getCatPathClearance: navRuntime.getCatPathClearance,
     isCatPointBlocked: navRuntime.isCatPointBlocked,
@@ -1453,8 +1539,6 @@ function placeCatnipFromMouse() {
 }
 
 function getSurfaceDefs(options = undefined) {
-  if (options === true) return surfaceRegistry.getElevatedSurfaceDefs(true);
-  if (options === false) return surfaceRegistry.getElevatedSurfaceDefs(false);
   if (typeof options === "object" && options) return surfaceRegistry.getSurfaceDefs(options);
   return surfaceRegistry.getSurfaceDefs();
 }
@@ -1467,10 +1551,6 @@ function getSurfaceIdsByCapability(capability) {
   return typeof surfaceRegistry.getSurfaceIdsByCapability === "function"
     ? surfaceRegistry.getSurfaceIdsByCapability(capability)
     : [];
-}
-
-function getElevatedSurfaceDefs(includeDesk = true) {
-  return surfaceRegistry.getElevatedSurfaceDefs(includeDesk);
 }
 
 function knockCup(...args) {
@@ -1521,11 +1601,12 @@ function updateCat(dt) {
       buildCatObstacles: navRuntime.buildCatObstacles,
       canReachGroundTarget: navRuntime.canReachGroundTarget,
       hasClearTravelLine: navRuntime.hasClearTravelLine,
+      findSurfacePath: navRuntime.findSurfacePath,
       computeDeskJumpTargets: navRuntime.computeDeskJumpTargets,
       computeSurfaceJumpTargets: navRuntime.computeSurfaceJumpTargets,
+      computeSurfaceJumpDownTargets: navRuntime.computeSurfaceJumpDownTargets,
       getSurfaceDefs,
       getSurfaceById,
-      getElevatedSurfaceDefs,
       keepCatAwayFromCup: navRuntime.keepCatAwayFromCup,
       knockCup,
       sampleSwipePose: navRuntime.sampleSwipePose,
@@ -1534,6 +1615,7 @@ function updateCat(dt) {
       updateCatClipLocomotion: catModelRuntime.updateCatClipLocomotion,
       setBonePose: catModelRuntime.setBonePose,
       windowSill,
+      recordFunctionTrace,
     },
     dt
   );

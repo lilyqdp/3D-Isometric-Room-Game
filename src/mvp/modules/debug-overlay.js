@@ -74,6 +74,7 @@ export function createDebugOverlayRuntime(ctx) {
     { key: "showNavTelemetry", label: "Live nav telemetry panel", default: false },
     { key: "showRouteLoopTelemetry", label: "Route loop diagnostics panel", default: false },
     { key: "showRouteEventTimeline", label: "Route event timeline panel", default: false },
+    { key: "showFunctionTrace", label: "Function trace panel", default: false },
     { key: "showPerfTelemetry", label: "Live perf telemetry panel", default: false },
     { key: "showPathProfiler", label: "Path lag profiler panel", default: false },
   ];
@@ -444,6 +445,8 @@ export function createDebugOverlayRuntime(ctx) {
   let debugRouteTelemetryPre = null;
   let debugRouteEventSection = null;
   let debugRouteEventPre = null;
+  let debugFunctionTraceSection = null;
+  let debugFunctionTracePre = null;
   let debugPerfTelemetrySection = null;
   let debugPerfTelemetryPre = null;
   let debugPathProfilerSection = null;
@@ -604,6 +607,7 @@ export function createDebugOverlayRuntime(ctx) {
         (isFlagOn("showNavTelemetry") ||
           isFlagOn("showRouteLoopTelemetry") ||
           isFlagOn("showRouteEventTimeline") ||
+          isFlagOn("showFunctionTrace") ||
           isFlagOn("showPerfTelemetry") ||
           isFlagOn("showPathProfiler"));
       debugTelemetryWrap.style.display = showAny ? "grid" : "none";
@@ -611,6 +615,7 @@ export function createDebugOverlayRuntime(ctx) {
     if (debugNavTelemetrySection) debugNavTelemetrySection.style.display = isFlagOn("showNavTelemetry") ? "block" : "none";
     if (debugRouteTelemetrySection) debugRouteTelemetrySection.style.display = isFlagOn("showRouteLoopTelemetry") ? "block" : "none";
     if (debugRouteEventSection) debugRouteEventSection.style.display = isFlagOn("showRouteEventTimeline") ? "block" : "none";
+    if (debugFunctionTraceSection) debugFunctionTraceSection.style.display = isFlagOn("showFunctionTrace") ? "block" : "none";
     if (debugPerfTelemetrySection) debugPerfTelemetrySection.style.display = isFlagOn("showPerfTelemetry") ? "block" : "none";
     if (debugPathProfilerSection) debugPathProfilerSection.style.display = isFlagOn("showPathProfiler") ? "block" : "none";
   }
@@ -718,10 +723,18 @@ export function createDebugOverlayRuntime(ctx) {
     ({ section: debugNavTelemetrySection, pre: debugNavTelemetryPre } = makeTelemetrySection("Nav telemetry", "#8fd6ff"));
     ({ section: debugRouteTelemetrySection, pre: debugRouteTelemetryPre } = makeTelemetrySection("Route loop diagnostics", "#ffd27a"));
     ({ section: debugRouteEventSection, pre: debugRouteEventPre } = makeTelemetrySection("Route event timeline", "#ff9dc6"));
+    ({ section: debugFunctionTraceSection, pre: debugFunctionTracePre } = makeTelemetrySection("Function trace", "#b8a7ff"));
     ({ section: debugPerfTelemetrySection, pre: debugPerfTelemetryPre } = makeTelemetrySection("Performance telemetry", "#9bffad"));
     ({ section: debugPathProfilerSection, pre: debugPathProfilerPre } = makeTelemetrySection("Path lag profiler", "#7dffef"));
 
-    debugTelemetryWrap.append(debugNavTelemetrySection, debugRouteTelemetrySection, debugRouteEventSection, debugPerfTelemetrySection, debugPathProfilerSection);
+    debugTelemetryWrap.append(
+      debugNavTelemetrySection,
+      debugRouteTelemetrySection,
+      debugRouteEventSection,
+      debugFunctionTraceSection,
+      debugPerfTelemetrySection,
+      debugPathProfilerSection
+    );
 
     debugAdvancedWrap.insertAdjacentElement("afterend", debugTelemetryWrap);
     syncAdvancedControlsFromState();
@@ -1102,6 +1115,23 @@ export function createDebugOverlayRuntime(ctx) {
     return lines;
   }
 
+  function buildFunctionTraceLines(clockTime = 0) {
+    if (!isFlagOn("showFunctionTrace")) return [];
+    const trace = Array.isArray(cat.nav?.functionTrace) ? cat.nav.functionTrace.slice(-32) : [];
+    const lines = [];
+    if (!trace.length) {
+      lines.push("function trace: waiting for calls...");
+      return lines;
+    }
+    for (const entry of trace) {
+      const age = formatNum(clockTime - (entry.t || clockTime), 2);
+      const count = Number(entry.count) > 1 ? ` x${entry.count}` : "";
+      const details = entry.details ? ` | ${entry.details}` : "";
+      lines.push(`${age}s | ${entry.name || "fn"}${count}${details}`);
+    }
+    return lines;
+  }
+
   function buildPerfTelemetryLines() {
     if (!isFlagOn("showPerfTelemetry")) return [];
     const lines = [];
@@ -1262,12 +1292,14 @@ export function createDebugOverlayRuntime(ctx) {
       (!isFlagOn("showNavTelemetry") &&
         !isFlagOn("showRouteLoopTelemetry") &&
         !isFlagOn("showRouteEventTimeline") &&
+        !isFlagOn("showFunctionTrace") &&
         !isFlagOn("showPerfTelemetry") &&
         !isFlagOn("showPathProfiler"))
     ) {
       if (debugNavTelemetryPre) debugNavTelemetryPre.textContent = "";
       if (debugRouteTelemetryPre) debugRouteTelemetryPre.textContent = "";
       if (debugRouteEventPre) debugRouteEventPre.textContent = "";
+      if (debugFunctionTracePre) debugFunctionTracePre.textContent = "";
       if (debugPerfTelemetryPre) debugPerfTelemetryPre.textContent = "";
       if (debugPathProfilerPre) debugPathProfilerPre.textContent = "";
       return;
@@ -1278,6 +1310,7 @@ export function createDebugOverlayRuntime(ctx) {
     if (debugNavTelemetryPre) debugNavTelemetryPre.textContent = buildNavTelemetryLines(clockTime, false).join("\n");
     if (debugRouteTelemetryPre) debugRouteTelemetryPre.textContent = buildRouteLoopTelemetryLines(clockTime).join("\n");
     if (debugRouteEventPre) debugRouteEventPre.textContent = buildRouteEventTimelineLines(clockTime).join("\n");
+    if (debugFunctionTracePre) debugFunctionTracePre.textContent = buildFunctionTraceLines(clockTime).join("\n");
     if (debugPerfTelemetryPre) debugPerfTelemetryPre.textContent = buildPerfTelemetryLines().join("\n");
     if (debugPathProfilerPre) debugPathProfilerPre.textContent = buildPathProfilerLines().join("\n");
     setAdvancedControlVisible();
@@ -2381,21 +2414,18 @@ export function createDebugOverlayRuntime(ctx) {
             appendJumpArc(points, cursor, getVecY(cursor, supportY), jumpDown, landingY, 0.34, 12);
             cursor = jumpDown.clone();
             const nextSegment = route.segments[i + 1] || null;
-            if (nextSegment?.kind === 'walk-floor' || nextSegment?.kind === 'walk-surface') {
+            if (nextSegment?.kind === 'walk-surface') {
+              const nextSupportSurfaceId = nextSegment.supportSurfaceId || route.surfaceId || route.finalSurfaceId;
               const settleTarget = cloneRoutePoint(
                 route[nextSegment.pointKey],
-                nextSegment.kind === 'walk-floor'
-                  ? 0
-                  : getSurfaceY(nextSegment.supportSurfaceId || route.surfaceId || route.finalSurfaceId, landingY)
+                getSurfaceY(nextSupportSurfaceId, landingY)
               );
               if (settleTarget) {
                 appendSurfaceLine(
                   points,
                   cursor,
                   settleTarget,
-                  nextSegment.kind === 'walk-floor'
-                    ? 0
-                    : getSurfaceY(nextSegment.supportSurfaceId || route.surfaceId || route.finalSurfaceId, getVecY(settleTarget, landingY))
+                  getSurfaceY(nextSupportSurfaceId, getVecY(settleTarget, landingY))
                 );
                 cursor = settleTarget.clone();
               }
@@ -2426,14 +2456,11 @@ export function createDebugOverlayRuntime(ctx) {
         appended = true;
         continue;
       }
-      if (segment.kind === 'walk-surface' || segment.kind === 'walk-floor') {
-        const targetPoint = cloneRoutePoint(route[segment.pointKey], segment.kind === 'walk-floor'
-          ? 0
-          : getSurfaceY(segment.supportSurfaceId || route.surfaceId || route.finalSurfaceId, cursor.y));
+      if (segment.kind === 'walk-surface') {
+        const supportSurfaceId = segment.supportSurfaceId || route.surfaceId || route.finalSurfaceId;
+        const targetPoint = cloneRoutePoint(route[segment.pointKey], getSurfaceY(supportSurfaceId, cursor.y));
         if (!targetPoint) continue;
-        const surfaceY = segment.kind === 'walk-floor'
-          ? 0
-          : getSurfaceY(segment.supportSurfaceId || route.surfaceId || route.finalSurfaceId, getVecY(targetPoint, cursor.y));
+        const surfaceY = getSurfaceY(supportSurfaceId, getVecY(targetPoint, cursor.y));
         if (activeSegment && !cat.jump) {
           const useDirectSettleLine = landingPhase;
           if (useDirectSettleLine) {
@@ -2443,7 +2470,7 @@ export function createDebugOverlayRuntime(ctx) {
               preferStable: false,
               targetOverride: targetPoint,
               planeY: surfaceY,
-              requireTargetAlignment: segment.kind === 'walk-floor',
+              requireTargetAlignment: surfaceY <= PATH_LIFT + 1e-4,
             });
             if (!hasNav) appendSurfaceLine(points, cursor, targetPoint, surfaceY);
           }
@@ -2607,9 +2634,7 @@ export function createDebugOverlayRuntime(ctx) {
     const activePoint = activeSegment
       ? cloneRoutePoint(
           route?.[activeSegment.pointKey] || route?.target,
-          activeSegment.kind === 'walk-floor'
-            ? 0
-            : getSurfaceY(activeSegment.supportSurfaceId || route?.surfaceId || route?.finalSurfaceId, finalBaseY)
+          getSurfaceY(activeSegment.supportSurfaceId || route?.surfaceId || route?.finalSurfaceId, finalBaseY)
         )
       : null;
 
@@ -2832,6 +2857,10 @@ export function createDebugOverlayRuntime(ctx) {
     return !!debugView.visible;
   }
 
+  function shouldRecordFunctionTrace() {
+    return !!(debugView.visible && debugView.advancedPanelVisible && isFlagOn("showFunctionTrace"));
+  }
+
   return {
     enabled: DEBUG_VIEW.enabled,
     root: debugView.root,
@@ -2840,6 +2869,7 @@ export function createDebugOverlayRuntime(ctx) {
     toggleDebugView,
     onKeyDown,
     isDebugVisible,
+    shouldRecordFunctionTrace,
     updatePerformanceSample,
   };
 }

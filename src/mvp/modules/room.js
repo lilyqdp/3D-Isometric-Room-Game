@@ -209,26 +209,30 @@ export function makeShelf(scene, shelf) {
   scene.add(backPanel);
 }
 
-export function makeHoverShelf(scene, hoverShelf) {
+export function makePlatform(scene, platform) {
   const boardMat = new THREE.MeshStandardMaterial({ color: 0x6a7280, roughness: 0.78 });
   const board = new THREE.Mesh(
-    new THREE.BoxGeometry(hoverShelf.width, hoverShelf.thickness, hoverShelf.depth),
+    new THREE.BoxGeometry(platform.width, platform.thickness, platform.depth),
     boardMat
   );
   board.position.set(
-    hoverShelf.pos.x,
-    hoverShelf.surfaceY - hoverShelf.thickness * 0.5,
-    hoverShelf.pos.z
+    platform.pos.x,
+    platform.surfaceY - platform.thickness * 0.5,
+    platform.pos.z
   );
   board.userData.catSurface = {
-    id: hoverShelf.id || "hoverShelf",
-    y: hoverShelf.surfaceY + 0.02,
-    minX: hoverShelf.pos.x - hoverShelf.width * 0.5,
-    maxX: hoverShelf.pos.x + hoverShelf.width * 0.5,
-    minZ: hoverShelf.pos.z - hoverShelf.depth * 0.5,
-    maxZ: hoverShelf.pos.z + hoverShelf.depth * 0.5,
+    id: platform.id || "platform",
+    y: platform.surfaceY + 0.02,
+    minX: platform.pos.x - platform.width * 0.5,
+    maxX: platform.pos.x + platform.width * 0.5,
+    minZ: platform.pos.z - platform.depth * 0.5,
+    maxZ: platform.pos.z + platform.depth * 0.5,
   };
   scene.add(board);
+}
+
+export function makeHoverShelf(scene, hoverShelf) {
+  makePlatform(scene, hoverShelf);
 }
 
 export function makeWindowSill(scene, windowSill) {

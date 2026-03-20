@@ -9,11 +9,9 @@ export function createCatSteeringRuntime(ctx) {
     CAT_COLLISION,
     SWIPE_TIMING,
     ROOM,
-    desk,
     game,
     getSurfaceDefs,
     getSurfaceById,
-    getElevatedSurfaceDefs,
     cat,
     getClockTime,
     clearCatNavPath,
@@ -655,8 +653,8 @@ export function createCatSteeringRuntime(ctx) {
     const surfaces = [];
     const resolvedSupportSurfaceId =
       supportSurfaceId && supportSurfaceId !== "floor" ? String(supportSurfaceId) : "";
-    if (typeof getSurfaceDefs === "function" || typeof getElevatedSurfaceDefs === "function") {
-      const defs = typeof getSurfaceDefs === "function" ? getSurfaceDefs({ includeFloor: false }) : getElevatedSurfaceDefs(true);
+    if (typeof getSurfaceDefs === "function") {
+      const defs = getSurfaceDefs({ includeFloor: false });
       if (Array.isArray(defs)) {
         for (const def of defs) {
           if (!def) continue;
@@ -672,17 +670,6 @@ export function createCatSteeringRuntime(ctx) {
           if (maxX - minX <= 0.06 || maxZ - minZ <= 0.06) continue;
           surfaces.push({ id: surfaceId, y, minX, maxX, minZ, maxZ });
         }
-      }
-    } else if (desk) {
-      if (!resolvedSupportSurfaceId || resolvedSupportSurfaceId === "desk") {
-      surfaces.push({
-        id: "desk",
-        y: desk.topY + 0.02,
-        minX: desk.pos.x - desk.sizeX * 0.5,
-        maxX: desk.pos.x + desk.sizeX * 0.5,
-        minZ: desk.pos.z - desk.sizeZ * 0.5,
-        maxZ: desk.pos.z + desk.sizeZ * 0.5,
-      });
       }
     }
     const out = [];

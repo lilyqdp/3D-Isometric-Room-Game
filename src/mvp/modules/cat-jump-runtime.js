@@ -2,15 +2,56 @@ export function createCatJumpRuntime(ctx) {
   const {
     THREE,
     CAT_COLLISION,
-    desk,
     cat,
-    getElevatedSurfaceDefs,
+    getSurfaceDefs,
+    getSurfaceById,
     getClockTime = () => 0,
+    recordFunctionTrace = null,
   } = ctx;
+
+  function traceFunction(name, details = "") {
+    if (typeof recordFunctionTrace === "function") {
+      recordFunctionTrace(name, details);
+    }
+  }
+
+  function getSurfaceClipIds(opts = null) {
+    const explicitIds = Array.isArray(opts?.clipSurfaceIds)
+      ? opts.clipSurfaceIds
+      : (opts?.clipSurfaceIds != null ? [opts.clipSurfaceIds] : []);
+    const sourceIds = explicitIds.length
+      ? explicitIds
+      : (opts?.preventSurfaceClip ? [opts?.fromSurfaceId, opts?.toSurfaceId] : []);
+    const out = [];
+    const seen = new Set();
+    for (const value of sourceIds) {
+      const surfaceId = String(value || "");
+      if (!surfaceId || surfaceId === "floor" || seen.has(surfaceId)) continue;
+      seen.add(surfaceId);
+      out.push(surfaceId);
+    }
+    return out;
+  }
+
+  function resolveClipSurfaces(surfaceIds = []) {
+    const out = [];
+    for (const surfaceId of surfaceIds) {
+      const surface = typeof getSurfaceById === "function" ? getSurfaceById(surfaceId) : null;
+      if (!surface || surface.id === "floor") continue;
+      const minX = Number(surface.minX);
+      const maxX = Number(surface.maxX);
+      const minZ = Number(surface.minZ);
+      const maxZ = Number(surface.maxZ);
+      const y = Number(surface.y);
+      if (![minX, maxX, minZ, maxZ, y].every(Number.isFinite)) continue;
+      out.push(surface);
+    }
+    return out;
+  }
 
   function computeJumpNoClipMinY(jump, x, z, progressU) {
     if (!jump || progressU >= 0.96) return null;
-    const surfaces = getElevatedSurfaceDefs(true);
+    const surfaces = typeof getSurfaceDefs === "function" ? getSurfaceDefs({ includeFloor: false }) : [];
     if (!Array.isArray(surfaces) || surfaces.length === 0) return null;
     const pad = Math.max(0.08, CAT_COLLISION.catBodyRadius * 0.9);
     const jumpArc = Math.max(0.02, Number(jump.arc) || 0);
@@ -62,9 +103,54 @@ export function createCatJumpRuntime(ctx) {
     state.lastStableSurfaceId = resolvedSurfaceId;
   }
 
+  function resolveSurfaceIdForPoint(point, y, preferredSurfaceId = "") {
+    const explicit = String(preferredSurfaceId || "");
+    if (explicit) return explicit;
+    if (y <= 0.08) return "floor";
+
+    for (const surfaceId of [
+      cat.nav?.jumpDownLandingSurfaceId,
+      cat.nav?.route?.surfaceId,
+      cat.nav?.route?.finalSurfaceId,
+      cat.nav?.surfaceState?.currentSurfaceId,
+      cat.nav?.surfaceState?.lastStableSurfaceId,
+    ]) {
+      const resolved = String(surfaceId || "");
+      if (resolved && resolved !== "floor") return resolved;
+    }
+
+    const surfaces = typeof getSurfaceDefs === "function" ? getSurfaceDefs({ includeFloor: false }) : [];
+    if (!Array.isArray(surfaces) || !surfaces.length) return "floor";
+
+    const sampleX = Number(point?.x ?? cat.pos.x);
+    const sampleZ = Number(point?.z ?? cat.pos.z);
+    let bestId = "";
+    let bestScore = Infinity;
+    for (const surface of surfaces) {
+      const surfaceId = String(surface?.id || surface?.name || "");
+      const sy = Number(surface?.y);
+      const minX = Number(surface?.minX);
+      const maxX = Number(surface?.maxX);
+      const minZ = Number(surface?.minZ);
+      const maxZ = Number(surface?.maxZ);
+      if (!surfaceId || ![sy, minX, maxX, minZ, maxZ].every(Number.isFinite)) continue;
+      if (sy <= 0.04) continue;
+      const dx = sampleX < minX ? minX - sampleX : sampleX > maxX ? sampleX - maxX : 0;
+      const dz = sampleZ < minZ ? minZ - sampleZ : sampleZ > maxZ ? sampleZ - maxZ : 0;
+      const dy = Math.abs(y - sy);
+      if (dy > 0.72) continue;
+      const score = dx * dx + dz * dz + dy * dy * 2;
+      if (score < bestScore) {
+        bestScore = score;
+        bestId = surfaceId;
+      }
+    }
+    return bestId || "floor";
+  }
+
   function startJump(to, toY, dur, arc, nextState, opts = null) {
     const fromY = cat.group.position.y;
-    const dropOrLevelJump = toY <= fromY + 0.03;
+    const dropOrLevelJump = toY < fromY - 0.03;
     const requestedNextState = nextState || "patrol";
     const resolvedNextState = dropOrLevelJump ? "landStop" : requestedNextState;
     let resolvedDur = dur;
@@ -121,15 +207,23 @@ export function createCatJumpRuntime(ctx) {
       allowClamp,
       easePos: !!(opts && opts.easePos),
       easeY: !!(opts && opts.easeY),
-      avoidDeskClip: !!(opts && opts.avoidDeskClip),
-      fromSurfaceId: String(opts?.fromSurfaceId || (fromY <= 0.08 ? "floor" : cat.nav?.surfaceState?.currentSurfaceId || "floor")),
-      toSurfaceId: String(opts?.toSurfaceId || (toY <= 0.08 ? "floor" : cat.nav?.jumpDownLandingSurfaceId || cat.nav?.route?.surfaceId || cat.nav?.surfaceState?.currentSurfaceId || "desk")),
+      clipSurfaces: resolveClipSurfaces(getSurfaceClipIds(opts)),
+      fromSurfaceId: resolveSurfaceIdForPoint(cat.pos, fromY, opts?.fromSurfaceId || (fromY <= 0.08 ? "floor" : cat.nav?.surfaceState?.currentSurfaceId)),
+      toSurfaceId: resolveSurfaceIdForPoint(
+        to,
+        toY,
+        opts?.toSurfaceId || (toY <= 0.08 ? "floor" : cat.nav?.jumpDownLandingSurfaceId || cat.nav?.route?.surfaceId || cat.nav?.surfaceState?.currentSurfaceId || cat.nav?.surfaceState?.lastStableSurfaceId)
+      ),
     };
+    traceFunction(
+      "startJump",
+      `from=${cat.jump.fromSurfaceId || "na"} to=${cat.jump.toSurfaceId || "na"} next=${resolvedNextState} y=${cat.jump.fromY.toFixed(2)}->${cat.jump.toY.toFixed(2)}`
+    );
   }
 
   function updateJump(dt) {
     if (!cat.jump) return false;
-    const isDownJump = cat.jump.toY <= cat.jump.fromY + 0.03;
+    const isDownJump = cat.jump.toY < cat.jump.fromY - 0.03;
     const jumpDx = cat.jump.to.x - cat.jump.from.x;
     const jumpDz = cat.jump.to.z - cat.jump.from.z;
     if (jumpDx * jumpDx + jumpDz * jumpDz > 1e-6) {
@@ -184,20 +278,29 @@ export function createCatJumpRuntime(ctx) {
     if (cat.jump.allowClamp) {
       const noClipMinY = computeJumpNoClipMinY(cat.jump, cat.pos.x, cat.pos.z, u);
       if (Number.isFinite(noClipMinY) && y < noClipMinY) y = noClipMinY;
-      if (cat.jump.avoidDeskClip && y < desk.topY + 0.08) {
-        const halfX = desk.sizeX * 0.5 + 0.12;
-        const halfZ = desk.sizeZ * 0.5 + 0.12;
-        if (Math.abs(cat.pos.x - desk.pos.x) <= halfX && Math.abs(cat.pos.z - desk.pos.z) <= halfZ) {
-          y = desk.topY + 0.08;
+      for (const surface of cat.jump.clipSurfaces || []) {
+        if (y >= surface.y + 0.08) continue;
+        if (
+          cat.pos.x >= surface.minX - 0.12 &&
+          cat.pos.x <= surface.maxX + 0.12 &&
+          cat.pos.z >= surface.minZ - 0.12 &&
+          cat.pos.z <= surface.maxZ + 0.12
+        ) {
+          y = surface.y + 0.08;
         }
       }
     }
     cat.group.position.set(cat.pos.x, y, cat.pos.z);
     const downLandingReady = isDownJump && u >= 0.9 && y <= cat.jump.toY + 0.02;
     if (u >= 1 || downLandingReady) {
-      cat.group.position.y = cat.jump.toY;
+      const landedSurfaceId = resolveSurfaceIdForPoint(cat.jump.to, cat.jump.toY, cat.jump.toSurfaceId);
+      traceFunction(
+        "updateJump",
+        `landed=${landedSurfaceId || "na"} next=${cat.jump.nextState || "na"} down=${isDownJump ? 1 : 0}`
+      );
+      cat.pos.copy(cat.jump.to);
+      cat.group.position.set(cat.pos.x, cat.jump.toY, cat.pos.z);
       const next = cat.jump.nextState;
-      const landedSurfaceId = String(cat.jump.toSurfaceId || (cat.jump.toY <= 0.08 ? "floor" : "desk"));
       clearActiveJump();
       commitAuthoritativeSurface(landedSurfaceId, "jump-landed", 1.2);
       cat.state = next;

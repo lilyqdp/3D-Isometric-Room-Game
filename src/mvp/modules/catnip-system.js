@@ -15,7 +15,6 @@ export function createCatnipRuntime(ctx) {
     game,
     cat,
     cup,
-    desk,
     pickups,
     pickupRadius,
     buildCatObstacles,
@@ -23,17 +22,13 @@ export function createCatnipRuntime(ctx) {
     getCatPathClearance,
     canReachGroundTarget,
     findSafeGroundPoint,
-    bestDeskJumpAnchor,
     bestSurfaceJumpAnchor,
     computeSurfaceJumpTargets,
     getSurfaceDefs,
     getSurfaceById,
-    getElevatedSurfaceDefs,
     getClockTime,
   } = ctx;
-  const deskPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -desk.topY);
   const tempFloorHit = new THREE.Vector3();
-  const tempDeskHit = new THREE.Vector3();
   const tempFrom = new THREE.Vector3();
   const CATNIP_SCALE = 0.5;
   const CATNIP_RADIUS = 0.22 * CATNIP_SCALE;
@@ -130,25 +125,16 @@ export function createCatnipRuntime(ctx) {
     mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
   }
 
-  function isInsideDeskTop(x, z, edgePad = 0.18) {
-    return (
-      x >= desk.pos.x - desk.sizeX * 0.5 + edgePad &&
-      x <= desk.pos.x + desk.sizeX * 0.5 - edgePad &&
-      z >= desk.pos.z - desk.sizeZ * 0.5 + edgePad &&
-      z <= desk.pos.z + desk.sizeZ * 0.5 - edgePad
-    );
-  }
-
   function getNonFloorSurfaceById(surfaceId) {
     if (!surfaceId || surfaceId === "floor") return null;
     if (typeof getSurfaceById === "function") return getSurfaceById(surfaceId);
-    const defs = typeof getSurfaceDefs === "function" ? getSurfaceDefs({ includeFloor: false }) : (typeof getElevatedSurfaceDefs === "function" ? getElevatedSurfaceDefs(true) : []);
+    const defs = typeof getSurfaceDefs === "function" ? getSurfaceDefs({ includeFloor: false }) : [];
     if (!Array.isArray(defs)) return null;
     return defs.find((s) => String(s?.id || s?.name || "") === String(surfaceId)) || null;
   }
 
   function findBestNonFloorSurfaceAt(x, z, y, pad = 0.18, maxDy = 0.58, preferredSurfaceId = "") {
-    const defs = typeof getSurfaceDefs === "function" ? getSurfaceDefs({ includeFloor: false }) : (typeof getElevatedSurfaceDefs === "function" ? getElevatedSurfaceDefs(true) : []);
+    const defs = typeof getSurfaceDefs === "function" ? getSurfaceDefs({ includeFloor: false }) : [];
     if (!Array.isArray(defs)) return null;
     let best = null;
     let bestScore = Infinity;
@@ -202,7 +188,7 @@ export function createCatnipRuntime(ctx) {
   }
 
   function findLooseNonFloorSurfaceAt(x, z, y, preferredSurfaceId = "") {
-    const defs = typeof getSurfaceDefs === "function" ? getSurfaceDefs({ includeFloor: false }) : (typeof getElevatedSurfaceDefs === "function" ? getElevatedSurfaceDefs(true) : []);
+    const defs = typeof getSurfaceDefs === "function" ? getSurfaceDefs({ includeFloor: false }) : [];
     if (!Array.isArray(defs) || defs.length === 0) return null;
 
     let best = null;
@@ -267,8 +253,7 @@ export function createCatnipRuntime(ctx) {
         : "";
     const hintedSurfaceId =
       routeSurfaceId ||
-      routeFinalSurfaceId ||
-      (cat.debugMoveSurfaceId && !isFloorSurfaceId(cat.debugMoveSurfaceId) ? normalizeSurfaceId(cat.debugMoveSurfaceId) : "");
+      routeFinalSurfaceId;
 
     const best = findBestNonFloorSurfaceAt(cat.pos.x, cat.pos.z, y, 0.18, 0.58, hintedSurfaceId);
     if (best) return String(best.id || best.name || hintedSurfaceId || "floor");
@@ -276,7 +261,6 @@ export function createCatnipRuntime(ctx) {
     for (const fallbackId of [
       hintedSurfaceId,
       routeFinalSurfaceId,
-      cat.debugMoveSurfaceId,
       cat.nav?.lastSurfaceHopTo,
       cat.nav?.lastSurfaceHopFrom,
     ]) {
@@ -407,17 +391,14 @@ export function createCatnipRuntime(ctx) {
                 return s;
               })()
             : sourcePoint;
-        const anchor =
-          typeof bestSurfaceJumpAnchor === "function"
-            ? bestSurfaceJumpAnchor(surface, planningSource, tempTo, sourceId)
-            : bestDeskJumpAnchor(planningSource);
+        if (typeof bestSurfaceJumpAnchor !== "function" || typeof computeSurfaceJumpTargets !== "function") {
+          return false;
+        }
+        const anchor = bestSurfaceJumpAnchor(surface, planningSource, tempTo, sourceId);
         if (!anchor) return false;
         if (sourceId === "floor" && !canReachGroundTarget(planningSource, anchor, dynamicObstacles)) return false;
-        if (typeof computeSurfaceJumpTargets === "function") {
-          const targets = computeSurfaceJumpTargets(surface, anchor, tempTo, sourceId);
-          return !!targets?.top;
-        }
-        return surface === "desk";
+        const targets = computeSurfaceJumpTargets(surface, anchor, tempTo, sourceId);
+        return !!targets?.top;
       };
       if (resolveWithSource(sourceSurfaceId, tempFrom)) { result = true; return true; }
       if (sourceSurfaceId !== "floor") {
@@ -475,9 +456,7 @@ export function createCatnipRuntime(ctx) {
       raycaster.setFromCamera(mouse, camera);
 
       let floorHit = null;
-      let deskHit = null;
       if (raycaster.ray.intersectPlane(floorPlane, tempFloorHit)) floorHit = tempFloorHit.clone();
-      if (raycaster.ray.intersectPlane(deskPlane, tempDeskHit)) deskHit = tempDeskHit.clone();
 
       raycaster.setFromCamera(mouse, camera);
       const hits = raycaster.intersectObjects(scene.children, true);
@@ -489,7 +468,8 @@ export function createCatnipRuntime(ctx) {
         if (!surface) continue;
         const worldNormal = hit.face.normal.clone().transformDirection(hit.object.matrixWorld);
         if (worldNormal.y < 0.45) continue;
-        const surfaceId = String(surface.id || surface.name || "desk");
+        const surfaceId = normalizeSurfaceId(surface.id || surface.name);
+        if (isFloorSurfaceId(surfaceId)) continue;
         const clamped = clampToNonFloorSurface(surfaceId, hit.point.x, hit.point.z, 0.16);
         if (!clamped) continue;
         placement = {
@@ -498,18 +478,6 @@ export function createCatnipRuntime(ctx) {
           z: clamped.z,
           y: clamped.surface.y - 0.02 + CATNIP_HALF_HEIGHT,
           surfaceY: clamped.surface.y,
-        };
-        return placement;
-      }
-
-      if (!floorHit && !deskHit) return null;
-      if (deskHit && isInsideDeskTop(deskHit.x, deskHit.z, 0.05)) {
-        placement = {
-          surface: "desk",
-          x: THREE.MathUtils.clamp(deskHit.x, desk.pos.x - desk.sizeX * 0.5 + 0.16, desk.pos.x + desk.sizeX * 0.5 - 0.16),
-          z: THREE.MathUtils.clamp(deskHit.z, desk.pos.z - desk.sizeZ * 0.5 + 0.16, desk.pos.z + desk.sizeZ * 0.5 - 0.16),
-          y: desk.topY + CATNIP_HALF_HEIGHT,
-          surfaceY: desk.topY + 0.02,
         };
         return placement;
       }

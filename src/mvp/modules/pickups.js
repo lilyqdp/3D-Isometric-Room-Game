@@ -21,6 +21,7 @@ export function createPickupsRuntime(ctx) {
     game,
     controls,
     binVisuals,
+    getSurfaceDefs,
     getClockTime,
     onAllSorted,
     addMess,
@@ -89,6 +90,25 @@ export function createPickupsRuntime(ctx) {
     return pickup.type === "laundry"
       ? { x: 0.24, y: 0.04, z: 0.18 }
       : { x: 0.15, y: 0.03, z: 0.12 };
+  }
+
+  function getRaisedSurfaces() {
+    return typeof getSurfaceDefs === "function" ? getSurfaceDefs({ includeFloor: false }) : [];
+  }
+
+  function getTopSurfaceAt(x, z) {
+    let best = null;
+    for (const surface of getRaisedSurfaces()) {
+      const minX = Number(surface?.minX);
+      const maxX = Number(surface?.maxX);
+      const minZ = Number(surface?.minZ);
+      const maxZ = Number(surface?.maxZ);
+      const y = Number(surface?.y);
+      if (![minX, maxX, minZ, maxZ, y].every(Number.isFinite)) continue;
+      if (x < minX || x > maxX || z < minZ || z > maxZ) continue;
+      if (!best || y > best.y) best = surface;
+    }
+    return best;
   }
 
   function sampleCatPickupShoveContact(pickup) {
@@ -340,10 +360,8 @@ export function createPickupsRuntime(ctx) {
     const r = pickupRadius(pickup);
     let targetY = liftY;
 
-    const overDeskTop =
-      Math.abs(pos.x - desk.pos.x) <= desk.sizeX * 0.5 - r * 0.2 &&
-      Math.abs(pos.z - desk.pos.z) <= desk.sizeZ * 0.5 - r * 0.2;
-    if (overDeskTop) targetY = Math.max(targetY, desk.topY + r * 0.55);
+    const topSurface = getTopSurfaceAt(pos.x, pos.z);
+    if (topSurface) targetY = Math.max(targetY, Number(topSurface.y || 0) + r * 0.55);
 
     for (const leg of DESK_LEGS) {
       if (pos.y <= leg.topY + 0.03) pushOutFromAabbXZ(pos, leg.x, leg.z, leg.halfX, leg.halfZ, r);
@@ -436,14 +454,12 @@ export function createPickupsRuntime(ctx) {
     return { friction: 0.46, settleSpeed: 0.16 };
   }
 
-  function isPickupRestingOnDesk(pickup) {
+  function isPickupRestingOnRaisedSurface(pickup) {
     const b = pickup.body;
     const halfY = pickup.type === "laundry" ? 0.04 : 0.03;
-    const onDeskY = Math.abs(b.position.y - (desk.topY + halfY)) <= 0.08;
-    const onDeskXZ =
-      Math.abs(b.position.x - desk.pos.x) <= desk.sizeX * 0.5 + 0.03 &&
-      Math.abs(b.position.z - desk.pos.z) <= desk.sizeZ * 0.5 + 0.03;
-    return onDeskY && onDeskXZ;
+    const supportSurface = getTopSurfaceAt(b.position.x, b.position.z);
+    if (!supportSurface) return false;
+    return Math.abs(b.position.y - (Number(supportSurface.y || 0) + halfY)) <= 0.08;
   }
 
   function resolvePickupCupWaterCollision(pickup) {
@@ -749,7 +765,7 @@ export function createPickupsRuntime(ctx) {
         p.mesh.scale.set(1 + squash * 0.35, 1 - squash, 1 + squash * 0.35);
       }
 
-      if ((b.position.y <= 0.082 || isPickupRestingOnDesk(p)) && speed < tuning.settleSpeed) {
+      if ((b.position.y <= 0.082 || isPickupRestingOnRaisedSurface(p)) && speed < tuning.settleSpeed) {
         b.velocity.scale(tuning.friction, b.velocity);
         if (speed < tuning.settleSpeed * 0.6) {
           p.inMotion = false;

@@ -6,7 +6,8 @@ Line counts below are approximate and will drift as the project changes.
 
 - `/src/mvp/main.js` (~1601 lines)
   - app composition root and frame loop.
-  - wires subsystem runtimes, normalized surface definitions/flags, top-level update order, simulation ticks, and game-state transitions.
+  - wires subsystem runtimes, normalized surface definitions/flags, room object specs, top-level update order, simulation ticks, and game-state transitions.
+  - owns the top-level debug function-trace plumbing that feeds the advanced debug overlay panels.
 
 - `/src/mvp/modules/main-debug-camera.js` (~129 lines)
   - export: `createMainDebugCameraRuntime`.
@@ -15,6 +16,7 @@ Line counts below are approximate and will drift as the project changes.
 - `/src/mvp/modules/cat-model-loader.js` (~1167 lines)
   - export: `createCatModelRuntime`.
   - cat model load/normalize, animation setup, cat runtime bootstrap, and default nav/debug state seeding.
+  - seeds the cat's persistent nav/debug containers, including surface-state and function-trace buffers used by the runtime/debug overlay.
 
 - `/src/mvp/modules/cat-animation.js` (~491 lines)
   - export: `animateCatPoseRuntime`.
@@ -32,10 +34,12 @@ Line counts below are approximate and will drift as the project changes.
   - export: `updateCatStateMachineRuntime`.
   - top-level cat behavior orchestration, patrol/catnip/window/cup state transitions, route requests, route execution handoff, and recovery decisions.
   - generic movement state should read/write concrete surface IDs here rather than old `onTable`/`elevated` terminology; desk-specific behavior still lives here only where it is truly desk/cup gameplay.
+  - route execution now treats floor as just another support surface ID, with shared surface-segment handling instead of separate floor-vs-elevated route modes.
 
 - `/src/mvp/modules/cat-state-machine-utils.js` (~524 lines)
   - export: `createCatStateMachineUtilsRuntime`.
   - authoritative surface resolution, hop history bookkeeping, catnip/window facing helpers, and shared state-machine utilities.
+  - also owns the current-surface tracing hook used by the function-trace debug panel.
 
 - `/src/mvp/modules/cat-state-machine-desk.js` (~80 lines)
   - export: `createCatStateMachineDeskRuntime`.
@@ -47,7 +51,8 @@ Line counts below are approximate and will drift as the project changes.
 
 - `/src/mvp/modules/cat-navigation.js` (~234 lines)
   - export: `createCatNavigationRuntime`.
-  - navigation composition facade that bundles pathfinding, steering, jump runtime, recovery, and shared movement request helpers.
+  - navigation composition facade that bundles pathfinding, steering, jump runtime, jump planning, recovery, and shared movement request helpers.
+  - exposes surface-path routing helpers and function-trace plumbing to the higher-level state machine.
 
 - `/src/mvp/modules/cat-locomotion.js` (~17 lines)
   - exports shared locomotion helpers.
@@ -71,12 +76,14 @@ Line counts below are approximate and will drift as the project changes.
 
 - `/src/mvp/modules/cat-jump-planning.js` (~1608 lines)
   - export: `createCatJumpPlanningRuntime`.
-  - jump probes/links, weighted jump graph planning, surface transition routing, and jump approach/landing point generation.
+  - jump probes/links, directed surface-graph path selection, surface transition routing, and jump approach/landing point generation.
   - owns the generalized probe/link classification used by the debug overlay, including floor-as-surface probes, per-shape anchor counts, and blocked-state distinctions (valid, down-only, no-target, immovable-blocked, movable-blocked).
+  - also traces surface-path / jump-target selection for the optional function-trace debug panel.
 
 - `/src/mvp/modules/cat-jump-runtime.js` (~215 lines)
   - export: `createCatJumpRuntime`.
   - active jump execution, jump state updates, landing finalization, and jump ownership moved out of `main.js`.
+  - emits jump start/landing trace events for the optional function-trace debug panel.
 
 - `/src/mvp/modules/cat-jump-graph.js` (~114 lines)
   - exports: `buildWeightedJumpGraph`, `dijkstraAllCostsFrom`, `dijkstraJumpCountsFrom`.
@@ -108,8 +115,9 @@ Line counts below are approximate and will drift as the project changes.
   - surface capability/flag-driven spawn selection for trash/laundry/catnip-style placement instead of hardcoding floor-only checks.
 
 - `/src/mvp/modules/room.js` (~567 lines)
-  - exports: `makeRoomCorner`, `makeDesk`, `makeBins`, `makeChair`, `makeShelf`, `makeHoverShelf`, `makeWindowSill`.
-  - room/furniture geometry setup.
+  - exports: `makeRoomCorner`, `makeDesk`, `makeBins`, `makeChair`, `makeShelf`, `makePlatform`, `makeHoverShelf`, `makeWindowSill`.
+  - visible room/furniture/platform geometry helpers.
+  - this is the visual room-object layer; walkable nav surface records are still authored separately in `main.js`/surface helpers.
 
 - `/src/mvp/modules/physics.js` (~94 lines)
   - export: `setupPhysicsWorld`.
@@ -117,7 +125,7 @@ Line counts below are approximate and will drift as the project changes.
 
 - `/src/mvp/modules/debug-overlay.js` (~2845 lines)
   - export: `createDebugOverlayRuntime`.
-  - debug render/toggle system, nav telemetry, perf telemetry, route timeline/path profiler panels, and advanced debug visual layers.
+  - debug render/toggle system, nav telemetry, perf telemetry, route timeline/path profiler panels, function-trace panel, and advanced debug visual layers.
   - jump-link/probe visuals should stay aligned with jump-planning classifications so blocked colors mean the same thing in both panels and line overlays.
 
 - `/src/mvp/modules/debug-overlay-stats.js` (~32 lines)
@@ -128,6 +136,7 @@ Line counts below are approximate and will drift as the project changes.
   - export: `createDebugControlsRuntime`.
   - debug target selection, right-click patrol requests, teleport controls, and debug interaction input behavior.
   - debug route requests and teleports should carry concrete `surfaceId` data instead of generic floor/elevated labels.
+  - right-click debug movement should queue shared surface-aware route requests rather than maintaining a parallel floor/elevated routing model.
 
 - `/src/mvp/modules/ui-system.js` (~67 lines)
   - export: `createUIRuntime`.

@@ -11,7 +11,6 @@ export function createCatPathfindingRuntime(ctx) {
     ROOM,
     getSurfaceDefs,
     getSurfaceById,
-    getElevatedSurfaceDefs,
     hamper,
     trashCan,
     DESK_LEGS,
@@ -409,7 +408,7 @@ export function createCatPathfindingRuntime(ctx) {
   }
 
   function getWalkableElevatedSurfaces() {
-    const defs = typeof getSurfaceDefs === "function" ? getSurfaceDefs({ includeFloor: false }) : (typeof getElevatedSurfaceDefs === "function" ? getElevatedSurfaceDefs(true) : []);
+    const defs = typeof getSurfaceDefs === "function" ? getSurfaceDefs({ includeFloor: false }) : [];
     if (!Array.isArray(defs)) return [];
     const out = [];
     const seen = new Set();

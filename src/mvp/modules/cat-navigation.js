@@ -27,10 +27,10 @@ export function createCatNavigationRuntime(ctx) {
     isDraggingPickup,
     getSurfaceDefs,
     getSurfaceById,
-    getElevatedSurfaceDefs,
     clearCatNavPath,
     resetCatUnstuckTracking,
     getClockTime,
+    recordFunctionTrace,
   } = ctx;
 
   const pathRuntime = createCatPathfindingRuntime({
@@ -43,7 +43,6 @@ export function createCatNavigationRuntime(ctx) {
     desk,
     getSurfaceDefs,
     getSurfaceById,
-    getElevatedSurfaceDefs,
     hamper,
     trashCan,
     DESK_LEGS,
@@ -128,7 +127,6 @@ export function createCatNavigationRuntime(ctx) {
     desk,
     getSurfaceDefs,
     getSurfaceById,
-    getElevatedSurfaceDefs,
     CUP_COLLISION,
     pickups,
     cup,
@@ -139,15 +137,17 @@ export function createCatNavigationRuntime(ctx) {
     isPathTraversable,
     catPathDistance,
     hasClearTravelLine,
+    recordFunctionTrace,
   });
 
   const motionJumpRuntime = createCatJumpRuntime({
     THREE,
     CAT_COLLISION,
-    desk,
     cat,
-    getElevatedSurfaceDefs,
+    getSurfaceDefs,
+    getSurfaceById,
     getClockTime,
+    recordFunctionTrace,
   });
 
   const recoveryRuntime = createCatRecoveryRuntime({
@@ -182,7 +182,6 @@ export function createCatNavigationRuntime(ctx) {
     game,
     getSurfaceDefs,
     getSurfaceById,
-    getElevatedSurfaceDefs,
     cat,
     getClockTime,
     clearCatNavPath,
@@ -211,6 +210,7 @@ export function createCatNavigationRuntime(ctx) {
     ensureCatPathNoFallback,
     stepDetourCrowdToward,
     resetDetourCrowd,
+    findSurfacePath: jumpRuntime.findSurfacePath,
     bestSurfaceJumpAnchor: jumpRuntime.bestSurfaceJumpAnchor,
     computeSurfaceJumpTargets: jumpRuntime.computeSurfaceJumpTargets,
     computeSurfaceJumpDownTargets: jumpRuntime.computeSurfaceJumpDownTargets,

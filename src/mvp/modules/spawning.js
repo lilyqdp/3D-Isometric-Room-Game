@@ -85,6 +85,23 @@ function buildFallbackPoints(surface) {
   ];
 }
 
+function buildCatSpawnReachGoals({ ROOM, CAT_NAV }) {
+  const inset = Math.max(0.55, Number(CAT_NAV?.margin || 0) + 0.28);
+  const minX = ROOM.minX + inset;
+  const maxX = ROOM.maxX - inset;
+  const minZ = ROOM.minZ + inset;
+  const maxZ = ROOM.maxZ - inset;
+  const cx = (minX + maxX) * 0.5;
+  const cz = (minZ + maxZ) * 0.5;
+  return [
+    new THREE.Vector3(cx, 0, cz),
+    new THREE.Vector3(minX, 0, cz),
+    new THREE.Vector3(maxX, 0, cz),
+    new THREE.Vector3(cx, 0, minZ),
+    new THREE.Vector3(cx, 0, maxZ),
+  ];
+}
+
 function canReachSpawnSurfaceTarget({
   targetSurface,
   x,
@@ -98,7 +115,7 @@ function canReachSpawnSurfaceTarget({
   tempTarget,
   tempStart,
 }) {
-  if (targetSurface.floorLike) {
+  if (String(targetSurface?.id || "") === "floor") {
     tempTarget.set(x, 0, z);
     return canReachGroundTarget(catSpawn, tempTarget, staticObstacles);
   }
@@ -136,12 +153,13 @@ function isPickupSpawnValid({
   tempStart,
 }) {
   const radius = type === "laundry" ? 0.2 : 0.16;
-  const queryY = surface.floorLike ? 0 : surface.y;
+  const onFloorSurface = String(surface?.id || "") === "floor";
+  const queryY = onFloorSurface ? 0 : surface.y;
   const visualY = Math.max(0.09, queryY + 0.08);
   if (!isPointVisibleOnScreen(camera, x, z, visualY)) return false;
   if (isCatPointBlocked(x, z, staticObstacles, radius + 0.05, queryY)) return false;
 
-  if (surface.floorLike) {
+  if (onFloorSurface) {
     const minCatDist = radius + CAT_COLLISION.catBodyRadius + 0.15;
     if ((x - catSpawn.x) * (x - catSpawn.x) + (z - catSpawn.z) * (z - catSpawn.z) < minCatDist * minCatDist) {
       return false;
@@ -215,7 +233,7 @@ function findPickupSpawnCandidate({
       tempTarget,
       tempStart,
     })) continue;
-    placedItem = { type, x, z, y: surface.floorLike ? 0.08 : surface.y + 0.08, surfaceId: surface.id, radius: type === "laundry" ? 0.2 : 0.16 };
+    placedItem = { type, x, z, y: String(surface?.id || "") === "floor" ? 0.08 : surface.y + 0.08, surfaceId: surface.id, radius: type === "laundry" ? 0.2 : 0.16 };
   }
 
   if (!placedItem) {
@@ -241,7 +259,7 @@ function findPickupSpawnCandidate({
         })) {
           continue;
         }
-        placedItem = { type, x: point.x, z: point.z, y: surface.floorLike ? 0.08 : surface.y + 0.08, surfaceId: surface.id, radius: type === "laundry" ? 0.2 : 0.16 };
+        placedItem = { type, x: point.x, z: point.z, y: String(surface?.id || "") === "floor" ? 0.08 : surface.y + 0.08, surfaceId: surface.id, radius: type === "laundry" ? 0.2 : 0.16 };
         break;
       }
       if (placedItem) break;
@@ -255,7 +273,6 @@ export function pickRandomCatSpawnPoint({
   camera,
   ROOM,
   CAT_NAV,
-  desk,
   buildCatObstacles,
   getCatPathClearance,
   isCatPointBlocked,
@@ -268,6 +285,9 @@ export function pickRandomCatSpawnPoint({
   const minZ = ROOM.minZ + CAT_NAV.margin + 0.2;
   const maxZ = ROOM.maxZ - CAT_NAV.margin - 0.2;
   const candidate = new THREE.Vector3();
+  const reachGoals = buildCatSpawnReachGoals({ ROOM, CAT_NAV }).filter(
+    (goal) => !isCatPointBlocked(goal.x, goal.z, staticObstacles, clearance)
+  );
 
   for (let i = 0; i < 320; i++) {
     const x = THREE.MathUtils.lerp(minX, maxX, Math.random());
@@ -275,11 +295,18 @@ export function pickRandomCatSpawnPoint({
     if (!isPointVisibleOnScreen(camera, x, z, 0.09)) continue;
     if (isCatPointBlocked(x, z, staticObstacles, clearance)) continue;
     candidate.set(x, 0, z);
-    if (!canReachGroundTarget(candidate, desk.approach, staticObstacles)) continue;
+    if (
+      reachGoals.length &&
+      !reachGoals.some((goal) =>
+        candidate.distanceToSquared(goal) <= 0.05 * 0.05 || canReachGroundTarget(candidate, goal, staticObstacles)
+      )
+    ) {
+      continue;
+    }
     return candidate.clone();
   }
 
-  return new THREE.Vector3(1.5, 0, 1.7);
+  return reachGoals[0]?.clone?.() || new THREE.Vector3(1.5, 0, 1.7);
 }
 
 export function addRandomPickups({

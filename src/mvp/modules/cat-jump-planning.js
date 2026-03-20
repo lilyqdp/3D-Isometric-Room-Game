@@ -8,7 +8,6 @@ export function createCatJumpPlanningRuntime(ctx) {
     ROOM,
     getSurfaceDefs,
     getSurfaceById,
-    getElevatedSurfaceDefs,
     CUP_COLLISION,
     pickups,
     cup,
@@ -19,6 +18,7 @@ export function createCatJumpPlanningRuntime(ctx) {
     isPathTraversable,
     catPathDistance,
     hasClearTravelLine,
+    recordFunctionTrace,
   } = ctx;
 
   const SURFACE_CFG = {
@@ -80,12 +80,18 @@ export function createCatJumpPlanningRuntime(ctx) {
     return out;
   }
 
+  function traceFunction(name, details = "") {
+    if (typeof recordFunctionTrace === "function") {
+      recordFunctionTrace(name, details);
+    }
+  }
+
   function cloneXZ(v) {
     return new THREE.Vector3(v.x, 0, v.z);
   }
 
-  function getConfiguredElevatedSurfaces() {
-    const defs = typeof getSurfaceDefs === "function" ? getSurfaceDefs({ includeFloor: false }) : (typeof getElevatedSurfaceDefs === "function" ? getElevatedSurfaceDefs(true) : []);
+  function getConfiguredJumpSurfaces() {
+    const defs = typeof getSurfaceDefs === "function" ? getSurfaceDefs({ includeFloor: true }) : [];
     if (!Array.isArray(defs)) return [];
     const out = [];
     const seen = new Set();
@@ -97,10 +103,9 @@ export function createCatJumpPlanningRuntime(ctx) {
       const maxZ = Number(def.maxZ);
       const y = Number(def.y);
       if (![minX, maxX, minZ, maxZ, y].every(Number.isFinite)) continue;
-      if (y <= floorY + 0.04) continue;
       if (maxX - minX <= 0.08 || maxZ - minZ <= 0.08) continue;
       const id = String(def.id || def.name || `surface-${out.length}`);
-      if (id === "floor" || seen.has(id)) continue;
+      if (seen.has(id)) continue;
       seen.add(id);
       out.push({ id, minX, maxX, minZ, maxZ, y });
     }
@@ -284,15 +289,8 @@ export function createCatJumpPlanningRuntime(ctx) {
 
   function buildSurfaceRegistry() {
     const surfaces = [];
-    const floorMinX = ROOM.minX + CAT_NAV.margin;
-    const floorMaxX = ROOM.maxX - CAT_NAV.margin;
-    const floorMinZ = ROOM.minZ + CAT_NAV.margin;
-    const floorMaxZ = ROOM.maxZ - CAT_NAV.margin;
-    surfaces.push(
-      makeRectSurface("floor", floorY, floorMinX, floorMaxX, floorMinZ, floorMaxZ, CAT_COLLISION.catBodyRadius)
-    );
-    const nonFloorSurfaces = getConfiguredElevatedSurfaces();
-    for (const surface of nonFloorSurfaces) {
+    const configuredSurfaces = getConfiguredJumpSurfaces();
+    for (const surface of configuredSurfaces) {
       surfaces.push(
         makeRectSurface(
           surface.id,
@@ -950,6 +948,104 @@ export function createCatJumpPlanningRuntime(ctx) {
     return out;
   }
 
+  function buildDynamicSurfaceAdjacency(dynamicObstacles, allowPushableBlocked = false) {
+    const built = ensureJumpGraph();
+    const outgoing = new Map();
+    const seenPairs = new Set();
+    const pushEdge = (fromSurfaceId, toSurfaceId) => {
+      const fromId = String(fromSurfaceId || "");
+      const toId = String(toSurfaceId || "");
+      if (!fromId || !toId) return;
+      if (!outgoing.has(fromId)) outgoing.set(fromId, []);
+      if (!outgoing.has(toId)) outgoing.set(toId, []);
+      const key = `${fromId}->${toId}`;
+      if (seenPairs.has(key)) return;
+      seenPairs.add(key);
+      outgoing.get(fromId).push(toId);
+    };
+
+    for (const surface of built.surfaces.surfaces || []) {
+      if (!surface?.id) continue;
+      outgoing.set(String(surface.id), []);
+    }
+
+    for (const link of built.jumpLinks) {
+      if (isSurfaceJumpUpSafe(link, dynamicObstacles, allowPushableBlocked)) {
+        pushEdge(link.fromSurfaceId, link.toSurfaceId);
+      }
+      if (isSurfaceJumpDownSafe(link, dynamicObstacles, allowPushableBlocked)) {
+        pushEdge(link.toSurfaceId, link.fromSurfaceId);
+      }
+    }
+
+    return outgoing;
+  }
+
+  function bfsSurfacePath(sourceSurfaceId, targetSurfaceId, dynamicObstacles, avoidSurfaceIds = null, allowPushableBlocked = false) {
+    const sourceId = String(sourceSurfaceId || "");
+    const targetId = String(targetSurfaceId || "");
+    if (!sourceId || !targetId) return null;
+    if (sourceId === targetId) return [sourceId];
+
+    const adjacency = buildDynamicSurfaceAdjacency(dynamicObstacles, allowPushableBlocked);
+    if (!adjacency.has(sourceId) || !adjacency.has(targetId)) return null;
+
+    const avoid = normalizeAvoidSurfaceIds(avoidSurfaceIds);
+    avoid.delete(sourceId);
+    avoid.delete(targetId);
+
+    const prev = new Map();
+    const queue = [sourceId];
+    prev.set(sourceId, null);
+
+    while (queue.length > 0) {
+      const current = queue.shift();
+      const nextIds = adjacency.get(current) || [];
+      for (const nextId of nextIds) {
+        if (avoid.has(nextId) || prev.has(nextId)) continue;
+        prev.set(nextId, current);
+        if (nextId === targetId) {
+          const path = [];
+          let cursor = targetId;
+          while (cursor != null) {
+            path.push(cursor);
+            cursor = prev.get(cursor) ?? null;
+          }
+          path.reverse();
+          return path;
+        }
+        queue.push(nextId);
+      }
+    }
+
+    return null;
+  }
+
+  function findSurfacePath(targetSurfaceId, fromSurfaceId = null, avoidSurfaceIds = null) {
+    const built = ensureJumpGraph();
+    const sourceId = String(fromSurfaceId || "");
+    const targetId = String(targetSurfaceId || "");
+    if (!sourceId || !targetId) {
+      traceFunction("findSurfacePath", `from=${sourceId || "na"} to=${targetId || "na"} ok=0 reason=missing-id`);
+      return null;
+    }
+    if (!built.surfaces.byId.has(sourceId) || !built.surfaces.byId.has(targetId)) {
+      traceFunction("findSurfacePath", `from=${sourceId} to=${targetId} ok=0 reason=missing-surface`);
+      return null;
+    }
+
+    const dynamicObstacles = buildCatObstacles(true, true);
+    const path = (
+      bfsSurfacePath(sourceId, targetId, dynamicObstacles, avoidSurfaceIds, false) ||
+      bfsSurfacePath(sourceId, targetId, dynamicObstacles, avoidSurfaceIds, true)
+    );
+    traceFunction(
+      "findSurfacePath",
+      `from=${sourceId} to=${targetId} ok=${path ? 1 : 0} len=${Array.isArray(path) ? path.length : 0}`
+    );
+    return path;
+  }
+
   function isGroundJumpFromSafe(link, dynamicObstacles) {
     if (!link) return false;
     const linkObstacles = getJumpObstaclesForLink(link, dynamicObstacles);
@@ -1157,10 +1253,6 @@ export function createCatJumpPlanningRuntime(ctx) {
       jumpTiers.push(sourceDynamicMinJumps, ...rest);
     }
 
-    const targetSurface = built.surfaces.byId.get(surfaceId);
-    const targetY = Number.isFinite(targetSurface?.y) ? targetSurface.y : floorY;
-    const dyToTargetSurface = targetY - sourceY;
-
     const strictMinJumpTier =
       Number.isFinite(sourceDynamicMinJumps) && sourceDynamicMinJumps > 0
         ? sourceDynamicMinJumps
@@ -1168,17 +1260,10 @@ export function createCatJumpPlanningRuntime(ctx) {
 
     for (const tier of jumpTiers) {
       if (strictMinJumpTier != null && tier !== strictMinJumpTier) continue;
-      let tierCandidates = candidates.filter((c) => {
+      const tierCandidates = candidates.filter((c) => {
         const candidateTier = Number.isFinite(c.totalDynamicJumps) ? c.totalDynamicJumps : c.totalJumps;
         return candidateTier === tier;
       });
-      if (dyToTargetSurface < -0.08) {
-        const downOnly = tierCandidates.filter((c) => c.transition === "down");
-        if (downOnly.length) tierCandidates = downOnly;
-      } else if (dyToTargetSurface > 0.08) {
-        const upOnly = tierCandidates.filter((c) => c.transition === "up");
-        if (upOnly.length) tierCandidates = upOnly;
-      }
       if (!tierCandidates.length) continue;
 
       // Prefer non-avoid surfaces if available in this tier; if those are unreachable,
@@ -1273,10 +1358,17 @@ export function createCatJumpPlanningRuntime(ctx) {
       resolvedFromSurfaceId,
       avoidNextSurfaceId
     );
-    if (!best) return null;
+    if (!best) {
+      traceFunction("bestSurfaceJumpAnchor", `from=${resolvedFromSurfaceId} to=${surfaceId || "na"} ok=0`);
+      return null;
+    }
     jumpGraphCache.linkByAnchorKey.set(
       linkAnchorKey(resolvedFromSurfaceId, surfaceId, best.anchorPoint),
       best
+    );
+    traceFunction(
+      "bestSurfaceJumpAnchor",
+      `from=${resolvedFromSurfaceId} to=${surfaceId || "na"} ok=1 next=${best.nextSurfaceId || "na"} mode=${best.transition || "na"}`
     );
     return best.anchorPoint.clone();
   }
@@ -1288,7 +1380,10 @@ export function createCatJumpPlanningRuntime(ctx) {
     fromSurfaceId = null,
     avoidSurfaceIds = null
   ) {
-    if (!anchor) return null;
+    if (!anchor) {
+      traceFunction("computeSurfaceJumpTargets", `to=${surfaceId || "na"} ok=0 reason=no-anchor`);
+      return null;
+    }
     const resolvedFromSurfaceId = resolveSourceSurfaceId(anchor, fromSurfaceId);
     const avoidNextSurfaceIds = normalizeAvoidSurfaceIds(avoidSurfaceIds);
     const cached = jumpGraphCache.linkByAnchorKey.get(
@@ -1306,10 +1401,17 @@ export function createCatJumpPlanningRuntime(ctx) {
         resolvedFromSurfaceId,
         avoidNextSurfaceIds
       );
-    if (!best) return null;
+    if (!best) {
+      traceFunction("computeSurfaceJumpTargets", `from=${resolvedFromSurfaceId} to=${surfaceId || "na"} ok=0`);
+      return null;
+    }
     jumpGraphCache.linkByAnchorKey.set(
       linkAnchorKey(resolvedFromSurfaceId, surfaceId, best.anchorPoint),
       best
+    );
+    traceFunction(
+      "computeSurfaceJumpTargets",
+      `from=${resolvedFromSurfaceId} to=${surfaceId || "na"} ok=1 next=${best.nextSurfaceId || "na"} mode=${best.transition || "na"}`
     );
     return {
       hook: best.hookPoint.clone(),
@@ -1325,17 +1427,33 @@ export function createCatJumpPlanningRuntime(ctx) {
     desiredGroundPoint = null,
     desiredLandingSurfaceId = null
   ) {
-    if (!fromTopPoint) return null;
+    if (!fromTopPoint) {
+      traceFunction("computeSurfaceJumpDownTargets", `from=${surfaceId || "na"} ok=0 reason=no-top-point`);
+      return null;
+    }
     const toSurface = ensureJumpGraph().surfaces.byId.get(surfaceId);
-    if (!toSurface) return null;
+    if (!toSurface) {
+      traceFunction("computeSurfaceJumpDownTargets", `from=${surfaceId || "na"} ok=0 reason=missing-surface`);
+      return null;
+    }
     const links = getSurfaceLinks(surfaceId);
-    if (!links.length) return null;
+    if (!links.length) {
+      traceFunction("computeSurfaceJumpDownTargets", `from=${surfaceId || "na"} ok=0 reason=no-links`);
+      return null;
+    }
     const requestedLandingSurfaceId =
       desiredLandingSurfaceId == null ? null : String(desiredLandingSurfaceId);
     let candidateLinks = links;
     if (requestedLandingSurfaceId) {
       const exactMatches = links.filter((link) => String(link.fromSurfaceId) === requestedLandingSurfaceId);
-      if (exactMatches.length) candidateLinks = exactMatches;
+      if (!exactMatches.length) {
+        traceFunction(
+          "computeSurfaceJumpDownTargets",
+          `from=${surfaceId || "na"} to=${requestedLandingSurfaceId} ok=0 reason=no-exact-link`
+        );
+        return null;
+      }
+      candidateLinks = exactMatches;
     }
     const dynamicObstacles = buildCatObstacles(true, true);
     let allowPushableBlockedLinks = false;
@@ -1393,7 +1511,17 @@ export function createCatJumpPlanningRuntime(ctx) {
         };
       }
     }
-    if (!best) return null;
+    if (!best) {
+      traceFunction(
+        "computeSurfaceJumpDownTargets",
+        `from=${surfaceId || "na"} to=${requestedLandingSurfaceId || "auto"} ok=0`
+      );
+      return null;
+    }
+    traceFunction(
+      "computeSurfaceJumpDownTargets",
+      `from=${surfaceId || "na"} to=${String(best.link.fromSurfaceId || "floor")} ok=1`
+    );
     return {
       top: best.stageTop.clone(),
       hook: best.link.hook.clone(),
@@ -1597,6 +1725,7 @@ export function createCatJumpPlanningRuntime(ctx) {
   }
 
   return {
+    findSurfacePath,
     bestSurfaceJumpAnchor,
     computeSurfaceJumpTargets,
     computeSurfaceJumpDownTargets,
