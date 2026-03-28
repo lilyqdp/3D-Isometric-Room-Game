@@ -199,6 +199,48 @@ export function updateCatStateMachineRuntime(ctx, dt) {
     cat.nextTableRollAt = Math.max(Number(cat.nextTableRollAt) || 0, resumeAt);
   }
 
+  function tryStartCupApproachFromPatrol() {
+    if (game.catnip || cat.nav?.windowHoldActive) return false;
+    if (clockTime < (cat.nav.suppressCupUntil || 0)) return false;
+    if (cup.broken || cup.falling) return false;
+
+    clearNavRoute("patrol-cup-roll");
+    cat.manualPatrolActive = false;
+    clearCatNavPath(true);
+    const currentSurfaceId = normalizeSurfaceId(getCurrentCatSurfaceId());
+    cat.phaseT = 0;
+    if (currentSurfaceId === "desk") {
+      cat.state = "toCup";
+      return true;
+    }
+
+    clearCatJumpTargets();
+    cat.state = "toDesk";
+    return true;
+  }
+
+  function rollCupApproachFromPatrol() {
+    const nextRollAt = Number(cat.nextTableRollAt) || 0;
+    if (clockTime < nextRollAt) return false;
+
+    const canRoll =
+      clockTime >= (Number(cat.tableRollStartAt) || 0) &&
+      !game.catnip &&
+      !cat.nav?.windowHoldActive &&
+      clockTime >= (cat.nav.suppressCupUntil || 0) &&
+      !cup.broken &&
+      !cup.falling;
+
+    const didStartCupApproach =
+      canRoll && Math.random() < CAT_BEHAVIOR.tableApproachChancePerSecond
+        ? tryStartCupApproachFromPatrol()
+        : false;
+
+    cat.nextTableRollAt =
+      Math.max(nextRollAt, clockTime) + CAT_BEHAVIOR.tableApproachRollInterval;
+    return didStartCupApproach;
+  }
+
   function startJumpDownFromDesk(nextState = "patrol") {
     cat.state = "jumpDown";
     cat.phaseT = 0;
@@ -2201,9 +2243,14 @@ export function updateCatStateMachineRuntime(ctx, dt) {
           if (!setNextPatrolTarget(true)) enterNoPathSit();
         }
         cat.nav.patrolPathCheckAt = clockTime;
-        cat.nextTableRollAt = Math.max(clockTime + CAT_BEHAVIOR.tableApproachRollInterval, cat.nextTableRollAt);
+        if (!Number.isFinite(cat.nextTableRollAt) || cat.nextTableRollAt <= 0) {
+          cat.nextTableRollAt = clockTime + CAT_BEHAVIOR.tableApproachRollInterval;
+        }
+        if (!Number.isFinite(cat.tableRollStartAt) || cat.tableRollStartAt <= 0) {
+          cat.tableRollStartAt = clockTime;
+        }
       } else {
-        cat.nextTableRollAt = clockTime + CAT_BEHAVIOR.tableApproachRollInterval;
+        cat.nextTableRollAt = Math.max(Number(cat.nextTableRollAt) || 0, clockTime);
       }
     } else {
       cat.stateT += stepDt;
@@ -2663,6 +2710,10 @@ export function updateCatStateMachineRuntime(ctx, dt) {
     }
 
     if (cat.state === "patrol") {
+      if (rollCupApproachFromPatrol()) {
+        animateCatPose(stepDt, false);
+        return;
+      }
       if (getActiveNavRoute()) {
         if (updatePatrolMoveTarget(stepDt)) return;
       }
@@ -2702,19 +2753,6 @@ export function updateCatStateMachineRuntime(ctx, dt) {
         }
         animateCatPose(stepDt, false);
         return;
-      }
-      if (clockTime >= cat.nextTableRollAt) {
-        if (
-          clockTime >= cat.tableRollStartAt &&
-          clockTime >= (cat.nav.suppressCupUntil || 0) &&
-          !cup.broken &&
-          !cup.falling &&
-          Math.random() < CAT_BEHAVIOR.tableApproachChancePerSecond
-        ) {
-          clearCatJumpTargets();
-          cat.state = "toDesk";
-        }
-        cat.nextTableRollAt += CAT_BEHAVIOR.tableApproachRollInterval;
       }
       if (cat.state === "patrol") {
         const target = cat.patrolTarget;

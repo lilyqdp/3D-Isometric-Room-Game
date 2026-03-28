@@ -1566,27 +1566,17 @@ export function createCatPathfindingRuntime(ctx) {
       }
 
       const driftSq = (agentPos.x - cat.pos.x) ** 2 + (agentPos.z - cat.pos.z) ** 2;
-      if (recreated || driftSq > 0.32 * 0.32) {
+      const teleportedToCat = recreated || driftSq > 0.32 * 0.32;
+      if (teleportedToCat) {
         agent.teleport({ x: cat.pos.x, y: 0, z: cat.pos.z });
       }
 
       const snapRadius = Math.max(0.06, Number.isFinite(CAT_NAV.detourArriveSnapRadius) ? CAT_NAV.detourArriveSnapRadius : 0.1);
-      const leadRadius = Math.max(0.2, Number.isFinite(CAT_NAV.detourLeadRadius) ? CAT_NAV.detourLeadRadius : 0.9);
-      const leadDistance = Math.max(0.1, Number.isFinite(CAT_NAV.detourLeadDistance) ? CAT_NAV.detourLeadDistance : 0.45);
       const toGoalX = target.x - agentPos.x;
       const toGoalZ = target.z - agentPos.z;
       const distToGoal = Math.hypot(toGoalX, toGoalZ);
       let requestX = target.x;
       let requestZ = target.z;
-      if (distToGoal > snapRadius && distToGoal < leadRadius) {
-        const from = new THREE.Vector3(agentPos.x, 0, agentPos.z);
-        const to = new THREE.Vector3(target.x, 0, target.z);
-        if (hasClearTravelLine(from, to, obstacles, clearance * 0.98, 0)) {
-          const inv = 1 / Math.max(1e-6, distToGoal);
-          requestX = target.x + toGoalX * inv * leadDistance;
-          requestZ = target.z + toGoalZ * inv * leadDistance;
-        }
-      }
 
       const reqDx = requestX - crowdState.lastTarget.x;
       const reqDz = requestZ - crowdState.lastTarget.z;
@@ -1614,6 +1604,16 @@ export function createCatPathfindingRuntime(ctx) {
         position: new THREE.Vector3(nextPos.x, 0, nextPos.z),
         velocity: new THREE.Vector3(velocity.x, 0, velocity.z),
         state,
+        recreated,
+        teleportedToCat,
+        driftSq,
+        distToGoal,
+        requestX,
+        requestZ,
+        targetChanged,
+        lastRequestAge: now - crowdState.lastRequestAt,
+        agentPos: new THREE.Vector3(agentPos.x, 0, agentPos.z),
+        stepDt,
       };
     } finally {
       finishPathProfilerMetric("stepDetourCrowdToward", startedAt, profileMeta, 3.5);

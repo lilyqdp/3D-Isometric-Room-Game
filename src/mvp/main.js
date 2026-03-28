@@ -1094,6 +1094,7 @@ function resetGame() {
   cat.nav.catnipApproachZ = NaN;
   cat.nav.windowPathCheckAt = 0;
   cat.nav.windowHoldActive = false;
+  cat.nav.suppressCupUntil = 0;
   cat.nav.goalChangePendingSince = 0;
   cat.nav.goalChangePendingX = NaN;
   cat.nav.goalChangePendingZ = NaN;
