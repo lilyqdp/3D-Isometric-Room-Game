@@ -4,6 +4,7 @@ import { createCatStateMachineDeskRuntime } from "./cat-state-machine-desk.js";
 import { createCatStateMachineGroundBypassRuntime } from "./cat-state-machine-ground-bypass.js";
 import { createCatStateMachineUtilsRuntime } from "./cat-state-machine-utils.js";
 import { FLOOR_SURFACE_ID, catHasFloorContact, catHasNonFloorSurface, isFloorSurfaceId, isNonFloorSurfaceId, normalizeSurfaceId, setCatSurfaceId, targetSurfaceId } from "./surface-ids.js";
+import { clampPointToSurfaceXZ, getSurfaceArea, getSurfaceCenter, samplePointOnSurfaceXZ } from "./surface-shapes.js";
 
 export function updateCatStateMachineRuntime(ctx, dt) {
   const {
@@ -867,9 +868,7 @@ export function updateCatStateMachineRuntime(ctx, dt) {
   }
 
   function getSurfacePatrolArea(surface) {
-    const width = Math.max(0, Number(surface?.maxX) - Number(surface?.minX));
-    const depth = Math.max(0, Number(surface?.maxZ) - Number(surface?.minZ));
-    return width * depth;
+    return Math.max(0.001, getSurfaceArea(surface));
   }
 
   function sampleRandomPatrolPointOnSurface(surface, fromPoint = cat.pos) {
@@ -882,26 +881,17 @@ export function updateCatStateMachineRuntime(ctx, dt) {
     const depth = Math.max(0, Number(surface.maxZ) - Number(surface.minZ));
     if (width <= 0.04 || depth <= 0.04) return null;
 
-    const maxPadX = Math.max(0, width * 0.5 - 0.04);
-    const maxPadZ = Math.max(0, depth * 0.5 - 0.04);
-    const padX = Math.min(maxPadX, Math.max(0.08, CAT_COLLISION.catBodyRadius + 0.08));
-    const padZ = Math.min(maxPadZ, Math.max(0.08, CAT_COLLISION.catBodyRadius + 0.08));
-    const minX = surface.minX + padX;
-    const maxX = surface.maxX - padX;
-    const minZ = surface.minZ + padZ;
-    const maxZ = surface.maxZ - padZ;
-    const centerX = (surface.minX + surface.maxX) * 0.5;
-    const centerZ = (surface.minZ + surface.maxZ) * 0.5;
+    const edgePad = Math.max(0.08, CAT_COLLISION.catBodyRadius + 0.08);
 
     for (let i = 0; i < 12; i++) {
-      const x = minX <= maxX ? THREE.MathUtils.lerp(minX, maxX, Math.random()) : centerX;
-      const z = minZ <= maxZ ? THREE.MathUtils.lerp(minZ, maxZ, Math.random()) : centerZ;
-      const point = new THREE.Vector3(x, Number(surface.y || 0.02), z);
+      const sampled = samplePointOnSurfaceXZ(surface, edgePad, Math.random);
+      const point = new THREE.Vector3(sampled.x, Number(surface.y || 0.02), sampled.z);
       if (point.distanceToSquared(fromPoint) < 0.45 * 0.45) continue;
       return point;
     }
 
-    return new THREE.Vector3(centerX, Number(surface.y || 0.02), centerZ);
+    const center = getSurfaceCenter(surface);
+    return new THREE.Vector3(center.x, Number(surface.y || 0.02), center.z);
   }
 
   function pickWeightedRandomPatrolSurface(allowSurfacePatrol = true) {
@@ -1028,17 +1018,9 @@ export function updateCatStateMachineRuntime(ctx, dt) {
 
     const out = point.clone();
     const edgePad = Math.max(0.02, CAT_COLLISION.catBodyRadius + extraPad);
-    const minX = Number(surface.minX) + edgePad;
-    const maxX = Number(surface.maxX) - edgePad;
-    const minZ = Number(surface.minZ) + edgePad;
-    const maxZ = Number(surface.maxZ) - edgePad;
-
-    if (Number.isFinite(minX) && Number.isFinite(maxX) && minX < maxX) {
-      out.x = THREE.MathUtils.clamp(out.x, minX, maxX);
-    }
-    if (Number.isFinite(minZ) && Number.isFinite(maxZ) && minZ < maxZ) {
-      out.z = THREE.MathUtils.clamp(out.z, minZ, maxZ);
-    }
+    const clamped = clampPointToSurfaceXZ(surface, out.x, out.z, edgePad);
+    out.x = clamped.x;
+    out.z = clamped.z;
     return out;
   }
 
@@ -2304,7 +2286,10 @@ export function updateCatStateMachineRuntime(ctx, dt) {
       clearCatnipApproachLock();
     }
 
-    const windowActive = !!windowSill && clockTime < (game.windowOpenUntil || 0);
+    const windowActive =
+      !!windowSill &&
+      windowSill?.specialFlags?.catGoesToSillOnButtonClick !== false &&
+      clockTime < (game.windowOpenUntil || 0);
     const canInterruptFloorJumpForWindow =
       windowActive &&
       !!cat.jump &&

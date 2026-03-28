@@ -6,6 +6,13 @@ import {
   debugPerfMax as perfMax,
   debugPerfPercentile as perfPercentile,
 } from "./debug-overlay-stats.js";
+import {
+  getSurfaceCenter,
+  getSurfaceHalfExtents,
+  getSurfaceKind,
+  getSurfaceRadius,
+  rotateOffsetXZ,
+} from "./surface-shapes.js";
 
 export function createDebugOverlayRuntime(ctx) {
   const {
@@ -1366,6 +1373,43 @@ export function createDebugOverlayRuntime(ctx) {
     return new THREE.LineLoop(geo, material);
   }
 
+  function makeDebugSurfaceLoop(surface, y = 0, material = DEBUG_STATIC_COLLISION_MAT) {
+    if (!surface) return null;
+    const kind = getSurfaceKind(surface);
+    if (kind === "circle") {
+      return makeDebugCircleLoop(Math.max(0.01, getSurfaceRadius(surface)), y, 36, material);
+    }
+    if (kind === "obb") {
+      const center = getSurfaceCenter(surface);
+      const { hx, hz } = getSurfaceHalfExtents(surface);
+      const yaw = Number(surface?.yaw || 0);
+      const verts = [
+        { x: -hx, z: -hz },
+        { x: hx, z: -hz },
+        { x: hx, z: hz },
+        { x: -hx, z: hz },
+      ].map((corner) => {
+        const rotated = rotateOffsetXZ(corner.x, corner.z, yaw);
+        return new THREE.Vector3(rotated.dx, y, rotated.dz);
+      });
+      const geo = new THREE.BufferGeometry().setFromPoints(verts);
+      const loop = new THREE.LineLoop(geo, material);
+      loop.position.set(center.x, 0, center.z);
+      return loop;
+    }
+    const minX = Number(surface?.minX);
+    const maxX = Number(surface?.maxX);
+    const minZ = Number(surface?.minZ);
+    const maxZ = Number(surface?.maxZ);
+    if (![minX, maxX, minZ, maxZ].every(Number.isFinite)) return null;
+    return makeDebugRectLoop(
+      Math.max(0.01, (maxX - minX) * 0.5),
+      Math.max(0.01, (maxZ - minZ) * 0.5),
+      y,
+      material
+    );
+  }
+
   function makeDebugCylinderWire(radius, height = 0.08, segments = 32, material = DEBUG_DYNAMIC_COLLISION_MAT) {
     const segs = Math.max(8, segments | 0);
     const h = Math.max(0.01, height);
@@ -1772,13 +1816,21 @@ export function createDebugOverlayRuntime(ctx) {
     const data = ctx.getSurfaceJumpDebugData();
     if (!data) return;
 
-    const addRectLoop = (rect, y, mat, yLift = 0.02, renderOrder = 16) => {
-      const hx = Math.max(0.01, (rect.maxX - rect.minX) * 0.5);
-      const hz = Math.max(0.01, (rect.maxZ - rect.minZ) * 0.5);
-      const cx = (rect.minX + rect.maxX) * 0.5;
-      const cz = (rect.minZ + rect.maxZ) * 0.5;
-      const loop = makeDebugRectLoop(hx, hz, 0, mat);
-      loop.position.set(cx, y + yLift, cz);
+    const addSurfaceLoop = (surface, y, mat, yLift = 0.02, renderOrder = 16) => {
+      const loop = makeDebugSurfaceLoop(surface, 0, mat);
+      if (!loop) return;
+      if (getSurfaceKind(surface) === "circle") {
+        const center = getSurfaceCenter(surface);
+        loop.position.set(center.x, y + yLift, center.z);
+      } else if (getSurfaceKind(surface) !== "obb") {
+        const minX = Number(surface?.minX);
+        const maxX = Number(surface?.maxX);
+        const minZ = Number(surface?.minZ);
+        const maxZ = Number(surface?.maxZ);
+        loop.position.set((minX + maxX) * 0.5, y + yLift, (minZ + maxZ) * 0.5);
+      } else {
+        loop.position.y = y + yLift;
+      }
       loop.renderOrder = renderOrder;
       debugView.surfaceJumpGroup.add(loop);
     };
@@ -1809,8 +1861,44 @@ export function createDebugOverlayRuntime(ctx) {
       for (const surface of surfaces) {
         const surfaceY = Number.isFinite(surface?.y) ? surface.y : 0;
         if (showBounds) {
-          if (surface?.outer) addRectLoop(surface.outer, surfaceY, DEBUG_SURFACE_OUTER_MAT, 0.02, 16);
-          if (surface?.inner) addRectLoop(surface.inner, surfaceY, DEBUG_SURFACE_INNER_MAT, 0.024, 17);
+          if (surface?.shape === "circle") {
+            addSurfaceLoop(surface, surfaceY, DEBUG_SURFACE_OUTER_MAT, 0.02, 16);
+            if (Number.isFinite(Number(surface.innerRadius))) {
+              addSurfaceLoop(
+                {
+                  shape: "circle",
+                  centerX: surface.centerX,
+                  centerZ: surface.centerZ,
+                  radius: surface.innerRadius,
+                },
+                surfaceY,
+                DEBUG_SURFACE_INNER_MAT,
+                0.024,
+                17
+              );
+            }
+          } else if (surface?.shape === "obb") {
+            addSurfaceLoop(surface, surfaceY, DEBUG_SURFACE_OUTER_MAT, 0.02, 16);
+            if (surface?.innerRect) {
+              addSurfaceLoop(
+                {
+                  shape: "obb",
+                  centerX: surface.centerX,
+                  centerZ: surface.centerZ,
+                  halfWidth: surface.innerRect.hx,
+                  halfDepth: surface.innerRect.hz,
+                  yaw: surface.yaw,
+                },
+                surfaceY,
+                DEBUG_SURFACE_INNER_MAT,
+                0.024,
+                17
+              );
+            }
+          } else {
+            if (surface?.outer) addSurfaceLoop(surface.outer, surfaceY, DEBUG_SURFACE_OUTER_MAT, 0.02, 16);
+            if (surface?.inner) addSurfaceLoop(surface.inner, surfaceY, DEBUG_SURFACE_INNER_MAT, 0.024, 17);
+          }
         }
         if (!showAnchors || !Array.isArray(surface?.anchors)) continue;
         for (const anchor of surface.anchors) {
@@ -1981,9 +2069,9 @@ export function createDebugOverlayRuntime(ctx) {
 
     const linePoints = [];
     const facePoints = [];
-    const navMesh = ctx.getNavMeshDebugData
-      ? ctx.getNavMeshDebugData(true, true)
-      : (ctx.getActiveNavMeshDebugData ? ctx.getActiveNavMeshDebugData() : null);
+    const navMesh = ctx.getActiveNavMeshDebugData
+      ? ctx.getActiveNavMeshDebugData()
+      : (ctx.getNavMeshDebugData ? ctx.getNavMeshDebugData(true, true) : null);
     if (!navMesh) return;
     const y = 0.03;
 

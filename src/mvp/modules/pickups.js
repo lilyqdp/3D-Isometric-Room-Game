@@ -92,6 +92,12 @@ export function createPickupsRuntime(ctx) {
       : { x: 0.15, y: 0.03, z: 0.12 };
   }
 
+  function binAllowsPickup(binType, pickupType = "") {
+    if (binType === "hamper") return pickupType === "laundry" && hamper?.specialFlags?.allowCleanLaundry !== false;
+    if (binType === "trash") return pickupType === "trash" && trashCan?.specialFlags?.allowCleanTrash !== false;
+    return false;
+  }
+
   function getRaisedSurfaces() {
     return typeof getSurfaceDefs === "function" ? getSurfaceDefs({ includeFloor: false }) : [];
   }
@@ -319,7 +325,7 @@ export function createPickupsRuntime(ctx) {
       return hitBinFromSide(pos, binType);
     }
 
-    if (topEntry(wantedBin)) return { binType: wantedBin, topEntry: true, valid: true };
+    if (topEntry(wantedBin)) return { binType: wantedBin, topEntry: true, valid: binAllowsPickup(wantedBin, pickup.type) };
     if (topEntry(otherBin)) return { binType: otherBin, topEntry: true, valid: false };
     if (sideHit(wantedBin)) return { binType: wantedBin, topEntry: false, valid: false };
     if (sideHit(otherBin)) return { binType: otherBin, topEntry: false, valid: false };
@@ -413,6 +419,10 @@ export function createPickupsRuntime(ctx) {
   }
 
   function startPickupIntoBin(pickup, binType) {
+    if (!binAllowsPickup(binType, pickup?.type)) {
+      startPickupBounce(pickup, binType);
+      return;
+    }
     pickup.inMotion = true;
     pickup.motion = "drop";
     pickup.targetBin = binType;
@@ -706,7 +716,7 @@ export function createPickupsRuntime(ctx) {
       const dzHamper = b.position.z - hamper.pos.z;
 
       if (p.type === "trash") {
-        if (p.targetBin === "trash" && dTrash <= trashCan.openingRadius + 0.2 && b.position.y <= trashCan.rimY + 0.46) {
+        if (binAllowsPickup("trash", p.type) && p.targetBin === "trash" && dTrash <= trashCan.openingRadius + 0.2 && b.position.y <= trashCan.rimY + 0.46) {
           const radial = Math.max(dTrash - trashCan.openingRadius * 0.25, 0);
           const inward = THREE.MathUtils.clamp(radial * 0.9, 0.22, 1.05);
           const down = dTrash <= trashCan.openingRadius ? 0.54 : 0.22;
@@ -724,6 +734,7 @@ export function createPickupsRuntime(ctx) {
           b.applyImpulse(new CANNON.Vec3(nx * 0.06, 0.04, nz * 0.06), b.position);
         }
         if (
+          binAllowsPickup("trash", p.type) &&
           dTrash <= trashCan.openingRadius - 0.015 &&
           b.position.y <= trashCan.sinkY + 0.11 &&
           b.velocity.length() <= 0.5
@@ -733,6 +744,7 @@ export function createPickupsRuntime(ctx) {
         }
       } else {
         if (
+          binAllowsPickup("hamper", p.type) &&
           p.targetBin === "hamper" &&
           Math.abs(dxHamper) <= hamper.openingHalfX + 0.04 &&
           Math.abs(dzHamper) <= hamper.openingHalfZ + 0.04 &&
@@ -741,6 +753,7 @@ export function createPickupsRuntime(ctx) {
           b.applyForce(new CANNON.Vec3(-dxHamper * 0.16, 0, -dzHamper * 0.16), b.position);
         }
         if (
+          binAllowsPickup("hamper", p.type) &&
           Math.abs(dxHamper) <= hamper.outerHalfX - 0.015 &&
           Math.abs(dzHamper) <= hamper.outerHalfZ - 0.015 &&
           b.position.y <= hamper.sinkY + 0.12 &&

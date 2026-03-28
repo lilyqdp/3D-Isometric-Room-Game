@@ -1,4 +1,5 @@
 import { buildWeightedJumpGraph, dijkstraAllCostsFrom, dijkstraJumpCountsFrom } from "./cat-jump-graph.js";
+import { clampPointToSurfaceXZ, getSurfaceAabb, getSurfaceKind, getSurfaceYaw, rotateOffsetXZ } from "./surface-shapes.js";
 
 export function createCatJumpPlanningRuntime(ctx) {
   const {
@@ -97,17 +98,33 @@ export function createCatJumpPlanningRuntime(ctx) {
     const seen = new Set();
     for (const def of defs) {
       if (!def) continue;
-      const minX = Number(def.minX);
-      const maxX = Number(def.maxX);
-      const minZ = Number(def.minZ);
-      const maxZ = Number(def.maxZ);
+      const shape = getSurfaceKind(def);
+      const aabb = getSurfaceAabb(def);
+      const minX = Number(aabb.minX);
+      const maxX = Number(aabb.maxX);
+      const minZ = Number(aabb.minZ);
+      const maxZ = Number(aabb.maxZ);
       const y = Number(def.y);
       if (![minX, maxX, minZ, maxZ, y].every(Number.isFinite)) continue;
       if (maxX - minX <= 0.08 || maxZ - minZ <= 0.08) continue;
       const id = String(def.id || def.name || `surface-${out.length}`);
       if (seen.has(id)) continue;
       seen.add(id);
-      out.push({ id, minX, maxX, minZ, maxZ, y });
+      out.push({
+        id,
+        minX,
+        maxX,
+        minZ,
+        maxZ,
+        y,
+        shape,
+        centerX: Number.isFinite(Number(def.centerX)) ? Number(def.centerX) : Number.isFinite(Number(def.cx)) ? Number(def.cx) : (minX + maxX) * 0.5,
+        centerZ: Number.isFinite(Number(def.centerZ)) ? Number(def.centerZ) : Number.isFinite(Number(def.cz)) ? Number(def.cz) : (minZ + maxZ) * 0.5,
+        halfWidth: Number.isFinite(Number(def.halfWidth)) ? Number(def.halfWidth) : Math.max(0.05, (maxX - minX) * 0.5),
+        halfDepth: Number.isFinite(Number(def.halfDepth)) ? Number(def.halfDepth) : Math.max(0.05, (maxZ - minZ) * 0.5),
+        radius: Number.isFinite(Number(def.radius)) ? Number(def.radius) : null,
+        yaw: getSurfaceYaw(def),
+      });
     }
     return out;
   }
@@ -125,6 +142,68 @@ export function createCatJumpPlanningRuntime(ctx) {
       y,
       outer: { minX, maxX, minZ, maxZ },
       inner,
+      anchors: [],
+    };
+  }
+
+  function makeCircleSurface(id, y, centerX, centerZ, radius, inset) {
+    const outerRadius = Math.max(0.05, Number(radius) || 0.05);
+    const innerRadius = Math.max(0.02, outerRadius - Math.max(0, inset));
+    return {
+      id,
+      y,
+      shape: "circle",
+      centerX,
+      centerZ,
+      cx: centerX,
+      cz: centerZ,
+      radius: outerRadius,
+      outerRadius,
+      innerRadius,
+      outer: {
+        minX: centerX - outerRadius,
+        maxX: centerX + outerRadius,
+        minZ: centerZ - outerRadius,
+        maxZ: centerZ + outerRadius,
+      },
+      inner: {
+        minX: centerX - innerRadius,
+        maxX: centerX + innerRadius,
+        minZ: centerZ - innerRadius,
+        maxZ: centerZ + innerRadius,
+      },
+      anchors: [],
+    };
+  }
+
+  function makeObbSurface(id, y, centerX, centerZ, halfWidth, halfDepth, yaw, inset) {
+    const outerHx = Math.max(0.05, Number(halfWidth) || 0.05);
+    const outerHz = Math.max(0.05, Number(halfDepth) || 0.05);
+    const innerHx = Math.max(0.02, outerHx - Math.max(0, inset));
+    const innerHz = Math.max(0.02, outerHz - Math.max(0, inset));
+    const aabb = getSurfaceAabb({
+      shape: "obb",
+      centerX,
+      centerZ,
+      halfWidth: outerHx,
+      halfDepth: outerHz,
+      yaw,
+    });
+    return {
+      id,
+      y,
+      shape: "obb",
+      centerX,
+      centerZ,
+      cx: centerX,
+      cz: centerZ,
+      yaw,
+      halfWidth: outerHx,
+      halfDepth: outerHz,
+      outer: { minX: aabb.minX, maxX: aabb.maxX, minZ: aabb.minZ, maxZ: aabb.maxZ },
+      inner: { minX: aabb.minX, maxX: aabb.maxX, minZ: aabb.minZ, maxZ: aabb.maxZ },
+      outerRect: { hx: outerHx, hz: outerHz },
+      innerRect: { hx: innerHx, hz: innerHz },
       anchors: [],
     };
   }
@@ -231,10 +310,61 @@ export function createCatJumpPlanningRuntime(ctx) {
     return finalizeAnchors(surface, anchors);
   }
 
+  function buildObbAnchors(surface, perimeterTarget = SURFACE_CFG.anchorsPerimeterTarget) {
+    const anchors = [];
+    const n = getRectAnchorCountPerEdge(surface, perimeterTarget);
+    const centerX = Number(surface.centerX ?? surface.cx ?? 0);
+    const centerZ = Number(surface.centerZ ?? surface.cz ?? 0);
+    const yaw = Number(surface.yaw || 0);
+    const inner = surface.innerRect;
+    const outer = surface.outerRect;
+    if (!inner || !outer) return anchors;
+
+    const addAnchor = (edgeIndex, t, innerX, innerZ, outerX, outerZ, nx, nz) => {
+      const innerRot = rotateOffsetXZ(innerX, innerZ, yaw);
+      const outerRot = rotateOffsetXZ(outerX, outerZ, yaw);
+      const normalRot = rotateOffsetXZ(nx, nz, yaw);
+      anchors.push({
+        surfaceId: surface.id,
+        edgeIndex,
+        t,
+        inner: new THREE.Vector3(centerX + innerRot.dx, 0, centerZ + innerRot.dz),
+        outer: new THREE.Vector3(centerX + outerRot.dx, 0, centerZ + outerRot.dz),
+        normal: new THREE.Vector3(normalRot.dx, 0, normalRot.dz).normalize(),
+      });
+    };
+
+    for (let i = 0; i < n; i++) {
+      const t = n <= 1 ? 0 : i / (n - 1);
+      const xI = THREE.MathUtils.lerp(-inner.hx, inner.hx, t);
+      addAnchor(0, t, xI, inner.hz, xI, outer.hz, 0, 1);
+    }
+    for (let i = 0; i < n; i++) {
+      const t = n <= 1 ? 0 : i / (n - 1);
+      const zI = THREE.MathUtils.lerp(inner.hz, -inner.hz, t);
+      addAnchor(1, t, inner.hx, zI, outer.hx, zI, 1, 0);
+    }
+    for (let i = 0; i < n; i++) {
+      const t = n <= 1 ? 0 : i / (n - 1);
+      const xI = THREE.MathUtils.lerp(inner.hx, -inner.hx, t);
+      addAnchor(2, t, xI, -inner.hz, xI, -outer.hz, 0, -1);
+    }
+    for (let i = 0; i < n; i++) {
+      const t = n <= 1 ? 0 : i / (n - 1);
+      const zI = THREE.MathUtils.lerp(-inner.hz, inner.hz, t);
+      addAnchor(3, t, -inner.hx, zI, -outer.hx, zI, -1, 0);
+    }
+
+    return finalizeAnchors(surface, anchors);
+  }
+
   function buildSurfaceAnchors(surface) {
     const shape = String(surface?.shape || surface?.shapeType || 'rect').toLowerCase();
     if (shape === 'circle' || shape === 'disc' || shape === 'disk') {
       return buildCircleAnchors(surface, SURFACE_CFG.circleAnchors);
+    }
+    if (shape === "obb") {
+      return buildObbAnchors(surface, SURFACE_CFG.anchorsPerimeterTarget);
     }
     return buildRectAnchors(surface, SURFACE_CFG.anchorsPerimeterTarget);
   }
@@ -242,9 +372,68 @@ export function createCatJumpPlanningRuntime(ctx) {
   function intersectProbeWithSurface(origin, dir, maxDist, surface, sameLevelTolerance = SURFACE_CFG.sameLevelTolerance) {
     const EPS = 1e-6;
     const dy = dir.y;
+    const shape = String(surface?.shape || "rect").toLowerCase();
     // Horizontal probe: allow same-level links by ray-vs-rect intersection in XZ.
     if (Math.abs(dy) < EPS) {
       if (Math.abs(surface.y - origin.y) > sameLevelTolerance) return null;
+      if (shape === "circle") {
+        const cx = Number(surface.centerX ?? surface.cx ?? 0);
+        const cz = Number(surface.centerZ ?? surface.cz ?? 0);
+        const radius = Math.max(0.01, Number(surface.innerRadius ?? surface.radius ?? 0));
+        const ox = origin.x - cx;
+        const oz = origin.z - cz;
+        const a = dir.x * dir.x + dir.z * dir.z;
+        const b = 2 * (ox * dir.x + oz * dir.z);
+        const c = ox * ox + oz * oz - radius * radius;
+        const disc = b * b - 4 * a * c;
+        if (disc < 0 || Math.abs(a) < EPS) return null;
+        const sqrtDisc = Math.sqrt(disc);
+        const t0 = (-b - sqrtDisc) / (2 * a);
+        const t1 = (-b + sqrtDisc) / (2 * a);
+        const t = [t0, t1].find((candidate) => candidate > EPS && candidate <= maxDist);
+        if (!Number.isFinite(t)) return null;
+        return {
+          t,
+          point: new THREE.Vector3(origin.x + dir.x * t, surface.y, origin.z + dir.z * t),
+        };
+      }
+      if (shape === "obb") {
+        const centerX = Number(surface.centerX ?? surface.cx ?? 0);
+        const centerZ = Number(surface.centerZ ?? surface.cz ?? 0);
+        const yaw = Number(surface.yaw || 0);
+        const originLocal = rotateOffsetXZ(origin.x - centerX, origin.z - centerZ, -yaw);
+        const dirLocal = rotateOffsetXZ(dir.x, dir.z, -yaw);
+        let tMin = 0;
+        let tMax = maxDist;
+        const inner = surface.innerRect || { hx: 0, hz: 0 };
+
+        if (Math.abs(dirLocal.dx) < EPS) {
+          if (originLocal.dx < -inner.hx || originLocal.dx > inner.hx) return null;
+        } else {
+          const tx1 = (-inner.hx - originLocal.dx) / dirLocal.dx;
+          const tx2 = (inner.hx - originLocal.dx) / dirLocal.dx;
+          tMin = Math.max(tMin, Math.min(tx1, tx2));
+          tMax = Math.min(tMax, Math.max(tx1, tx2));
+          if (tMin > tMax) return null;
+        }
+
+        if (Math.abs(dirLocal.dz) < EPS) {
+          if (originLocal.dz < -inner.hz || originLocal.dz > inner.hz) return null;
+        } else {
+          const tz1 = (-inner.hz - originLocal.dz) / dirLocal.dz;
+          const tz2 = (inner.hz - originLocal.dz) / dirLocal.dz;
+          tMin = Math.max(tMin, Math.min(tz1, tz2));
+          tMax = Math.min(tMax, Math.max(tz1, tz2));
+          if (tMin > tMax) return null;
+        }
+
+        const t = tMin > EPS ? tMin : (tMax > EPS ? tMax : null);
+        if (!Number.isFinite(t) || t <= 0 || t > maxDist) return null;
+        return {
+          t,
+          point: new THREE.Vector3(origin.x + dir.x * t, surface.y, origin.z + dir.z * t),
+        };
+      }
       let tMin = 0;
       let tMax = maxDist;
 
@@ -280,7 +469,21 @@ export function createCatJumpPlanningRuntime(ctx) {
     if (!(t > 0 && t <= maxDist)) return null;
     const x = origin.x + dir.x * t;
     const z = origin.z + dir.z * t;
-    if (!isInsideRect(surface.inner, x, z, 0)) return null;
+    if (shape === "circle") {
+      const cx = Number(surface.centerX ?? surface.cx ?? 0);
+      const cz = Number(surface.centerZ ?? surface.cz ?? 0);
+      const radius = Math.max(0.01, Number(surface.innerRadius ?? surface.radius ?? 0));
+      if ((x - cx) * (x - cx) + (z - cz) * (z - cz) > radius * radius) return null;
+    } else if (shape === "obb") {
+      const centerX = Number(surface.centerX ?? surface.cx ?? 0);
+      const centerZ = Number(surface.centerZ ?? surface.cz ?? 0);
+      const yaw = Number(surface.yaw || 0);
+      const local = rotateOffsetXZ(x - centerX, z - centerZ, -yaw);
+      const inner = surface.innerRect || { hx: 0, hz: 0 };
+      if (Math.abs(local.dx) > inner.hx || Math.abs(local.dz) > inner.hz) return null;
+    } else if (!isInsideRect(surface.inner, x, z, 0)) {
+      return null;
+    }
     return {
       t,
       point: new THREE.Vector3(x, surface.y, z),
@@ -291,6 +494,34 @@ export function createCatJumpPlanningRuntime(ctx) {
     const surfaces = [];
     const configuredSurfaces = getConfiguredJumpSurfaces();
     for (const surface of configuredSurfaces) {
+      if (surface.shape === "circle" && Number.isFinite(Number(surface.radius))) {
+        surfaces.push(
+          makeCircleSurface(
+            surface.id,
+            surface.y,
+            surface.centerX,
+            surface.centerZ,
+            surface.radius,
+            CAT_COLLISION.catBodyRadius
+          )
+        );
+        continue;
+      }
+      if (surface.shape === "obb") {
+        surfaces.push(
+          makeObbSurface(
+            surface.id,
+            surface.y,
+            surface.centerX,
+            surface.centerZ,
+            surface.halfWidth,
+            surface.halfDepth,
+            surface.yaw,
+            CAT_COLLISION.catBodyRadius
+          )
+        );
+        continue;
+      }
       surfaces.push(
         makeRectSurface(
           surface.id,
@@ -1478,16 +1709,10 @@ export function createCatJumpPlanningRuntime(ctx) {
       let stageTopWasClamped = false;
       // Keep down-jump staging strictly inside the same support bounds used by surface steering.
       if (toSurface?.inner) {
-        const supportPad = 0.006;
-        const minX = Number.isFinite(toSurface.inner.minX) ? toSurface.inner.minX + supportPad : stageTop.x;
-        const maxX = Number.isFinite(toSurface.inner.maxX) ? toSurface.inner.maxX - supportPad : stageTop.x;
-        const minZ = Number.isFinite(toSurface.inner.minZ) ? toSurface.inner.minZ + supportPad : stageTop.z;
-        const maxZ = Number.isFinite(toSurface.inner.maxZ) ? toSurface.inner.maxZ - supportPad : stageTop.z;
-        const clampedX = minX <= maxX ? THREE.MathUtils.clamp(stageTop.x, minX, maxX) : stageTop.x;
-        const clampedZ = minZ <= maxZ ? THREE.MathUtils.clamp(stageTop.z, minZ, maxZ) : stageTop.z;
-        if (Math.abs(clampedX - stageTop.x) > 1e-6 || Math.abs(clampedZ - stageTop.z) > 1e-6) {
+        const clamped = clampPointToSurfaceXZ(toSurface, stageTop.x, stageTop.z, 0.006);
+        if (Math.abs(clamped.x - stageTop.x) > 1e-6 || Math.abs(clamped.z - stageTop.z) > 1e-6) {
           stageTopWasClamped = true;
-          stageTop.set(clampedX, surfaceY, clampedZ);
+          stageTop.set(clamped.x, surfaceY, clamped.z);
         }
       }
       const stagePathCost = surfacePathCost(
@@ -1563,8 +1788,25 @@ export function createCatJumpPlanningRuntime(ctx) {
     const surfaces = built.surfaces.surfaces.map((surface) => ({
       id: surface.id,
       y: surface.y,
+      minX: surface.outer?.minX ?? surface.minX ?? null,
+      maxX: surface.outer?.maxX ?? surface.maxX ?? null,
+      minZ: surface.outer?.minZ ?? surface.minZ ?? null,
+      maxZ: surface.outer?.maxZ ?? surface.maxZ ?? null,
+      shape: surface.shape || "rect",
+      centerX: surface.centerX ?? surface.cx ?? null,
+      centerZ: surface.centerZ ?? surface.cz ?? null,
+      cx: surface.cx ?? surface.centerX ?? null,
+      cz: surface.cz ?? surface.centerZ ?? null,
+      halfWidth: surface.halfWidth ?? surface.outerRect?.hx ?? null,
+      halfDepth: surface.halfDepth ?? surface.outerRect?.hz ?? null,
+      radius: surface.radius ?? surface.outerRadius ?? null,
+      outerRadius: surface.outerRadius ?? surface.radius ?? null,
+      innerRadius: surface.innerRadius ?? null,
+      yaw: surface.yaw ?? 0,
       outer: { ...surface.outer },
       inner: { ...surface.inner },
+      outerRect: surface.outerRect ? { ...surface.outerRect } : null,
+      innerRect: surface.innerRect ? { ...surface.innerRect } : null,
       anchors: surface.anchors.map((a) => ({
         id: a.id,
         edgeIndex: a.edgeIndex,

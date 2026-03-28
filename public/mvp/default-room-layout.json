@@ -1,0 +1,573 @@
+{
+  "roomBounds": {
+    "minX": -8,
+    "maxX": 6,
+    "minZ": -6,
+    "maxZ": 4,
+    "floorY": 0
+  },
+  "targetBounds": {
+    "minX": -5.2,
+    "maxX": 1.5,
+    "minZ": -4.9,
+    "maxZ": 1.7,
+    "minY": 0.8,
+    "maxY": 3.2
+  },
+  "objects": [
+    {
+      "id": "floor",
+      "type": "floor",
+      "pos": {
+        "x": -1,
+        "y": 0,
+        "z": -1
+      },
+      "width": 14,
+      "depth": 10,
+      "y": 0,
+      "rotQuarterTurns": 0,
+      "editorLocked": true,
+      "tint": "",
+      "specialFlags": {},
+      "surface": {
+        "enabled": true,
+        "flags": {
+          "randomPatrol": true,
+          "manualPatrol": true,
+          "allowCatSpawn": true,
+          "allowTrashSpawn": true,
+          "allowLaundrySpawn": true,
+          "allowCatnip": true
+        },
+        "special": {
+          "type": "floor"
+        },
+        "supportOffsets": [],
+        "blockerOffsets": [],
+        "shape": "rect",
+        "width": null,
+        "depth": null,
+        "radius": null,
+        "offsetX": 0,
+        "offsetZ": 0,
+        "supports": [],
+        "blockers": []
+      },
+      "visible": true
+    },
+    {
+      "id": "desk",
+      "type": "desk",
+      "pos": {
+        "x": -2.4,
+        "y": 0,
+        "z": -2.6
+      },
+      "sizeX": 3.1,
+      "sizeZ": 1.8,
+      "topY": 1.08,
+      "rotQuarterTurns": 0,
+      "approach": {
+        "x": -0.8,
+        "y": 0,
+        "z": -1.8
+      },
+      "perch": {
+        "x": -1.9,
+        "y": 0,
+        "z": -2.3
+      },
+      "cup": {
+        "x": -0.98,
+        "y": 0,
+        "z": -2.22
+      },
+      "editorLocked": false,
+      "tint": "",
+      "specialFlags": {
+        "allowCupLoseCondition": true
+      },
+      "surface": {
+        "enabled": true,
+        "flags": {
+          "randomPatrol": true,
+          "manualPatrol": true,
+          "allowCatnip": true
+        },
+        "special": {
+          "type": "desk",
+          "cupLoss": true
+        },
+        "supportOffsets": [
+          {
+            "dx": -1.45,
+            "dz": -0.8,
+            "hx": 0.13,
+            "hz": 0.13,
+            "topY": 1.02,
+            "mode": "soft",
+            "navPad": 0.03,
+            "steerPad": 0.01,
+            "collisionPad": 0
+          },
+          {
+            "dx": 1.45,
+            "dz": -0.8,
+            "hx": 0.13,
+            "hz": 0.13,
+            "topY": 1.02,
+            "mode": "soft",
+            "navPad": 0.03,
+            "steerPad": 0.01,
+            "collisionPad": 0
+          },
+          {
+            "dx": -1.45,
+            "dz": 0.8,
+            "hx": 0.13,
+            "hz": 0.13,
+            "topY": 1.02,
+            "mode": "soft",
+            "navPad": 0.03,
+            "steerPad": 0.01,
+            "collisionPad": 0
+          },
+          {
+            "dx": 1.45,
+            "dz": 0.8,
+            "hx": 0.13,
+            "hz": 0.13,
+            "topY": 1.02,
+            "mode": "soft",
+            "navPad": 0.03,
+            "steerPad": 0.01,
+            "collisionPad": 0
+          }
+        ],
+        "blockerOffsets": [],
+        "shape": "rect",
+        "width": null,
+        "depth": null,
+        "radius": null,
+        "offsetX": 0,
+        "offsetZ": 0,
+        "supports": [],
+        "blockers": []
+      },
+      "visible": true
+    },
+    {
+      "id": "chair",
+      "type": "chair",
+      "pos": {
+        "x": 0.45,
+        "y": 0,
+        "z": -1.65
+      },
+      "sizeX": 0.92,
+      "sizeZ": 0.86,
+      "seatY": 0.68,
+      "seatThickness": 0.08,
+      "legHalfX": 0.05,
+      "legHalfZ": 0.05,
+      "legInsetX": 0.31,
+      "legInsetZ": 0.28,
+      "backHeight": 0.82,
+      "backThickness": 0.08,
+      "rotQuarterTurns": 0,
+      "editorLocked": false,
+      "tint": "",
+      "specialFlags": {},
+      "surface": {
+        "enabled": true,
+        "flags": {
+          "randomPatrol": false,
+          "manualPatrol": true,
+          "allowCatnip": true
+        },
+        "special": {},
+        "supportOffsets": [
+          {
+            "dx": -0.31,
+            "dz": -0.28,
+            "hx": 0.08,
+            "hz": 0.08,
+            "topY": 0.6,
+            "mode": "soft",
+            "navPad": 0.03,
+            "steerPad": 0.01,
+            "collisionPad": 0
+          },
+          {
+            "dx": 0.31,
+            "dz": -0.28,
+            "hx": 0.08,
+            "hz": 0.08,
+            "topY": 0.6,
+            "mode": "soft",
+            "navPad": 0.03,
+            "steerPad": 0.01,
+            "collisionPad": 0
+          },
+          {
+            "dx": -0.31,
+            "dz": 0.28,
+            "hx": 0.08,
+            "hz": 0.08,
+            "topY": 0.6,
+            "mode": "soft",
+            "navPad": 0.03,
+            "steerPad": 0.01,
+            "collisionPad": 0
+          },
+          {
+            "dx": 0.31,
+            "dz": 0.28,
+            "hx": 0.08,
+            "hz": 0.08,
+            "topY": 0.6,
+            "mode": "soft",
+            "navPad": 0.03,
+            "steerPad": 0.01,
+            "collisionPad": 0
+          }
+        ],
+        "blockerOffsets": [
+          {
+            "kind": "box",
+            "dx": 0,
+            "dz": -0.39,
+            "hx": 0.48,
+            "hz": 0.06,
+            "y": 1.05,
+            "h": 0.86,
+            "navPad": 0.02
+          }
+        ],
+        "shape": "rect",
+        "width": null,
+        "depth": null,
+        "radius": null,
+        "offsetX": 0,
+        "offsetZ": 0,
+        "supports": [],
+        "blockers": []
+      },
+      "visible": true
+    },
+    {
+      "id": "shelf",
+      "type": "shelf",
+      "pos": {
+        "x": -2.7,
+        "y": 0,
+        "z": -5.4
+      },
+      "width": 2.35,
+      "depth": 0.92,
+      "postHalf": 0.045,
+      "surfaceY": 1.22,
+      "boardThickness": 0.09,
+      "rotQuarterTurns": 0,
+      "editorLocked": false,
+      "tint": "",
+      "specialFlags": {},
+      "surface": {
+        "enabled": true,
+        "flags": {
+          "randomPatrol": false,
+          "manualPatrol": true,
+          "allowCatnip": true
+        },
+        "special": {},
+        "supportOffsets": [
+          {
+            "dx": -1.1300000000000001,
+            "dz": -0.41500000000000004,
+            "hx": 0.065,
+            "hz": 0.065,
+            "topY": 1.13,
+            "mode": "soft",
+            "navPad": 0.02,
+            "steerPad": 0.01,
+            "collisionPad": 0
+          },
+          {
+            "dx": 1.1300000000000001,
+            "dz": -0.41500000000000004,
+            "hx": 0.065,
+            "hz": 0.065,
+            "topY": 1.13,
+            "mode": "soft",
+            "navPad": 0.02,
+            "steerPad": 0.01,
+            "collisionPad": 0
+          },
+          {
+            "dx": -1.1300000000000001,
+            "dz": 0.41500000000000004,
+            "hx": 0.065,
+            "hz": 0.065,
+            "topY": 1.13,
+            "mode": "soft",
+            "navPad": 0.02,
+            "steerPad": 0.01,
+            "collisionPad": 0
+          },
+          {
+            "dx": 1.1300000000000001,
+            "dz": 0.41500000000000004,
+            "hx": 0.065,
+            "hz": 0.065,
+            "topY": 1.13,
+            "mode": "soft",
+            "navPad": 0.02,
+            "steerPad": 0.01,
+            "collisionPad": 0
+          }
+        ],
+        "blockerOffsets": [
+          {
+            "kind": "box",
+            "dx": 0,
+            "dz": -0.44,
+            "hx": 1.195,
+            "hz": 0.04,
+            "y": 0.6649999999999999,
+            "h": 1.1400000000000001,
+            "navPad": 0.02
+          }
+        ],
+        "shape": "rect",
+        "width": null,
+        "depth": null,
+        "radius": null,
+        "offsetX": 0,
+        "offsetZ": 0,
+        "supports": [],
+        "blockers": []
+      },
+      "visible": true
+    },
+    {
+      "id": "hoverShelf",
+      "type": "platform",
+      "pos": {
+        "x": 0.1,
+        "y": 0,
+        "z": -3.05
+      },
+      "width": 1.25,
+      "depth": 0.9,
+      "surfaceY": 2.16,
+      "thickness": 0.08,
+      "rotQuarterTurns": 0,
+      "editorLocked": false,
+      "tint": "",
+      "specialFlags": {},
+      "surface": {
+        "enabled": true,
+        "flags": {
+          "randomPatrol": false,
+          "manualPatrol": true,
+          "allowCatnip": true
+        },
+        "special": {
+          "type": "platform"
+        },
+        "supportOffsets": [],
+        "blockerOffsets": [],
+        "shape": "rect",
+        "width": null,
+        "depth": null,
+        "radius": null,
+        "offsetX": 0,
+        "offsetZ": 0,
+        "supports": [],
+        "blockers": []
+      },
+      "visible": true
+    },
+    {
+      "id": "lowerPlatform",
+      "type": "platform",
+      "pos": {
+        "x": 0.1,
+        "y": 0,
+        "z": -3.95
+      },
+      "width": 0.95,
+      "depth": 0.72,
+      "surfaceY": 2.16,
+      "thickness": 0.08,
+      "rotQuarterTurns": 0,
+      "editorLocked": false,
+      "tint": "",
+      "specialFlags": {},
+      "surface": {
+        "enabled": true,
+        "flags": {
+          "randomPatrol": false,
+          "manualPatrol": true,
+          "allowCatnip": true
+        },
+        "special": {
+          "type": "platform"
+        },
+        "supportOffsets": [],
+        "blockerOffsets": [],
+        "shape": "rect",
+        "width": null,
+        "depth": null,
+        "radius": null,
+        "offsetX": 0,
+        "offsetZ": 0,
+        "supports": [],
+        "blockers": []
+      },
+      "visible": true
+    },
+    {
+      "id": "upperPlatform",
+      "type": "platform",
+      "pos": {
+        "x": 0.1,
+        "y": 0,
+        "z": -4.7
+      },
+      "width": 0.95,
+      "depth": 0.72,
+      "surfaceY": 2.7600000000000002,
+      "thickness": 0.08,
+      "rotQuarterTurns": 0,
+      "editorLocked": false,
+      "tint": "",
+      "specialFlags": {},
+      "surface": {
+        "enabled": true,
+        "flags": {
+          "randomPatrol": false,
+          "manualPatrol": true,
+          "allowCatnip": true
+        },
+        "special": {
+          "type": "platform"
+        },
+        "supportOffsets": [],
+        "blockerOffsets": [],
+        "shape": "rect",
+        "width": null,
+        "depth": null,
+        "radius": null,
+        "offsetX": 0,
+        "offsetZ": 0,
+        "supports": [],
+        "blockers": []
+      },
+      "visible": true
+    },
+    {
+      "id": "windowSill",
+      "type": "windowSill",
+      "pos": {
+        "x": -1.15,
+        "y": 0,
+        "z": -5.51
+      },
+      "width": 1.18,
+      "depth": 0.78,
+      "thickness": 0.06,
+      "surfaceY": 1.46,
+      "wallZ": -5.98,
+      "windowWidth": 1.24,
+      "windowHeight": 0.94,
+      "openingCenterY": 1.88,
+      "openDuration": 20,
+      "sitPoint": {
+        "x": -1.15,
+        "y": 0,
+        "z": -5.51
+      },
+      "outsideYaw": 3.141592653589793,
+      "rotQuarterTurns": 0,
+      "editorLocked": false,
+      "tint": "",
+      "specialFlags": {
+        "catGoesToSillOnButtonClick": true,
+        "windowOpensOnButtonClick": true
+      },
+      "surface": {
+        "enabled": true,
+        "flags": {
+          "randomPatrol": false,
+          "manualPatrol": true,
+          "allowCatnip": true
+        },
+        "special": {
+          "type": "windowSill",
+          "windowTarget": true
+        },
+        "supportOffsets": [],
+        "blockerOffsets": [],
+        "shape": "rect",
+        "width": null,
+        "depth": null,
+        "radius": null,
+        "offsetX": 0,
+        "offsetZ": 0,
+        "supports": [],
+        "blockers": []
+      },
+      "visible": true
+    },
+    {
+      "id": "hamper",
+      "type": "hamper",
+      "pos": {
+        "x": -5.8,
+        "y": 0,
+        "z": 2.4
+      },
+      "outerHalfX": 0.48,
+      "outerHalfZ": 0.48,
+      "halfX": 0.45,
+      "halfZ": 0.45,
+      "openingHalfX": 0.34,
+      "openingHalfZ": 0.34,
+      "rimY": 0.92,
+      "sinkY": 0.2,
+      "rotQuarterTurns": 0,
+      "editorLocked": false,
+      "tint": "",
+      "specialFlags": {
+        "allowCleanLaundry": true
+      },
+      "surface": null,
+      "visible": true
+    },
+    {
+      "id": "trashCan",
+      "type": "trashCan",
+      "pos": {
+        "x": 2.6,
+        "y": 0,
+        "z": 2.4
+      },
+      "outerRadius": 0.52,
+      "radius": 0.5,
+      "openingRadius": 0.42,
+      "rimY": 0.62,
+      "sinkY": 0.14,
+      "modelWidthScale": 1.2,
+      "rotQuarterTurns": 0,
+      "editorLocked": false,
+      "tint": "",
+      "specialFlags": {
+        "allowCleanTrash": true
+      },
+      "surface": null,
+      "visible": true
+    }
+  ]
+}

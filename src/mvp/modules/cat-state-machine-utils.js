@@ -1,4 +1,5 @@
 import { FLOOR_SURFACE_ID, ensureCatSurfaceState as ensureSharedSurfaceState, isFloorSurfaceId, normalizeSurfaceId } from "./surface-ids.js";
+import { clampPointToSurfaceXZ, getSurfaceEdgeDistance, getSurfacePlanarGap } from "./surface-shapes.js";
 
 export function createCatStateMachineUtilsRuntime(ctx) {
   const {
@@ -104,21 +105,11 @@ export function createCatStateMachineUtilsRuntime(ctx) {
 
   function scoreNonFloorSurfaceAtPoint(x, z, y, s, pad = 0.18, preferredSurfaceId = "") {
     if (!s) return null;
-    const sx0 = Number(s.minX);
-    const sx1 = Number(s.maxX);
-    const sz0 = Number(s.minZ);
-    const sz1 = Number(s.maxZ);
     const sy = Number(s.y);
-    if (![sx0, sx1, sz0, sz1, sy].every(Number.isFinite)) return null;
-    const inside = x >= sx0 - pad && x <= sx1 + pad && z >= sz0 - pad && z <= sz1 + pad;
-    if (!inside) return null;
+    if (!Number.isFinite(sy)) return null;
+    if (getSurfacePlanarGap(s, x, z, 0) > pad) return null;
     const dy = Math.abs(sy - y);
-    const edgeDist = Math.min(
-      Math.abs(x - sx0),
-      Math.abs(x - sx1),
-      Math.abs(z - sz0),
-      Math.abs(z - sz1)
-    );
+    const edgeDist = Math.max(0, getSurfaceEdgeDistance(s, x, z, 0));
     const surfaceId = String(s.id || s.name || "");
     const preferredBias =
       preferredSurfaceId && surfaceId === String(preferredSurfaceId) ? -0.08 : 0;
@@ -150,10 +141,7 @@ export function createCatStateMachineUtilsRuntime(ctx) {
   function isNearNonFloorSurface(x, z, y, surface, pad = 0.28, yPad = 0.7) {
     if (!surface) return false;
     return (
-      x >= surface.minX - pad &&
-      x <= surface.maxX + pad &&
-      z >= surface.minZ - pad &&
-      z <= surface.maxZ + pad &&
+      getSurfacePlanarGap(surface, x, z, 0) <= pad &&
       Math.abs((surface.y || 0) - y) <= yPad
     );
   }
@@ -166,23 +154,16 @@ export function createCatStateMachineUtilsRuntime(ctx) {
     let bestScore = Infinity;
     for (const s of defs) {
       if (!s) continue;
-      const sx0 = Number(s.minX);
-      const sx1 = Number(s.maxX);
-      const sz0 = Number(s.minZ);
-      const sz1 = Number(s.maxZ);
       const sy = Number(s.y);
-      if (![sx0, sx1, sz0, sz1, sy].every(Number.isFinite)) continue;
-
-      const dx = x < sx0 ? sx0 - x : x > sx1 ? x - sx1 : 0;
-      const dz = z < sz0 ? sz0 - z : z > sz1 ? z - sz1 : 0;
+      if (!Number.isFinite(sy)) continue;
+      const planarGap = getSurfacePlanarGap(s, x, z, 0);
       const dy = Math.abs(sy - y);
       if (dy > 1.15) continue;
-      const planarGap = Math.hypot(dx, dz);
       if (planarGap > 0.72) continue;
 
       const surfaceId = String(s.id || s.name || "");
       const preferredBias = preferredSurfaceId && surfaceId === String(preferredSurfaceId) ? -0.18 : 0;
-      const score = dx * 1.25 + dz * 1.25 + dy * 1.8 + preferredBias;
+      const score = planarGap * 1.8 + dy * 1.8 + preferredBias;
       if (score < bestScore) {
         bestScore = score;
         best = s;
@@ -430,13 +411,9 @@ export function createCatStateMachineUtilsRuntime(ctx) {
     if (game.catnip.surface && game.catnip.surface !== "floor") {
       const surface = getNonFloorSurfaceById(game.catnip.surface);
       if (surface) {
-        const edgePad = CAT_COLLISION.catBodyRadius + 0.06;
-        const minX = surface.minX + edgePad;
-        const maxX = surface.maxX - edgePad;
-        const minZ = surface.minZ + edgePad;
-        const maxZ = surface.maxZ - edgePad;
-        if (minX + CATNIP_LOCK_POS_EPS < maxX) tx = THREE.MathUtils.clamp(tx, minX, maxX);
-        if (minZ + CATNIP_LOCK_POS_EPS < maxZ) tz = THREE.MathUtils.clamp(tz, minZ, maxZ);
+        const clamped = clampPointToSurfaceXZ(surface, tx, tz, CAT_COLLISION.catBodyRadius + 0.06);
+        tx = clamped.x;
+        tz = clamped.z;
       }
     }
 

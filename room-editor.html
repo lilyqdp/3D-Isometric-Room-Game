@@ -1,0 +1,394 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Cat Cleanup Room Editor</title>
+
+    <style>
+      html,
+      body {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #d9dce2;
+        font-family: "Segoe UI", Arial, sans-serif;
+        color: #f5f7fa;
+      }
+
+      #editorPanel {
+        position: fixed;
+        top: 12px;
+        left: 12px;
+        z-index: 10;
+        width: 320px;
+        max-height: calc(100vh - 24px);
+        overflow: auto;
+        padding: 14px;
+        border-radius: 12px;
+        background: rgba(23, 26, 30, 0.84);
+        box-shadow: 0 10px 28px rgba(0, 0, 0, 0.24);
+      }
+
+      h1,
+      h2,
+      p {
+        margin: 0;
+      }
+
+      h1 {
+        font-size: 18px;
+      }
+
+      .subtle {
+        margin-top: 6px;
+        color: rgba(245, 247, 250, 0.72);
+        font-size: 13px;
+        line-height: 1.4;
+      }
+
+      .toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 12px;
+      }
+
+      .toolbar a,
+      .toolbar button {
+        border: 0;
+        border-radius: 8px;
+        padding: 8px 10px;
+        font-weight: 700;
+        text-decoration: none;
+        cursor: pointer;
+        line-height: 1.2;
+      }
+
+      .toolbar a {
+        background: #8f9cb4;
+        color: #101726;
+      }
+
+      .toolbar button {
+        background: #f0b861;
+        color: #2a1a07;
+      }
+
+      .toolbar button.secondary {
+        background: #8f9cb4;
+        color: #101726;
+      }
+
+      .section {
+        margin-top: 16px;
+      }
+
+      .section h2 {
+        font-size: 13px;
+        margin-bottom: 8px;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: rgba(245, 247, 250, 0.78);
+      }
+
+      .summary {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+      }
+
+      .summaryCard {
+        border-radius: 10px;
+        padding: 10px;
+        background: rgba(255, 255, 255, 0.06);
+      }
+
+      .summaryCard b {
+        display: block;
+        font-size: 18px;
+        margin-bottom: 2px;
+      }
+
+      .summaryCard span {
+        color: rgba(245, 247, 250, 0.72);
+        font-size: 12px;
+      }
+
+      #objectList {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .objectRow {
+        width: 100%;
+        border: 0;
+        border-radius: 10px;
+        padding: 10px;
+        background: rgba(255, 255, 255, 0.06);
+        color: inherit;
+        text-align: left;
+      }
+
+      .objectRow.isSelected {
+        background: rgba(240, 184, 97, 0.24);
+        outline: 1px solid rgba(240, 184, 97, 0.68);
+      }
+
+      .objectRow strong,
+      .objectRow span {
+        display: block;
+      }
+
+      .objectRow span {
+        margin-top: 2px;
+        color: rgba(245, 247, 250, 0.7);
+        font-size: 12px;
+      }
+
+      #objectDetails {
+        border-radius: 10px;
+        padding: 10px;
+        background: rgba(255, 255, 255, 0.06);
+        font-size: 13px;
+        line-height: 1.5;
+      }
+
+      #objectDetails .row {
+        display: flex;
+        justify-content: space-between;
+        gap: 10px;
+        margin: 4px 0;
+      }
+
+      #objectDetails .label {
+        color: rgba(245, 247, 250, 0.72);
+      }
+
+      .fieldGrid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+        margin-top: 10px;
+      }
+
+      .field {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+
+      .field span {
+        color: rgba(245, 247, 250, 0.72);
+        font-size: 12px;
+      }
+
+      .field input {
+        border: 0;
+        border-radius: 8px;
+        padding: 8px 9px;
+        background: rgba(10, 12, 15, 0.45);
+        color: inherit;
+      }
+
+      .field input[type="color"] {
+        min-height: 38px;
+        padding: 4px;
+      }
+
+      .field select {
+        border: 0;
+        border-radius: 8px;
+        padding: 8px 9px;
+        background: rgba(10, 12, 15, 0.45);
+        color: inherit;
+      }
+
+      .checkList {
+        display: grid;
+        gap: 6px;
+        margin-top: 10px;
+      }
+
+      .checkList.compact {
+        margin-top: 0;
+      }
+
+      .checkItem {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: rgba(245, 247, 250, 0.88);
+      }
+
+      .detailBlock {
+        margin-top: 10px;
+        padding-top: 10px;
+        border-top: 1px solid rgba(255, 255, 255, 0.08);
+      }
+
+      .detailBlock h3 {
+        margin: 0;
+        font-size: 12px;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: rgba(245, 247, 250, 0.78);
+      }
+
+      .actionRow {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 10px;
+      }
+
+      .actionRow button {
+        border: 0;
+        border-radius: 8px;
+        padding: 8px 10px;
+        font-weight: 700;
+        cursor: pointer;
+        background: #f0b861;
+        color: #2a1a07;
+      }
+
+      .actionRow button.secondary {
+        background: #8f9cb4;
+        color: #101726;
+      }
+
+      #sceneHint {
+        margin-top: 10px;
+        color: rgba(245, 247, 250, 0.74);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      #editorStatus {
+        margin-top: 10px;
+        border-radius: 10px;
+        padding: 10px;
+        background: rgba(255, 255, 255, 0.06);
+        font-size: 12px;
+        line-height: 1.45;
+        color: rgba(245, 247, 250, 0.88);
+      }
+
+      #editorNotice {
+        margin-top: 14px;
+        border-radius: 10px;
+        padding: 10px;
+        background: rgba(121, 184, 127, 0.18);
+        color: rgba(245, 247, 250, 0.9);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+    </style>
+  </head>
+
+  <body>
+    <aside id="editorPanel">
+      <h1>Room Editor</h1>
+      <p class="subtle">Separate room editor entrypoint. It uses the shared room layout source and supports selection, dragging, live rotation previews, editable walkable surface bounds, GLB-backed model objects, primitive shapes, object obstacles, undo/redo, and JSON import/export. Camera controls match game debug mode: WASD move and arrow keys rotate.</p>
+
+      <div class="toolbar">
+        <a href="./">Back To Game</a>
+        <button id="focusSelectionBtn" type="button">Focus Camera On Selection</button>
+        <button id="undoBtn" class="secondary" type="button">Undo Last Change</button>
+        <button id="redoBtn" class="secondary" type="button">Redo Last Undo</button>
+        <button id="rotateLeftBtn" class="secondary" type="button">Rotate 90° Left</button>
+        <button id="rotateRightBtn" class="secondary" type="button">Rotate 90° Right</button>
+        <button id="addCubeBtn" class="secondary" type="button">Add Cube</button>
+        <button id="addRectPrismBtn" class="secondary" type="button">Add Rectangular Prism</button>
+        <button id="addSphereBtn" class="secondary" type="button">Add Sphere</button>
+        <button id="addCylinderBtn" class="secondary" type="button">Add Cylinder</button>
+        <button id="addTriPrismBtn" class="secondary" type="button">Add Triangular Prism</button>
+        <button id="addGlbModelBtn" class="secondary" type="button">Add GLB Model Object</button>
+        <button id="duplicateObjectBtn" class="secondary" type="button">Duplicate Selected...</button>
+        <button id="deleteObjectBtn" class="secondary" type="button">Delete Selected</button>
+        <button id="fallbackModelsBtn" class="secondary" type="button">Use Fallback Meshes: Off</button>
+        <button id="downloadLayoutBtn" class="secondary" type="button">Export Layout JSON</button>
+        <button id="saveGameLayoutBtn" class="secondary" type="button">Replace Game Layout File</button>
+        <button id="revertSavedLayoutBtn" class="secondary" type="button">Undo All Unsaved Changes</button>
+        <button id="importLayoutBtn" class="secondary" type="button">Import Layout JSON</button>
+        <button id="resetLayoutBtn" class="secondary" type="button">Reset To Default Layout</button>
+        <button id="setDefaultLayoutBtn" class="secondary" type="button">Set As Default Room</button>
+        <input id="importLayoutInput" type="file" accept="application/json,.json" hidden />
+        <input id="glbAssetInput" type="file" accept=".glb,.gltf,model/gltf-binary,model/gltf+json" hidden />
+      </div>
+
+      <div id="sceneHint">Left-click any room object to select it. Drag on the scene to move it across the floor plane. Rotation previews update live while you drag the slider, and the undo entry is only committed when you release it. Shapes and GLB model objects can be added from the toolbar. Model objects can use either a served GLB path or a local GLB file preview from the selection panel.</div>
+      <div id="editorStatus">Editor ready.</div>
+
+      <section class="section">
+        <h2>Advanced View</h2>
+        <div class="checkList compact">
+          <label class="checkItem">
+            <input id="advShowSurfaceBounds" type="checkbox" />
+            <span>Jump surface bounds</span>
+          </label>
+          <label class="checkItem">
+            <input id="advShowSurfaceAnchors" type="checkbox" />
+            <span>Jump anchors and latch points</span>
+          </label>
+          <label class="checkItem">
+            <input id="advShowSurfaceProbes" type="checkbox" />
+            <span>Jump probes</span>
+          </label>
+          <label class="checkItem">
+            <input id="advShowSurfaceLinks" type="checkbox" />
+            <span>Jump links and link points</span>
+          </label>
+          <label class="checkItem">
+            <input id="advShowSurfaceVectorBlockers" type="checkbox" />
+            <span>Jump blocker spaces</span>
+          </label>
+          <label class="checkItem">
+            <input id="advShowNavMeshLines" type="checkbox" />
+            <span>NavMesh edges</span>
+          </label>
+          <label class="checkItem">
+            <input id="advShowNavMeshFill" type="checkbox" />
+            <span>NavMesh fill</span>
+          </label>
+          <label class="checkItem">
+            <input id="advShowObjectCollisionShapes" type="checkbox" />
+            <span>Object collision shapes</span>
+          </label>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>Layout Summary</h2>
+        <div class="summary">
+          <div class="summaryCard">
+            <b id="objectCount">0</b>
+            <span>Room objects</span>
+          </div>
+          <div class="summaryCard">
+            <b id="surfaceCount">0</b>
+            <span>Walkable surfaces</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="section">
+        <h2>Objects</h2>
+        <div id="objectList"></div>
+      </section>
+
+      <section class="section">
+        <h2>Selection</h2>
+        <div id="objectDetails"></div>
+      </section>
+
+      <div id="editorNotice">
+        Surface-capable objects can now switch between rectangular and circular walkable surfaces, and model/shape surface bounds can be edited separately from the visible mesh. Local GLB files are still session-only previews; use the GLB path field for saved layouts.
+      </div>
+    </aside>
+
+    <script type="module" src="/src/mvp/editor-main.js"></script>
+  </body>
+</html>

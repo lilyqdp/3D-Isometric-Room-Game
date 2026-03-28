@@ -1,3 +1,5 @@
+import { getSurfaceAabb, getSurfaceKind, getSurfaceYaw } from "./surface-shapes.js";
+
 function normalizeRect(bounds = {}) {
   const minX = Number(bounds.minX);
   const maxX = Number(bounds.maxX);
@@ -85,7 +87,14 @@ function normalizeSurfaceSpec(spec, floorY) {
   if (!spec || typeof spec !== "object") return null;
   const id = String(spec.id || spec.name || "").trim();
   if (!id) return null;
-  const rect = normalizeRect(spec);
+  const shape = getSurfaceKind(spec);
+  const aabb = getSurfaceAabb(spec);
+  const rect = normalizeRect({
+    minX: spec.minX ?? aabb.minX,
+    maxX: spec.maxX ?? aabb.maxX,
+    minZ: spec.minZ ?? aabb.minZ,
+    maxZ: spec.maxZ ?? aabb.maxZ,
+  });
   const y = Number(spec.y);
   if (![rect.minX, rect.maxX, rect.minZ, rect.maxZ, y].every(Number.isFinite)) return null;
   const flags = normalizeSurfaceFlags(spec);
@@ -106,6 +115,13 @@ function normalizeSurfaceSpec(spec, floorY) {
     flags,
     associatedObjectIds: normalizeAssociatedObjectIds(spec),
     special: cloneMeta(spec.special),
+    shape,
+    centerX: Number.isFinite(Number(spec.centerX)) ? Number(spec.centerX) : Number.isFinite(Number(spec.cx)) ? Number(spec.cx) : (rect.minX + rect.maxX) * 0.5,
+    centerZ: Number.isFinite(Number(spec.centerZ)) ? Number(spec.centerZ) : Number.isFinite(Number(spec.cz)) ? Number(spec.cz) : (rect.minZ + rect.maxZ) * 0.5,
+    halfWidth: Number.isFinite(Number(spec.halfWidth)) ? Number(spec.halfWidth) : Math.max(0, (rect.maxX - rect.minX) * 0.5),
+    halfDepth: Number.isFinite(Number(spec.halfDepth)) ? Number(spec.halfDepth) : Math.max(0, (rect.maxZ - rect.minZ) * 0.5),
+    radius: Number.isFinite(Number(spec.radius)) ? Number(spec.radius) : null,
+    yaw: getSurfaceYaw(spec),
     supports: [],
     blockers: [],
   };
@@ -156,7 +172,7 @@ function normalizeSurfaceSpec(spec, floorY) {
   return surface;
 }
 
-export function createSurfaceRegistry({ floorBounds, floorY = 0, surfaceSpecs = [] } = {}) {
+export function createSurfaceRegistry({ floorBounds, floorY = 0, floorSpec = null, surfaceSpecs = [] } = {}) {
   const normalized = [];
   const byId = new Map();
   const seen = new Set();
@@ -170,24 +186,26 @@ export function createSurfaceRegistry({ floorBounds, floorY = 0, surfaceSpecs = 
     byId.set(surface.id, surface);
   };
 
-  addSurface({
-    id: "floor",
-    name: "floor",
-    y: floorY,
-    minX: floorRect.minX,
-    maxX: floorRect.maxX,
-    minZ: floorRect.minZ,
-    maxZ: floorRect.maxZ,
-    flags: {
-      randomPatrol: true,
-      manualPatrol: true,
-      allowCatSpawn: true,
-      allowTrashSpawn: true,
-      allowLaundrySpawn: true,
-      allowCatnip: true,
-    },
-    special: { type: "floor" },
-  });
+  addSurface(
+    floorSpec || {
+      id: "floor",
+      name: "floor",
+      y: floorY,
+      minX: floorRect.minX,
+      maxX: floorRect.maxX,
+      minZ: floorRect.minZ,
+      maxZ: floorRect.maxZ,
+      flags: {
+        randomPatrol: true,
+        manualPatrol: true,
+        allowCatSpawn: true,
+        allowTrashSpawn: true,
+        allowLaundrySpawn: true,
+        allowCatnip: true,
+      },
+      special: { type: "floor" },
+    }
+  );
 
   for (const spec of surfaceSpecs) addSurface(spec);
 
@@ -210,6 +228,13 @@ export function createSurfaceRegistry({ floorBounds, floorY = 0, surfaceSpecs = 
       flags: cloneMeta(surface.flags),
       associatedObjectIds: Array.isArray(surface.associatedObjectIds) ? [...surface.associatedObjectIds] : [],
       special: cloneMeta(surface.special),
+      shape: surface.shape,
+      centerX: surface.centerX,
+      centerZ: surface.centerZ,
+      halfWidth: surface.halfWidth,
+      halfDepth: surface.halfDepth,
+      radius: surface.radius,
+      yaw: surface.yaw,
     };
   }
 
@@ -271,15 +296,39 @@ export function createSurfaceRegistry({ floorBounds, floorY = 0, surfaceSpecs = 
     const out = [];
     for (const surface of normalized) {
       if (surface.id !== "floor") {
-        out.push({
-          x: (surface.minX + surface.maxX) * 0.5,
-          y: surface.y,
-          z: (surface.minZ + surface.maxZ) * 0.5,
-          hx: Math.max(0.02, (surface.maxX - surface.minX) * 0.5),
-          hy: 0.04,
-          hz: Math.max(0.02, (surface.maxZ - surface.minZ) * 0.5),
-          surfaceId: surface.id,
-        });
+        if (surface.shape === "circle" && Number.isFinite(Number(surface.radius))) {
+          out.push({
+            x: surface.centerX,
+            y: surface.y,
+            z: surface.centerZ,
+            hx: Math.max(0.02, Number(surface.radius)),
+            hy: 0.04,
+            hz: Math.max(0.02, Number(surface.radius)),
+            rotY: 0,
+            surfaceId: surface.id,
+          });
+        } else if (surface.shape === "obb") {
+          out.push({
+            x: surface.centerX,
+            y: surface.y,
+            z: surface.centerZ,
+            hx: Math.max(0.02, Number(surface.halfWidth) || 0.02),
+            hy: 0.04,
+            hz: Math.max(0.02, Number(surface.halfDepth) || 0.02),
+            rotY: Number.isFinite(Number(surface.yaw)) ? Number(surface.yaw) : 0,
+            surfaceId: surface.id,
+          });
+        } else {
+          out.push({
+            x: (surface.minX + surface.maxX) * 0.5,
+            y: surface.y,
+            z: (surface.minZ + surface.maxZ) * 0.5,
+            hx: Math.max(0.02, (surface.maxX - surface.minX) * 0.5),
+            hy: 0.04,
+            hz: Math.max(0.02, (surface.maxZ - surface.minZ) * 0.5),
+            surfaceId: surface.id,
+          });
+        }
       }
       for (const obs of surface.supports) {
         if (obs.kind !== "box") continue;

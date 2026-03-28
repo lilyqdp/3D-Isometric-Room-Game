@@ -1,4 +1,5 @@
 import { FLOOR_SURFACE_ID, catHasNonFloorSurface, isFloorSurfaceId, isNonFloorSurfaceId, normalizeSurfaceId, setCatSurfaceId, targetSurfaceId } from "./surface-ids.js";
+import { clampPointToSurfaceXZ, getSurfaceEdgeDistance, getSurfacePlanarGap } from "./surface-shapes.js";
 
 export function createDebugControlsRuntime(ctx) {
   const {
@@ -64,14 +65,9 @@ export function createDebugControlsRuntime(ctx) {
   }
 
   function clampPointToSurface(surface, point, margin = CAT_COLLISION.catBodyRadius + 0.04) {
-    const minX = Number.isFinite(surface.minX) ? surface.minX + margin : point.x;
-    const maxX = Number.isFinite(surface.maxX) ? surface.maxX - margin : point.x;
-    const minZ = Number.isFinite(surface.minZ) ? surface.minZ + margin : point.z;
-    const maxZ = Number.isFinite(surface.maxZ) ? surface.maxZ - margin : point.z;
-    const x = minX <= maxX ? THREE.MathUtils.clamp(point.x, minX, maxX) : point.x;
-    const z = minZ <= maxZ ? THREE.MathUtils.clamp(point.z, minZ, maxZ) : point.z;
+    const clamped = clampPointToSurfaceXZ(surface, point.x, point.z, margin);
     const y = Number.isFinite(surface.y) ? surface.y : point.y;
-    return new THREE.Vector3(x, y, z);
+    return new THREE.Vector3(clamped.x, y, clamped.z);
   }
 
   function findSurfaceTeleportPoint(surface, point) {
@@ -349,6 +345,13 @@ export function createDebugControlsRuntime(ctx) {
             minZ: Number.isFinite(surface.minZ) ? surface.minZ : point.z,
             maxZ: Number.isFinite(surface.maxZ) ? surface.maxZ : point.z,
             y: surfaceY,
+            shape: surface.shape || "rect",
+            centerX: surface.centerX,
+            centerZ: surface.centerZ,
+            halfWidth: surface.halfWidth,
+            halfDepth: surface.halfDepth,
+            radius: surface.radius,
+            yaw: surface.yaw,
           },
           point,
           cat.pos
@@ -386,20 +389,10 @@ export function createDebugControlsRuntime(ctx) {
     let bestScore = Infinity;
     for (const surface of surfaces) {
       const pad = 0.22;
-      const inside =
-        point.x >= surface.minX - pad &&
-        point.x <= surface.maxX + pad &&
-        point.z >= surface.minZ - pad &&
-        point.z <= surface.maxZ + pad;
-      if (!inside) continue;
+      if (getSurfacePlanarGap(surface, point.x, point.z, 0) > pad) continue;
       const dy = Math.abs(surface.y - y);
       if (dy > 0.36) continue;
-      const edgeDist = Math.min(
-        Math.abs(point.x - surface.minX),
-        Math.abs(point.x - surface.maxX),
-        Math.abs(point.z - surface.minZ),
-        Math.abs(point.z - surface.maxZ)
-      );
+      const edgeDist = Math.max(0, getSurfaceEdgeDistance(surface, point.x, point.z, 0));
       const score = dy + edgeDist * 0.05;
       if (score < bestScore) {
         bestScore = score;
@@ -427,6 +420,13 @@ export function createDebugControlsRuntime(ctx) {
           maxX: Number.isFinite(surface.maxX) ? surface.maxX : point.x,
           minZ: Number.isFinite(surface.minZ) ? surface.minZ : point.z,
           maxZ: Number.isFinite(surface.maxZ) ? surface.maxZ : point.z,
+          shape: surface.shape || "rect",
+          centerX: surface.centerX,
+          centerZ: surface.centerZ,
+          halfWidth: surface.halfWidth,
+          halfDepth: surface.halfDepth,
+          radius: surface.radius,
+          yaw: surface.yaw,
         };
         const surfacePoint = findSurfaceTeleportPoint(surfaceDef, point);
         return {

@@ -1080,8 +1080,6 @@ export function createCatPathfindingRuntime(ctx) {
       topMesh.updateMatrixWorld(true);
       meshes.push(topMesh);
     }
-
-    // Static blockers baked into the base navmesh.
     for (const obs of obstacles) {
       let mesh = null;
       const inflated = inflateObstacleForStage(obs, "plan");
@@ -1135,7 +1133,7 @@ export function createCatPathfindingRuntime(ctx) {
     return false;
   }
 
-  function extractDebugGeometryFromNavMesh(navMesh) {
+  function extractDebugGeometryFromNavMesh(navMesh, debugObstacles = null) {
     const helper = new NavMeshHelper(navMesh);
     helper.update();
     const geometry = helper.navMeshGeometry || helper.mesh?.geometry;
@@ -1175,6 +1173,11 @@ export function createCatPathfindingRuntime(ctx) {
       const my = (ay + by + cy) / 3;
       const mz = (az + bz + cz) / 3;
       if (!isPointOnDebugWalkableSurface(mx, my, mz, surfaces)) return;
+      if (Array.isArray(debugObstacles) && debugObstacles.length) {
+        for (const obstacle of debugObstacles) {
+          if (obstacleBlocksPoint(obstacle, mx, mz, 0, my, "plan")) return;
+        }
+      }
       addEdge(ia, ib);
       addEdge(ib, ic);
       addEdge(ic, ia);
@@ -1295,7 +1298,7 @@ export function createCatPathfindingRuntime(ctx) {
           cached.dynamicSignature = "none";
         }
         if (cached.debugDirty) {
-          const debugGeometry = extractDebugGeometryFromNavMesh(cached.navMesh);
+          const debugGeometry = extractDebugGeometryFromNavMesh(cached.navMesh, sourceObstacles);
           cached.segments = debugGeometry.segments;
           cached.triangles = debugGeometry.triangles;
           cached.debugDirty = false;
@@ -1333,7 +1336,7 @@ export function createCatPathfindingRuntime(ctx) {
       const navQuery = new NavMeshQuery(navMesh, { maxNodes: 4096 });
       navQuery.defaultQueryHalfExtents = { x: 2.5, y: 2.0, z: 2.5 };
 
-      const debugGeometry = extractDebugGeometryFromNavMesh(navMesh);
+      const debugGeometry = extractDebugGeometryFromNavMesh(navMesh, sourceObstacles);
       const entry = {
         signature,
         includePickups,
@@ -1356,7 +1359,7 @@ export function createCatPathfindingRuntime(ctx) {
         syncTileCacheObstacles(entry, dynamicSpecs);
         entry.dynamicSignature = obstacles?._dynamicSignature || dynamicSpecsSignature(dynamicSpecs);
         if (entry.debugDirty) {
-          const refreshed = extractDebugGeometryFromNavMesh(entry.navMesh);
+          const refreshed = extractDebugGeometryFromNavMesh(entry.navMesh, sourceObstacles);
           entry.segments = refreshed.segments;
           entry.triangles = refreshed.triangles;
           entry.debugDirty = false;

@@ -2,7 +2,14 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import * as CANNON from "./vendor/cannon-es.js";
-import { makeBins, makeChair, makeDesk, makeHoverShelf, makePlatform, makeRoomCorner, makeShelf, makeWindowSill } from "./modules/room.js";
+import { buildRoomSceneFromLayout } from "./modules/room.js";
+import {
+  buildFloorSurfaceSpec,
+  buildRoomDerivedData,
+  buildRoomSurfaceSpecs,
+  createDefaultRoomLayout,
+  createRoomLayoutFromData,
+} from "./modules/room-layout.js";
 import { createSurfaceRegistry } from "./modules/surface-registry.js";
 import { setupPhysicsWorld } from "./modules/physics.js";
 import { addRandomPickups, pickRandomCatSpawnPoint, spawnRandomPickup } from "./modules/spawning.js";
@@ -23,6 +30,7 @@ const startMenu = document.getElementById("startMenu");
 const endMenu = document.getElementById("endMenu");
 
 const playBtn = document.getElementById("playBtn");
+const editRoomBtn = document.getElementById("editRoomBtn");
 const quitBtn = document.getElementById("quitBtn");
 const replayBtn = document.getElementById("replayBtn");
 const startModeBtn = document.getElementById("startModeBtn");
@@ -32,13 +40,30 @@ const hud = document.getElementById("hud");
 // Hide HUD until game starts
 hud.style.display = "none";
 
-// Play button
-playBtn.addEventListener("click", () => {
+function launchGameSession() {
   resetGame();
   game.state = "playing";
   startMenu.classList.add("hidden");
+  endMenu.classList.add("hidden");
   hud.style.display = "block";
+}
+
+function showStartMenu() {
+  game.state = "menu";
+  endMenu.classList.add("hidden");
+  startMenu.classList.remove("hidden");
+  hud.style.display = "none";
+}
+
+// Play button
+playBtn.addEventListener("click", () => {
+  launchGameSession();
 });
+if (editRoomBtn) {
+  editRoomBtn.addEventListener("click", () => {
+    window.location.href = `${import.meta.env.BASE_URL}room-editor.html`;
+  });
+}
 //Connect Button
 startModeBtn.addEventListener("click", () => {
 
@@ -65,10 +90,7 @@ quitBtn.addEventListener("click", () => {
 // Replay button
 replayBtn.addEventListener("click", () => {
   resetGame();
-  game.state = "menu";
-  endMenu.classList.add("hidden");
-  startMenu.classList.remove("hidden");
-  hud.style.display = "none";
+  showStartMenu();
 });
 
 const sortedStatEl = document.getElementById("sortedStat");
@@ -86,6 +108,7 @@ const modeBtnEl = document.getElementById("modeBtn");
 const debugBtnEl = document.getElementById("debugBtn");
 const messFillEl = document.getElementById("messFill");
 const messValueEl = document.getElementById("messValue");
+const messMeterWrapEl = document.getElementById("messMeterWrap");
 const modeStatEl = document.getElementById("modeStat");
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -125,124 +148,47 @@ const sun = new THREE.DirectionalLight(0xffffff, 0.9);
 sun.position.set(9, 12, 6);
 scene.add(sun);
 
-const ROOM = {
-  minX: -8.0,
-  maxX: 6.0,
-  minZ: -6.0,
-  maxZ: 4.0,
-  floorY: 0.0,
-};
+const ROOM_LAYOUT_URL = `${import.meta.env.BASE_URL}mvp/room-layout.json`;
+const DEFAULT_ROOM_LAYOUT_URL = `${import.meta.env.BASE_URL}mvp/default-room-layout.json`;
 
-const desk = {
-  pos: new THREE.Vector3(-2.4, 0, -2.6),
-  sizeX: 3.1,
-  sizeZ: 1.8,
-  topY: 1.08,
-  approach: new THREE.Vector3(-0.8, 0, -1.8),
-  perch: new THREE.Vector3(-1.9, 0, -2.3),
-  // Keep cup near edge so a swipe reliably sends it off the desk.
-  cup: new THREE.Vector3(-0.98, 0, -2.22),
-};
+async function loadGameRoomLayout() {
+  const builtInFallback = createDefaultRoomLayout(THREE);
+  try {
+    const response = await fetch(ROOM_LAYOUT_URL, { cache: "no-store" });
+    if (!response.ok) throw new Error(`room-layout HTTP ${response.status}`);
+    const data = await response.json();
+    return createRoomLayoutFromData(THREE, data);
+  } catch (error) {
+    try {
+      const response = await fetch(DEFAULT_ROOM_LAYOUT_URL, { cache: "no-store" });
+      if (!response.ok) throw new Error(`default-room-layout HTTP ${response.status}`);
+      const data = await response.json();
+      return createRoomLayoutFromData(THREE, data);
+    } catch (defaultError) {
+      console.warn("Failed to load room layout JSON, using built-in default layout.", error, defaultError);
+      return builtInFallback;
+    }
+  }
+}
 
-const chair = {
-  pos: new THREE.Vector3(0.45, 0, -1.65),
-  sizeX: 0.92,
-  sizeZ: 0.86,
-  seatY: 0.68,
-  seatThickness: 0.08,
-  legHalfX: 0.05,
-  legHalfZ: 0.05,
-  legInsetX: 0.31,
-  legInsetZ: 0.28,
-  backHeight: 0.82,
-  backThickness: 0.08,
-};
-
-const shelf = {
-  pos: new THREE.Vector3(-2.70, 0, -5.40),
-  width: 2.35,
-  depth: 0.92,
-  postHalf: 0.045,
-  surfaceY: 1.22,
-  boardThickness: 0.09,
-};
-
-const hoverShelf = {
-  id: "hoverShelf",
-  // Pulled closer to desk span while shifting away from the cup side.
-  pos: new THREE.Vector3(0.10, 0, -3.05),
-  width: 1.25,
-  depth: 0.9,
-  // Keep this much higher so floor->hoverShelf jump links are invalid.
-  surfaceY: desk.topY * 2,
-  thickness: 0.08,
-};
-
-const lowerPlatform = {
-  id: "lowerPlatform",
-  // Aligned with hoverShelf on X so the jump probes have a clean direct connection.
-  pos: new THREE.Vector3(hoverShelf.pos.x, 0, -3.95),
-  width: 0.95,
-  depth: 0.72,
-  surfaceY: hoverShelf.surfaceY,
-  thickness: 0.08,
-};
-
-const upperPlatform = {
-  id: "upperPlatform",
-  // Keep it aligned on X, place it at a fixed Z, and only moderately above lowerPlatform.
-  pos: new THREE.Vector3(
-    lowerPlatform.pos.x,
-    0,
-    -4.70
-  ),
-  width: lowerPlatform.width,
-  depth: lowerPlatform.depth,
-  surfaceY: lowerPlatform.surfaceY + 0.6,
-  thickness: lowerPlatform.thickness,
-};
-
-const windowSill = {
-  id: "windowSill",
-  // To the right of shelf, slightly above it.
-  pos: new THREE.Vector3(-1.15, 0, -5.51),
-  width: 1.18,
-  depth: 0.78,
-  thickness: 0.06,
-  surfaceY: shelf.surfaceY + 0.24,
-  wallZ: -5.98,
-  windowWidth: 1.24,
-  windowHeight: 0.94,
-  openingCenterY: shelf.surfaceY + 0.66,
-  openDuration: 20,
-  sitPoint: new THREE.Vector3(-1.15, 0, -5.51),
-  outsideYaw: Math.PI,
-};
-
-const hamper = {
-  pos: new THREE.Vector3(-5.8, 0, 2.4),
-  outerHalfX: 0.48,
-  outerHalfZ: 0.48,
-  halfX: 0.45,
-  halfZ: 0.45,
-  openingHalfX: 0.34,
-  openingHalfZ: 0.34,
-  rimY: 0.92,
-  sinkY: 0.2,
-};
-
-const trashCan = {
-  pos: new THREE.Vector3(2.6, 0, 2.4),
-  outerRadius: 0.52,
-  radius: 0.5,
-  openingRadius: 0.42,
-  rimY: 0.62,
-  sinkY: 0.14,
-  modelWidthScale: 1.2,
-};
+const roomLayout = await loadGameRoomLayout();
+const ROOM = roomLayout.roomBounds;
+const TARGET_BOUNDS = roomLayout.targetBounds;
+const {
+  floor,
+  desk,
+  chair,
+  shelf,
+  hoverShelf,
+  lowerPlatform,
+  upperPlatform,
+  windowSill,
+  hamper,
+  trashCan,
+} = roomLayout;
 
 const game = {
-  state: "menu", // playing | lost | won
+  state: "menu", // menu | playing | lost | won
   timeScale: 1.0,
   endlessMode: false,
   reason: "",
@@ -416,25 +362,9 @@ catModelRuntime.loadCatModel(cat);
 const cup = makeCup({ THREE, desk, CUP_COLLISION });
 scene.add(cup.group);
 
-makeRoomCorner(scene, {
-  windowOpening: {
-    centerX: windowSill.pos.x,
-    centerY: windowSill.openingCenterY,
-    width: windowSill.windowWidth + 0.04,
-    height: windowSill.windowHeight + 0.04,
-  },
-});
-makeDesk(scene, desk);
-makeChair(scene, chair);
-makeShelf(scene, shelf);
-makeHoverShelf(scene, hoverShelf);
-makePlatform(scene, lowerPlatform);
-makePlatform(scene, upperPlatform);
-const windowSillRuntime = makeWindowSill(scene, windowSill);
-makeBins({
+const { windowSillRuntime } = buildRoomSceneFromLayout({
   scene,
-  hamper,
-  trashCan,
+  layout: roomLayout,
   binVisuals,
   gltfLoader,
   trashCanModelCandidates: TRASH_CAN_MODEL_CANDIDATES,
@@ -448,6 +378,7 @@ catnipBtn.addEventListener("click", () => {
 if (windowBtn) {
   windowBtn.addEventListener("click", () => {
     if (game.state !== "playing") return;
+    if (windowSill?.specialFlags?.windowOpensOnButtonClick === false) return;
     if (clockTime < game.windowOpenUntil) return;
     game.placeCatnipMode = false;
     game.windowOpenUntil = clockTime + windowSill.openDuration;
@@ -455,28 +386,22 @@ if (windowBtn) {
 }
 
 restartBtn.addEventListener("click", () => {
-
   game.state = "menu";
-
   requestAnimationFrame(() => {
     resetGame();
     game.state = "playing";
   });
-
 });
 if (modeBtnEl) {
-    modeBtnEl.addEventListener("click", () => {
-
+  modeBtnEl.addEventListener("click", () => {
     game.state = "menu";
-
     game.endlessMode = !game.endlessMode;
-
     requestAnimationFrame(() => {
       resetGame();
       game.state = "playing";
     });
-  }
-)};
+  });
+}
 if (debugBtnEl) {
   debugBtnEl.addEventListener("click", () => toggleDebugView());
 }
@@ -486,157 +411,8 @@ renderer.domElement.addEventListener("contextmenu", onCanvasContextMenu);
 window.addEventListener("pointermove", onPointerMove);
 window.addEventListener("pointerup", onPointerUp);
 
-const SURFACE_SPECS = [
-  {
-    id: "desk",
-    name: "desk",
-    minX: desk.pos.x - desk.sizeX * 0.5,
-    maxX: desk.pos.x + desk.sizeX * 0.5,
-    minZ: desk.pos.z - desk.sizeZ * 0.5,
-    maxZ: desk.pos.z + desk.sizeZ * 0.5,
-    y: desk.topY + 0.02,
-    flags: {
-      randomPatrol: true,
-      manualPatrol: true,
-      allowCatnip: true,
-    },
-    special: { type: "desk", cupLoss: true },
-    supports: [
-      { x: desk.pos.x - 1.45, z: desk.pos.z - 0.8, hx: 0.13, hz: 0.13, topY: 1.02, mode: "soft", navPad: 0.03, steerPad: 0.01, collisionPad: 0 },
-      { x: desk.pos.x + 1.45, z: desk.pos.z - 0.8, hx: 0.13, hz: 0.13, topY: 1.02, mode: "soft", navPad: 0.03, steerPad: 0.01, collisionPad: 0 },
-      { x: desk.pos.x - 1.45, z: desk.pos.z + 0.8, hx: 0.13, hz: 0.13, topY: 1.02, mode: "soft", navPad: 0.03, steerPad: 0.01, collisionPad: 0 },
-      { x: desk.pos.x + 1.45, z: desk.pos.z + 0.8, hx: 0.13, hz: 0.13, topY: 1.02, mode: "soft", navPad: 0.03, steerPad: 0.01, collisionPad: 0 },
-    ],
-  },
-  {
-    id: "chair",
-    name: "chair",
-    minX: chair.pos.x - chair.sizeX * 0.5,
-    maxX: chair.pos.x + chair.sizeX * 0.5,
-    minZ: chair.pos.z - chair.sizeZ * 0.5,
-    maxZ: chair.pos.z + chair.sizeZ * 0.5,
-    y: chair.seatY + 0.02,
-    flags: {
-      randomPatrol: false,
-      manualPatrol: true,
-      allowCatnip: true,
-    },
-    supports: [
-      { x: chair.pos.x - chair.legInsetX, z: chair.pos.z - chair.legInsetZ, hx: chair.legHalfX + 0.03, hz: chair.legHalfZ + 0.03, topY: chair.seatY - chair.seatThickness, mode: "soft", navPad: 0.03, steerPad: 0.01, collisionPad: 0 },
-      { x: chair.pos.x + chair.legInsetX, z: chair.pos.z - chair.legInsetZ, hx: chair.legHalfX + 0.03, hz: chair.legHalfZ + 0.03, topY: chair.seatY - chair.seatThickness, mode: "soft", navPad: 0.03, steerPad: 0.01, collisionPad: 0 },
-      { x: chair.pos.x - chair.legInsetX, z: chair.pos.z + chair.legInsetZ, hx: chair.legHalfX + 0.03, hz: chair.legHalfZ + 0.03, topY: chair.seatY - chair.seatThickness, mode: "soft", navPad: 0.03, steerPad: 0.01, collisionPad: 0 },
-      { x: chair.pos.x + chair.legInsetX, z: chair.pos.z + chair.legInsetZ, hx: chair.legHalfX + 0.03, hz: chair.legHalfZ + 0.03, topY: chair.seatY - chair.seatThickness, mode: "soft", navPad: 0.03, steerPad: 0.01, collisionPad: 0 },
-    ],
-    blockers: [
-      {
-        kind: "box",
-        x: chair.pos.x,
-        z: chair.pos.z - chair.sizeZ * 0.5 + chair.backThickness * 0.5,
-        hx: chair.sizeX * 0.5 + 0.02,
-        hz: chair.backThickness * 0.5 + 0.02,
-        y: chair.seatY + chair.backHeight * 0.5 - chair.seatThickness * 0.5,
-        h: chair.backHeight + 0.04,
-        navPad: 0.02,
-      },
-    ],
-  },
-  {
-    id: "shelf",
-    name: "shelf",
-    minX: shelf.pos.x - shelf.width * 0.5,
-    maxX: shelf.pos.x + shelf.width * 0.5,
-    minZ: shelf.pos.z - shelf.depth * 0.5,
-    maxZ: shelf.pos.z + shelf.depth * 0.5,
-    y: shelf.surfaceY + 0.02,
-    flags: {
-      randomPatrol: false,
-      manualPatrol: true,
-      allowCatnip: true,
-    },
-    supports: (() => {
-      const insetX = shelf.width * 0.5 - shelf.postHalf;
-      const insetZ = shelf.depth * 0.5 - shelf.postHalf;
-      return [
-        { x: shelf.pos.x - insetX, z: shelf.pos.z - insetZ, hx: shelf.postHalf + 0.02, hz: shelf.postHalf + 0.02, topY: shelf.surfaceY - shelf.boardThickness, mode: "soft", navPad: 0.02, steerPad: 0.01, collisionPad: 0 },
-        { x: shelf.pos.x + insetX, z: shelf.pos.z - insetZ, hx: shelf.postHalf + 0.02, hz: shelf.postHalf + 0.02, topY: shelf.surfaceY - shelf.boardThickness, mode: "soft", navPad: 0.02, steerPad: 0.01, collisionPad: 0 },
-        { x: shelf.pos.x - insetX, z: shelf.pos.z + insetZ, hx: shelf.postHalf + 0.02, hz: shelf.postHalf + 0.02, topY: shelf.surfaceY - shelf.boardThickness, mode: "soft", navPad: 0.02, steerPad: 0.01, collisionPad: 0 },
-        { x: shelf.pos.x + insetX, z: shelf.pos.z + insetZ, hx: shelf.postHalf + 0.02, hz: shelf.postHalf + 0.02, topY: shelf.surfaceY - shelf.boardThickness, mode: "soft", navPad: 0.02, steerPad: 0.01, collisionPad: 0 },
-      ];
-    })(),
-    blockers: [
-      {
-        kind: "box",
-        x: shelf.pos.x,
-        z: shelf.pos.z - shelf.depth * 0.5 + 0.02,
-        hx: shelf.width * 0.5 + 0.02,
-        hz: 0.04,
-        y: (shelf.surfaceY + 0.2) * 0.5 - shelf.boardThickness * 0.5,
-        h: shelf.surfaceY - 0.2 + 0.12,
-        navPad: 0.02,
-      },
-    ],
-  },
-  {
-    id: hoverShelf.id,
-    name: hoverShelf.id,
-    minX: hoverShelf.pos.x - hoverShelf.width * 0.5,
-    maxX: hoverShelf.pos.x + hoverShelf.width * 0.5,
-    minZ: hoverShelf.pos.z - hoverShelf.depth * 0.5,
-    maxZ: hoverShelf.pos.z + hoverShelf.depth * 0.5,
-    y: hoverShelf.surfaceY + 0.02,
-    flags: {
-      randomPatrol: false,
-      manualPatrol: true,
-      allowCatnip: true,
-    },
-    special: { type: "platform" },
-  },
-  {
-    id: lowerPlatform.id,
-    name: lowerPlatform.id,
-    minX: lowerPlatform.pos.x - lowerPlatform.width * 0.5,
-    maxX: lowerPlatform.pos.x + lowerPlatform.width * 0.5,
-    minZ: lowerPlatform.pos.z - lowerPlatform.depth * 0.5,
-    maxZ: lowerPlatform.pos.z + lowerPlatform.depth * 0.5,
-    y: lowerPlatform.surfaceY + 0.02,
-    flags: {
-      randomPatrol: false,
-      manualPatrol: true,
-      allowCatnip: true,
-    },
-    special: { type: "platform" },
-  },
-  {
-    id: upperPlatform.id,
-    name: upperPlatform.id,
-    minX: upperPlatform.pos.x - upperPlatform.width * 0.5,
-    maxX: upperPlatform.pos.x + upperPlatform.width * 0.5,
-    minZ: upperPlatform.pos.z - upperPlatform.depth * 0.5,
-    maxZ: upperPlatform.pos.z + upperPlatform.depth * 0.5,
-    y: upperPlatform.surfaceY + 0.02,
-    flags: {
-      randomPatrol: false,
-      manualPatrol: true,
-      allowCatnip: true,
-    },
-    special: { type: "platform" },
-  },
-  {
-    id: windowSill.id,
-    name: windowSill.id,
-    minX: windowSill.pos.x - windowSill.width * 0.5,
-    maxX: windowSill.pos.x + windowSill.width * 0.5,
-    minZ: windowSill.pos.z - windowSill.depth * 0.5,
-    maxZ: windowSill.pos.z + windowSill.depth * 0.5,
-    y: windowSill.surfaceY + 0.02,
-    flags: {
-      randomPatrol: false,
-      manualPatrol: true,
-      allowCatnip: true,
-    },
-    special: { type: "windowSill", windowTarget: true },
-  },
-];
+const SURFACE_SPECS = buildRoomSurfaceSpecs(roomLayout);
+const FLOOR_SURFACE_SPEC = buildFloorSurfaceSpec(roomLayout);
 
 const surfaceRegistry = createSurfaceRegistry({
   floorBounds: {
@@ -646,64 +422,22 @@ const surfaceRegistry = createSurfaceRegistry({
     maxZ: ROOM.maxZ - CAT_NAV.margin,
   },
   floorY: ROOM.floorY,
+  floorSpec: FLOOR_SURFACE_SPEC,
   surfaceSpecs: SURFACE_SPECS,
 });
 
-const TARGET_BOUNDS = {
-  minX: -5.2,
-  maxX: 1.5,
-  minZ: -4.9,
-  maxZ: 1.7,
-  minY: 0.8,
-  maxY: 3.2,
-};
+const roomDerived = buildRoomDerivedData(roomLayout);
+const DESK_LEGS = roomDerived.deskLegs;
 
-const DESK_LEGS = [
-  { x: desk.pos.x - 1.45, z: desk.pos.z - 0.8, halfX: 0.1, halfZ: 0.1, topY: 1.02 },
-  { x: desk.pos.x + 1.45, z: desk.pos.z - 0.8, halfX: 0.1, halfZ: 0.1, topY: 1.02 },
-  { x: desk.pos.x - 1.45, z: desk.pos.z + 0.8, halfX: 0.1, halfZ: 0.1, topY: 1.02 },
-  { x: desk.pos.x + 1.45, z: desk.pos.z + 0.8, halfX: 0.1, halfZ: 0.1, topY: 1.02 },
+const EXTRA_NAV_OBSTACLES = [
+  ...surfaceRegistry.buildNavObstacles(),
+  ...(roomDerived.extraNavObstacles || []),
 ];
 
-const CHAIR_LEGS = [
-  { x: chair.pos.x - chair.legInsetX, z: chair.pos.z - chair.legInsetZ, halfX: chair.legHalfX, halfZ: chair.legHalfZ, topY: chair.seatY - chair.seatThickness },
-  { x: chair.pos.x + chair.legInsetX, z: chair.pos.z - chair.legInsetZ, halfX: chair.legHalfX, halfZ: chair.legHalfZ, topY: chair.seatY - chair.seatThickness },
-  { x: chair.pos.x - chair.legInsetX, z: chair.pos.z + chair.legInsetZ, halfX: chair.legHalfX, halfZ: chair.legHalfZ, topY: chair.seatY - chair.seatThickness },
-  { x: chair.pos.x + chair.legInsetX, z: chair.pos.z + chair.legInsetZ, halfX: chair.legHalfX, halfZ: chair.legHalfZ, topY: chair.seatY - chair.seatThickness },
+const EXTRA_STATIC_BOXES = [
+  ...surfaceRegistry.buildStaticBoxes(),
+  ...(roomDerived.extraStaticBoxes || []),
 ];
-
-const CHAIR_BACK_COLLIDER = {
-  x: chair.pos.x,
-  z: chair.pos.z - chair.sizeZ * 0.5 + chair.backThickness * 0.5,
-  halfX: chair.sizeX * 0.5,
-  halfZ: chair.backThickness * 0.5,
-  y: chair.seatY + chair.backHeight * 0.5 - chair.seatThickness * 0.5,
-  h: chair.backHeight,
-};
-
-const SHELF_POSTS = (() => {
-  const insetX = shelf.width * 0.5 - shelf.postHalf;
-  const insetZ = shelf.depth * 0.5 - shelf.postHalf;
-  return [
-    { x: shelf.pos.x - insetX, z: shelf.pos.z - insetZ, halfX: shelf.postHalf, halfZ: shelf.postHalf, topY: shelf.surfaceY - shelf.boardThickness },
-    { x: shelf.pos.x + insetX, z: shelf.pos.z - insetZ, halfX: shelf.postHalf, halfZ: shelf.postHalf, topY: shelf.surfaceY - shelf.boardThickness },
-    { x: shelf.pos.x - insetX, z: shelf.pos.z + insetZ, halfX: shelf.postHalf, halfZ: shelf.postHalf, topY: shelf.surfaceY - shelf.boardThickness },
-    { x: shelf.pos.x + insetX, z: shelf.pos.z + insetZ, halfX: shelf.postHalf, halfZ: shelf.postHalf, topY: shelf.surfaceY - shelf.boardThickness },
-  ];
-})();
-
-const SHELF_BACK_COLLIDER = {
-  x: shelf.pos.x,
-  z: shelf.pos.z - shelf.depth * 0.5 + 0.02,
-  halfX: shelf.width * 0.5,
-  halfZ: 0.02,
-  y: (shelf.surfaceY + 0.2) * 0.5 - shelf.boardThickness * 0.5,
-  h: shelf.surfaceY - 0.2 + 0.08,
-};
-
-const EXTRA_NAV_OBSTACLES = surfaceRegistry.buildNavObstacles();
-
-const EXTRA_STATIC_BOXES = surfaceRegistry.buildStaticBoxes();
 
 const pickupsRuntime = createPickupsRuntime({
   THREE,
@@ -944,6 +678,7 @@ const uiRuntime = createUIRuntime({
   game,
   cat,
   cup,
+  windowSill,
   endMenuEl,
   endTitleEl,
   getClockTime: () => clockTime,
@@ -1209,7 +944,6 @@ function resetGame() {
   windowSillRuntime.setOpenAmount(0);
 
   cupRuntime.resetCup();
-
   cupRuntime.clearShatter();
   pickupsRuntime.resetInteraction();
   pickupsRuntime.clearAllPickups();
@@ -1242,13 +976,15 @@ function resetGame() {
 
   cat.pos.copy(catSpawn);
   cat.group.position.set(cat.pos.x, 0, cat.pos.z);
+  cat.group.visible = true;
+  cup.group.visible = true;
   cat.group.rotation.set(0, Math.random() * Math.PI * 2, 0);
   cat.state = "patrol";
   cat.lastState = "patrol";
   cat.stateT = 0;
   cat.status = "Patrolling";
-    cat.debugMoveActive = false;
-    cat.debugMoveSurfaceId = "floor";
+  cat.debugMoveActive = false;
+  cat.debugMoveSurfaceId = "floor";
   cat.debugMoveFinalSurfaceId = "floor";
   cat.debugMoveY = 0;
   cat.debugMoveFinalY = 0;
@@ -1636,7 +1372,15 @@ function win() {
 function updateUI() {
   uiRuntime.updateUI();
   if (modeStatEl) modeStatEl.textContent = game.endlessMode ? "Endless" : "Casual";
-  if (modeBtnEl) modeBtnEl.textContent = game.endlessMode ? "Switch To Casual" : "Switch To Endless";
+  if (modeBtnEl) {
+    modeBtnEl.textContent = game.endlessMode ? "Switch To Casual" : "Switch To Endless";
+    modeBtnEl.style.display = "";
+  }
+  if (catnipBtn) catnipBtn.style.display = "";
+  if (windowBtn) windowBtn.style.display = "";
+  if (messMeterWrapEl) messMeterWrapEl.style.display = "";
+  if (restartBtn) restartBtn.textContent = "Restart";
+  if (resultEl) resultEl.textContent = "";
   updateMessMeter();
 }
 

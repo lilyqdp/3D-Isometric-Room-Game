@@ -166,7 +166,7 @@ export function createCupRuntime(ctx) {
       cup.bodyInWorld = false;
     }
     spawnCupShatter(cup.group.position.x, cup.group.position.z);
-    if (game.pendingLoseAt == null) {
+    if (desk?.specialFlags?.allowCupLoseCondition !== false && game.pendingLoseAt == null) {
       game.pendingLoseAt = getClockTime() + 1.0;
       game.reason = "The glass cup hit a surface and shattered.";
     }

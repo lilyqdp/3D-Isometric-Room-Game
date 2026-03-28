@@ -10,6 +10,7 @@ export function createUIRuntime(ctx) {
     game,
     cat,
     cup,
+    windowSill,
     getClockTime,
     endMenuEl,
     endTitleEl,
@@ -37,7 +38,9 @@ export function createUIRuntime(ctx) {
     }
 
     if (windowStatEl) {
-      if (clockTime < (game.windowOpenUntil || 0)) {
+      if (windowSill?.specialFlags?.windowOpensOnButtonClick === false) {
+        windowStatEl.textContent = "Disabled";
+      } else if (clockTime < (game.windowOpenUntil || 0)) {
         windowStatEl.textContent = `Open (${Math.max(0, Math.ceil(game.windowOpenUntil - clockTime))}s)`;
       } else {
         windowStatEl.textContent = "Closed";
@@ -45,8 +48,9 @@ export function createUIRuntime(ctx) {
     }
     if (windowBtnEl) {
       const active = clockTime < (game.windowOpenUntil || 0);
-      windowBtnEl.textContent = active ? "Window Open" : "Open Window";
-      windowBtnEl.disabled = active;
+      const enabled = windowSill?.specialFlags?.windowOpensOnButtonClick !== false;
+      windowBtnEl.textContent = !enabled ? "Window Disabled" : active ? "Window Open" : "Open Window";
+      windowBtnEl.disabled = active || !enabled;
     }
 
     if (game.state === "lost") {

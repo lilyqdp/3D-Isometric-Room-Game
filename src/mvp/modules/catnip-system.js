@@ -1,4 +1,5 @@
 import { catHasNonFloorSurface, isFloorSurfaceId, normalizeSurfaceId } from "./surface-ids.js";
+import { clampPointToSurfaceXZ, getSurfaceEdgeDistance, getSurfacePlanarGap } from "./surface-shapes.js";
 
 export function createCatnipRuntime(ctx) {
   const {
@@ -143,26 +144,12 @@ export function createCatnipRuntime(ctx) {
       bestScore = Infinity;
       for (const s of defs) {
         if (!s) continue;
-        const sx0 = Number(s.minX);
-        const sx1 = Number(s.maxX);
-        const sz0 = Number(s.minZ);
-        const sz1 = Number(s.maxZ);
         const sy = Number(s.y);
-        if (![sx0, sx1, sz0, sz1, sy].every(Number.isFinite)) continue;
-        const inside =
-          x >= sx0 - strictPad &&
-          x <= sx1 + strictPad &&
-          z >= sz0 - strictPad &&
-          z <= sz1 + strictPad;
-        if (!inside) continue;
+        if (!Number.isFinite(sy)) continue;
+        if (getSurfacePlanarGap(s, x, z, 0) > strictPad) continue;
         const dy = Math.abs(sy - y);
         if (dy > maxDy) continue;
-        const edgeDist = Math.min(
-          Math.abs(x - sx0),
-          Math.abs(x - sx1),
-          Math.abs(z - sz0),
-          Math.abs(z - sz1)
-        );
+        const edgeDist = Math.max(0, getSurfaceEdgeDistance(s, x, z, 0));
         const surfaceId = String(s.id || s.name || "");
         const preferredBias = preferredSurfaceId && surfaceId === String(preferredSurfaceId) ? -0.08 : 0;
         const score = dy + Math.max(0, 0.22 - edgeDist) * 0.2 + preferredBias;
@@ -179,10 +166,7 @@ export function createCatnipRuntime(ctx) {
   function isNearNonFloorSurface(x, z, y, surface, pad = 0.28, yPad = 0.7) {
     if (!surface) return false;
     return (
-      x >= surface.minX - pad &&
-      x <= surface.maxX + pad &&
-      z >= surface.minZ - pad &&
-      z <= surface.maxZ + pad &&
+      getSurfacePlanarGap(surface, x, z, 0) <= pad &&
       Math.abs((surface.y || 0) - y) <= yPad
     );
   }
@@ -195,21 +179,15 @@ export function createCatnipRuntime(ctx) {
     let bestScore = Infinity;
     for (const s of defs) {
       if (!s) continue;
-      const sx0 = Number(s.minX);
-      const sx1 = Number(s.maxX);
-      const sz0 = Number(s.minZ);
-      const sz1 = Number(s.maxZ);
       const sy = Number(s.y);
-      if (![sx0, sx1, sz0, sz1, sy].every(Number.isFinite)) continue;
-
-      const dx = x < sx0 ? sx0 - x : x > sx1 ? x - sx1 : 0;
-      const dz = z < sz0 ? sz0 - z : z > sz1 ? z - sz1 : 0;
+      if (!Number.isFinite(sy)) continue;
+      const planarGap = getSurfacePlanarGap(s, x, z, 0);
       const dy = Math.abs(sy - y);
       if (dy > 1.15) continue;
 
       const surfaceId = String(s.id || s.name || "");
       const preferredBias = preferredSurfaceId && surfaceId === String(preferredSurfaceId) ? -0.18 : 0;
-      const score = dx * 1.25 + dz * 1.25 + dy * 1.8 + preferredBias;
+      const score = planarGap * 1.8 + dy * 1.8 + preferredBias;
       if (score < bestScore) {
         bestScore = score;
         best = s;
@@ -221,9 +199,10 @@ export function createCatnipRuntime(ctx) {
   function clampToNonFloorSurface(surfaceId, x, z, edgePad = 0.16) {
     const surface = getNonFloorSurfaceById(surfaceId);
     if (!surface) return null;
+    const clamped = clampPointToSurfaceXZ(surface, x, z, edgePad);
     return {
-      x: THREE.MathUtils.clamp(x, surface.minX + edgePad, surface.maxX - edgePad),
-      z: THREE.MathUtils.clamp(z, surface.minZ + edgePad, surface.maxZ - edgePad),
+      x: clamped.x,
+      z: clamped.z,
       surface,
     };
   }
@@ -231,12 +210,7 @@ export function createCatnipRuntime(ctx) {
   function isInsideNonFloorSurface(surfaceId, x, z, edgePad = 0.18) {
     const surface = getNonFloorSurfaceById(surfaceId);
     if (!surface) return false;
-    return (
-      x >= surface.minX + edgePad &&
-      x <= surface.maxX - edgePad &&
-      z >= surface.minZ + edgePad &&
-      z <= surface.maxZ - edgePad
-    );
+    return getSurfacePlanarGap(surface, x, z, edgePad) <= 1e-6;
   }
 
   function getCurrentCatSurfaceId() {
