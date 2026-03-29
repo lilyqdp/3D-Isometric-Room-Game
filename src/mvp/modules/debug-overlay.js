@@ -2606,6 +2606,55 @@ export function createDebugOverlayRuntime(ctx) {
     return appended;
   }
 
+  function getPlannedPathTarget(route = null) {
+    if (route?.active) {
+      const finalTarget = route.finalTarget || route.target || cat.nav?.debugDestination || null;
+      if (finalTarget && Number.isFinite(finalTarget.x) && Number.isFinite(finalTarget.z)) {
+        const fallbackY = getSurfaceY(route.finalSurfaceId || route.surfaceId || "floor", cat.group.position.y);
+        return cloneRoutePoint(finalTarget, fallbackY);
+      }
+    }
+    const target = cat.nav?.debugDestination || null;
+    if (target && Number.isFinite(target.x) && Number.isFinite(target.z)) {
+      return cloneRoutePoint(target, cat.group.position.y);
+    }
+    return null;
+  }
+
+  function normalizePlannedPath(points, target = null) {
+    if (!Array.isArray(points) || points.length < 2) return points;
+    const normalized = [];
+    const sameXZTol = 0.012;
+    const finalTarget = target && Number.isFinite(target.x) && Number.isFinite(target.z) ? target : null;
+
+    for (const point of points) {
+      if (!point) continue;
+      const p = point.clone ? point.clone() : new THREE.Vector3(point.x, point.y, point.z);
+      const prev = normalized[normalized.length - 1];
+      if (
+        prev &&
+        Math.abs(prev.x - p.x) <= sameXZTol &&
+        Math.abs(prev.z - p.z) <= sameXZTol
+      ) {
+        // Avoid drawing "teleport poles" where the path repeats the same X/Z with only Y changing.
+        prev.y = p.y;
+        continue;
+      }
+      normalized.push(p);
+    }
+
+    if (finalTarget && normalized.length > 0) {
+      const last = normalized[normalized.length - 1];
+      const dx = last.x - finalTarget.x;
+      const dz = last.z - finalTarget.z;
+      if (dx * dx + dz * dz > 0.08 * 0.08) {
+        normalized.push(new THREE.Vector3(finalTarget.x, liftedY(getVecY(finalTarget, last.y - PATH_LIFT)), finalTarget.z));
+      }
+    }
+
+    return normalized.length >= 2 ? normalized : points;
+  }
+
   function buildPlannedPath() {
     const points = [];
     const route = cat.nav?.route || null;
@@ -2615,29 +2664,29 @@ export function createDebugOverlayRuntime(ctx) {
       const jumpToY = Number.isFinite(cat.jump.toY) ? cat.jump.toY : cat.group.position.y;
       appendActiveJumpPath(points, cat.jump, 16);
       if (appendRemainingRouteSegments(points, route, new THREE.Vector3(jumpTo.x, jumpToY, jumpTo.z))) {
-        return points;
+        return normalizePlannedPath(points, getPlannedPathTarget(route));
       }
       const target = cat.nav?.debugDestination;
       if (target && Number.isFinite(target.x) && Number.isFinite(target.z)) {
         appendSurfaceLine(points, new THREE.Vector3(jumpTo.x, jumpToY, jumpTo.z), target, getVecY(target, jumpToY));
       }
-      return points;
+      return normalizePlannedPath(points, getPlannedPathTarget(route));
     }
 
     const startPoint = new THREE.Vector3(cat.pos.x, cat.group.position.y, cat.pos.z);
     pushPathPoint(points, startPoint.x, liftedY(startPoint.y), startPoint.z);
 
     if (route?.active && appendRemainingRouteSegments(points, route, startPoint)) {
-      return points;
+      return normalizePlannedPath(points, getPlannedPathTarget(route));
     }
 
-    if (appendGroundNavPath(points)) return points;
+    if (appendGroundNavPath(points)) return normalizePlannedPath(points, getPlannedPathTarget(route));
 
     const target = cat.nav?.debugDestination;
     if (target && Number.isFinite(target.x) && Number.isFinite(target.z)) {
       appendSurfaceLine(points, startPoint, target, getVecY(target, startPoint.y));
     }
-    return points;
+    return normalizePlannedPath(points, getPlannedPathTarget(route));
   }
 
   function buildPathKey() {
