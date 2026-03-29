@@ -531,6 +531,9 @@ export function createDebugControlsRuntime(ctx) {
   }
 
   function moveCatToDebugClickTarget() {
+    const windowRouteActive =
+      !!cat.nav?.windowHoldActive || Number(getClockTime?.() || 0) < Number(game.windowOpenUntil || 0);
+    if (game.catnip || game.placeCatnipMode || windowRouteActive) return false;
     if (cat.jump || (!catHasNonFloorSurface(cat) && cat.group.position.y > 0.08)) return false;
     const target = getMouseDebugSurfaceTarget();
     if (!target) return false;

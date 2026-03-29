@@ -885,8 +885,22 @@ export function createDebugOverlayRuntime(ctx) {
     const navAnimSpecialClip = cat.nav?.animSpecialClip;
     const activeSpecialClip = cat.clipSpecialAction?.getClip?.()?.name;
     const activeAnyClip = cat.activeClipAction?.getClip?.()?.name;
+    const specialAction = cat.clipSpecialAction || null;
+    const specialClipDur = specialAction?.getClip?.()?.duration || 0;
+    const specialClipTime = specialAction?.time || 0;
+    const specialClipWeight =
+      typeof specialAction?.getEffectiveWeight === "function"
+        ? specialAction.getEffectiveWeight()
+        : 0;
+    const activeClipWeight =
+      typeof cat.activeClipAction?.getEffectiveWeight === "function"
+        ? cat.activeClipAction.getEffectiveWeight()
+        : 0;
     lines.push(
       `anim specialState=${navAnimSpecialState || cat.clipSpecialState || "none"} specialClip=${navAnimSpecialClip || activeSpecialClip || activeAnyClip || "none"}`
+    );
+    lines.push(
+      `anim specialTime=${formatNum(specialClipTime, 3)}/${formatNum(specialClipDur, 3)} weight=${formatNum(specialClipWeight, 3)} activeWeight=${formatNum(activeClipWeight, 3)} activeClip=${activeAnyClip || "none"}`
     );
     lines.push(`pos=(${formatNum(cat.pos.x, 2)}, ${formatNum(cat.group.position.y, 2)}, ${formatNum(cat.pos.z, 2)}) surface=${getCatSurfaceId(cat)}`);
     const lastPathDebug = typeof ctx.getLastAStarDebugData === "function" ? ctx.getLastAStarDebugData() : null;

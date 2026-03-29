@@ -1816,8 +1816,9 @@ export function createCatPathfindingRuntime(ctx) {
   }
 
   function getActiveNavMeshDebugData() {
-    // Always resolve against current obstacles so debug reflects live navmesh changes.
-    return getNavMeshDebugData(activeNavMeshMode.includePickups, activeNavMeshMode.includeClosePickups);
+    // Always resolve against current dynamic pickup obstacles so the debug navmesh
+    // matches the live floor cutouts users see around settled clutter.
+    return getNavMeshDebugData(true, true);
   }
 
   function findTriangleForPoint(point, navMesh, obstacles, clearance, queryY = 0) {

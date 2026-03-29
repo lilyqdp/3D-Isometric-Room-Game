@@ -629,6 +629,9 @@ const debugControlsRuntime = createDebugControlsRuntime({
   getDebugRoot: () => debugRuntime.root,
   queueSharedDebugRouteRequest: (request) => {
     if (!cat.nav || typeof cat.nav !== "object") cat.nav = {};
+    const windowRouteActive =
+      !!cat.nav?.windowHoldActive || clockTime < Number(game.windowOpenUntil || 0);
+    if (game.catnip || game.placeCatnipMode || windowRouteActive) return false;
     const finalPoint = request?.finalPoint;
     if (!finalPoint) return false;
     cat.nav.pendingSharedRouteRequest = {
@@ -1348,6 +1351,7 @@ function updateCat(dt) {
       knockCup,
       sampleSwipePose: navRuntime.sampleSwipePose,
       resetCatUnstuckTracking,
+      clearCatClipSpecialPose: catModelRuntime.clearCatClipSpecialPose,
       setCatClipSpecialPose: catModelRuntime.setCatClipSpecialPose,
       updateCatClipLocomotion: catModelRuntime.updateCatClipLocomotion,
       setBonePose: catModelRuntime.setBonePose,

@@ -392,6 +392,11 @@ export function createCatSteeringRuntime(ctx) {
     if (turnTier === 1) desired = `turn45${sideKey}`;
     else if (turnTier === 2) desired = `turn90${sideKey}`;
 
+    if (!preferRun && prev === "runF" && desired === "walkF") {
+      cat.nav.locomotionHoldT = 0;
+      return desired;
+    }
+
     const hold = Number.isFinite(cat.nav.locomotionHoldT) ? cat.nav.locomotionHoldT : 0;
     const holdThreshold = Math.max(0.04, Number.isFinite(CAT_NAV.locomotionSwitchHold) ? CAT_NAV.locomotionSwitchHold : 0.12);
     if (desired !== prev) {
@@ -466,9 +471,25 @@ export function createCatSteeringRuntime(ctx) {
       (cat.nav.noSteerFrames || 0) > 1 ||
       (cat.nav.stuckT || 0) > 0.1 ||
       (Number(cat.nav?.debugStep?.overlapDynamic) || 0) > 0.03;
+    const activeRoute = cat.nav?.route;
+    const activeSegment =
+      activeRoute &&
+      Array.isArray(activeRoute.segments) &&
+      Number.isFinite(activeRoute.segmentIndex)
+        ? activeRoute.segments[activeRoute.segmentIndex] || null
+        : null;
+    const approachingJumpPoint =
+      activeRoute?.active &&
+      (activeSegment?.kind === "jump-up-approach" || activeSegment?.kind === "jump-down-approach");
+    const nearJumpPoint =
+      approachingJumpPoint &&
+      (
+        (Number.isFinite(distToChase) && distToChase <= 1.0) ||
+        (Number.isFinite(distToTarget) && distToTarget <= 1.0)
+      );
     const closeTargetThreshold = Math.max(0.46, disableDist + 0.08);
     const closeToTarget = Number.isFinite(distToTarget) && distToTarget <= closeTargetThreshold;
-    if (unstable || closeToTarget || Math.abs(rawYawDelta) > maxYawDelta) {
+    if (unstable || closeToTarget || nearJumpPoint || Math.abs(rawYawDelta) > maxYawDelta) {
       cat.nav.runLocomotionActive = false;
       return false;
     }
@@ -481,6 +502,14 @@ export function createCatSteeringRuntime(ctx) {
     const allowRun = metric >= threshold;
     cat.nav.runLocomotionActive = allowRun;
     return allowRun;
+  }
+
+  function shouldPreferWalkNearEndpoint(distToChase, distToTarget) {
+    const endpointMetric = Math.min(
+      Number.isFinite(distToChase) ? distToChase : Infinity,
+      Number.isFinite(distToTarget) ? distToTarget : Infinity
+    );
+    return endpointMetric <= 0.42 || (Number.isFinite(distToTarget) && distToTarget <= 0.5);
   }
 
   function getSharedProgressThreshold(step) {
@@ -557,8 +586,15 @@ export function createCatSteeringRuntime(ctx) {
     now,
     allowRun = true,
   }) {
+    const nearEndpoint = shouldPreferWalkNearEndpoint(distToChase, distToTarget);
     const runActive = allowRun
-      ? shouldUseRunLocomotion(preferRun, distToChase, distToTarget, rawYawDelta, now)
+      ? shouldUseRunLocomotion(
+          preferRun && !nearEndpoint,
+          distToChase,
+          distToTarget,
+          rawYawDelta,
+          now
+        )
       : false;
     const locomotionClip = chooseGroundLocomotion(rawYawDelta, dt, runActive);
     const turnOnly = locomotionClip.startsWith("turn");
@@ -1629,8 +1665,12 @@ export function createCatSteeringRuntime(ctx) {
           Math.atan2(crowdTarget.x - cat.pos.x, crowdTarget.z - cat.pos.z),
           cat.group.rotation.y
         );
+        const nearCrowdEndpoint = shouldPreferWalkNearEndpoint(
+          cat.pos.distanceTo(crowdTarget),
+          cat.pos.distanceTo(tempTo)
+        );
         const runForCrowd = shouldUseRunLocomotion(
-          preferRun,
+          preferRun && !nearCrowdEndpoint,
           cat.pos.distanceTo(crowdTarget),
           cat.pos.distanceTo(tempTo),
           crowdYaw,
@@ -1698,7 +1738,7 @@ export function createCatSteeringRuntime(ctx) {
             if (velLen > 0.08 && stepLen > 0.02) yawTarget = Math.atan2(vel.x, vel.z);
             const rawYaw = angleDelta(yawTarget, cat.group.rotation.y);
             const runForLocomotion = shouldUseRunLocomotion(
-              preferRun,
+              preferRun && !nearCrowdEndpoint,
               cat.pos.distanceTo(crowdTarget),
               cat.pos.distanceTo(target),
               rawYaw,
