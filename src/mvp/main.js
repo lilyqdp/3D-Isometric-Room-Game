@@ -1077,6 +1077,7 @@ function resetGame() {
   cat.nav.jumpDownPlanAt = 0;
   cat.nav.jumpDownPlanValid = false;
   cat.nav.jumpDownNoMoveT = 0;
+  cat.nav.jumpDownLinkId = "";
   cat.nav.jumpDownLandingSurfaceId = null;
   cat.nav.jumpDownDebug = {};
   resetCatJumpBypass();

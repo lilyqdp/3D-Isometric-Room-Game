@@ -749,6 +749,7 @@ export function updateCatStateMachineRuntime(ctx, dt) {
   function clearNavRoute(source = "") {
     const route = ensureNavRoute();
     route.active = false;
+    cat.nav.jumpDownLinkId = "";
     route.source = source ? String(source) : "";
     route.surfaceId = FLOOR_SURFACE_ID;
     route.finalSurfaceId = FLOOR_SURFACE_ID;
@@ -2260,7 +2261,14 @@ export function updateCatStateMachineRuntime(ctx, dt) {
         });
         const dropDx = route.jumpOff.x - cat.pos.x;
         const dropDz = route.jumpOff.z - cat.pos.z;
+        const distToDrop = Math.hypot(dropDx, dropDz);
         const nearDrop = dropDx * dropDx + dropDz * dropDz < 0.16 * 0.16;
+        const commanded = Number.isFinite(cat.nav?.commandedSpeed) ? cat.nav.commandedSpeed : 0;
+        const actual = Number.isFinite(cat.nav?.lastSpeed) ? cat.nav.lastSpeed : 0;
+        const stalledWhileNear = distToDrop < 0.28 && commanded > 0.12 && actual < 0.01;
+        cat.nav.jumpDownNoMoveT = stalledWhileNear
+          ? (Number.isFinite(cat.nav.jumpDownNoMoveT) ? cat.nav.jumpDownNoMoveT : 0) + stepDt
+          : 0;
         const readyToDrop = reachedJumpOff || (nearDrop && cat.stateT > 0.16);
         cat.status = routeTargetsNonFloorSurface(route) ? "Repositioning" : "Preparing jump down";
         animateCatPose(stepDt, !readyToDrop);

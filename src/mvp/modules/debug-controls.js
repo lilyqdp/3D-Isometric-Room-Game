@@ -460,10 +460,16 @@ export function createDebugControlsRuntime(ctx) {
 
   function updateDebugJumpDownPlan(towardGroundPoint = null, force = false, desiredLandingSurfaceId = null) {
     if (!cat.nav.jumpDownDebug || typeof cat.nav.jumpDownDebug !== "object") cat.nav.jumpDownDebug = {};
+    const currentJumpDownLinkId = String(cat.nav.jumpDownLinkId || "");
+    const shouldRetryAlternateLink =
+      !force &&
+      currentJumpDownLinkId &&
+      Number(cat.nav.jumpDownNoMoveT || 0) > 0.12;
     if (!force) {
       const off = cat.debugMoveJumpOff;
       const down = cat.debugMoveJumpDown;
       if (
+        !shouldRetryAlternateLink &&
         Number.isFinite(off?.x) &&
         Number.isFinite(off?.z) &&
         Number.isFinite(down?.x) &&
@@ -501,7 +507,8 @@ export function createDebugControlsRuntime(ctx) {
           surfaceId,
           fromTopPoint,
           towardGroundPoint,
-          desiredLandingSurfaceId
+          desiredLandingSurfaceId,
+          shouldRetryAlternateLink ? { excludeLinkIds: [currentJumpDownLinkId] } : null
         )
       : navRuntime.computeDeskJumpDownTargets(fromTopPoint, towardGroundPoint);
     if (!plan) {
@@ -512,6 +519,7 @@ export function createDebugControlsRuntime(ctx) {
     const resolvedLandingSurfaceId = normalizeSurfaceId(
       plan.landingSurfaceId || desiredLandingSurfaceId || cat.nav.jumpDownLandingSurfaceId || FLOOR_SURFACE_ID
     );
+    cat.nav.jumpDownLinkId = String(plan.linkId || "");
     cat.nav.jumpDownLandingSurfaceId = resolvedLandingSurfaceId;
     cat.nav.jumpDownDebug.planDesiredLandingSurfaceId = resolvedLandingSurfaceId;
     cat.debugMoveJumpOff.copy(plan.top);
