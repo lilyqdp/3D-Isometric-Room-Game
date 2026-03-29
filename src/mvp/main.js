@@ -974,6 +974,8 @@ function resetGame() {
     getSurfaceIdsByCapability,
     addPickup: pickupsRuntime.addPickup,
   });
+  navRuntime.invalidateNavCaches();
+  navRuntime.getActiveNavMeshDebugData();
   game.total = pickups.length;
   game.mess = pickups.length * ENDLESS_SPAWN.messPerItem;
 

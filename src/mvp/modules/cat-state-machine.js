@@ -235,21 +235,19 @@ export function updateCatStateMachineRuntime(ctx, dt) {
       cat.state = "toCup";
       return true;
     }
-    if (!isFloorSurfaceId(currentSurfaceId)) {
-      clearCatJumpTargets();
-      const queued = requestSharedMoveRoute("desk", swipePlan.point, 0, {
-        source: "cup",
-        forceReplan: true,
-      });
-      if (queued) {
-        cat.state = "patrol";
-        cat.phaseT = 0;
-        cat.status = "Approaching cup";
-        return true;
-      }
+    clearCatJumpTargets();
+    const queued = requestSharedMoveRoute("desk", swipePlan.point, 0, {
+      source: "cup",
+      forceReplan: true,
+      preserveExactTarget: true,
+    });
+    if (queued) {
+      cat.state = "patrol";
+      cat.phaseT = 0;
+      cat.status = "Approaching cup";
+      return true;
     }
 
-    clearCatJumpTargets();
     cat.state = "toDesk";
     return true;
   }
@@ -1303,11 +1301,20 @@ export function updateCatStateMachineRuntime(ctx, dt) {
     const requestedSurfaceId = getMoveTargetSurfaceId(target);
     const targetsNonFloorSurface = isNonFloorSurfaceId(requestedSurfaceId);
     const surfaceTargetId = targetsNonFloorSurface ? requestedSurfaceId : FLOOR_SURFACE_ID;
+    const preserveExactTarget = !!target?.exactTarget;
     const rawMovePoint = targetsNonFloorSurface
       ? new THREE.Vector3(target.point.x, Number(target.point?.y || 0.02), target.point.z)
       : (target?.floorPoint || target?.point || pickRandomPatrolPoint(cat.pos)).clone();
     const movePoint = targetsNonFloorSurface
-      ? chooseBestSurfaceTargetCandidate(surfaceTargetId, rawMovePoint, target?.sourceSurfaceId || getCurrentCatSurfaceId()) || rawMovePoint
+      ? (
+          preserveExactTarget
+            ? (clampPointToSurfaceSupport(surfaceTargetId, rawMovePoint, 0.05) || rawMovePoint)
+            : (chooseBestSurfaceTargetCandidate(
+                surfaceTargetId,
+                rawMovePoint,
+                target?.sourceSurfaceId || getCurrentCatSurfaceId()
+              ) || rawMovePoint)
+        )
       : rawMovePoint;
     recordRoutePlannerEvent("route-queue-target", {
       nonFloorSurface: targetsNonFloorSurface ? 1 : 0,
@@ -1602,6 +1609,7 @@ export function updateCatStateMachineRuntime(ctx, dt) {
       `src=${sourceSurfaceId || "na"} dst=${String(finalSurfaceId)} target=${Number(finalPoint.x).toFixed(2)},${Number(finalPoint.z).toFixed(2)}`
     );
     const forceReplan = !!(opts && opts.forceReplan);
+    const preserveExactTarget = !!(opts && opts.preserveExactTarget);
     if (!forceReplan && hasMatchingActiveRoute(finalSurfaceId, finalPoint)) {
       recordRoutePlannerEvent("route-plan-skip-existing", {
         finalSurfaceId: String(finalSurfaceId),
@@ -1634,7 +1642,9 @@ export function updateCatStateMachineRuntime(ctx, dt) {
         : Math.max(0.02, Number(finalPoint.y || sourceY || 0.02)),
       finalPoint.z
     );
-    const clampedFinalPoint = chooseBestSurfaceTargetCandidate(finalSurfaceId, rawFinalPoint, sourceSurfaceId) || rawFinalPoint;
+    const clampedFinalPoint = preserveExactTarget
+      ? rawFinalPoint.clone()
+      : (chooseBestSurfaceTargetCandidate(finalSurfaceId, rawFinalPoint, sourceSurfaceId) || rawFinalPoint);
     const finalRoutePoint = makeRoutePointForSurface(finalSurfaceId, clampedFinalPoint) || clampedFinalPoint.clone();
     finalRoutePoint.y =
       finalSurfaceId === FLOOR_SURFACE_ID
@@ -1660,6 +1670,7 @@ export function updateCatStateMachineRuntime(ctx, dt) {
           point: new THREE.Vector3(targetPoint.x, targetY, targetPoint.z),
           finalSurfaceId,
           finalPoint: new THREE.Vector3(targetPoint.x, targetY, targetPoint.z),
+          exactTarget: preserveExactTarget,
           directJump: false,
           sourceSurfaceId,
           source: routeSource,
@@ -1841,6 +1852,7 @@ export function updateCatStateMachineRuntime(ctx, dt) {
           point: hopPoint,
           finalSurfaceId,
           finalPoint: finalRoutePoint.clone(),
+          exactTarget: preserveExactTarget && hopSurfaceId === finalSurfaceId,
           jumpAnchor,
           jumpLanding: jumpTargets.top,
           directJump: sourceSurfaceId !== FLOOR_SURFACE_ID,
@@ -3137,6 +3149,7 @@ export function updateCatStateMachineRuntime(ctx, dt) {
 
       if (cupActive) {
         const swipePlan = computeCupSwipePlan(THREE, desk, cup.group.position, cupSwipePoint, cupSwipeEdgeDir);
+        cat.nav.debugDestination.set(swipePlan.point.x, desk.topY + 0.02, swipePlan.point.z);
         const toCupX = cup.group.position.x - cat.pos.x;
         const toCupZ = cup.group.position.z - cat.pos.z;
         const cupDist2 = toCupX * toCupX + toCupZ * toCupZ;

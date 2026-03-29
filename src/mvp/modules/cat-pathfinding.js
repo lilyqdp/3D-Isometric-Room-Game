@@ -2380,6 +2380,45 @@ export function createCatPathfindingRuntime(ctx) {
     await ensureRecastInitialized();
   }
 
+  function invalidateNavCaches() {
+    destroyCrowdState();
+
+    if (navMeshCache.static) {
+      try { if (navMeshCache.static.tileCache) navMeshCache.static.tileCache.destroy(); } catch {}
+      try { navMeshCache.static.navQuery?.destroy(); } catch {}
+      try { navMeshCache.static.navMesh?.destroy(); } catch {}
+    }
+    if (navMeshCache.dynamic && navMeshCache.dynamic !== navMeshCache.static) {
+      try { if (navMeshCache.dynamic.tileCache) navMeshCache.dynamic.tileCache.destroy(); } catch {}
+      try { navMeshCache.dynamic.navQuery?.destroy(); } catch {}
+      try { navMeshCache.dynamic.navMesh?.destroy(); } catch {}
+    }
+    navMeshCache.static = null;
+    navMeshCache.dynamic = null;
+    navMeshCache.active = null;
+
+    obstacleBuildCache.clear();
+    triangleNavMeshCache.clear();
+    pathFamilyCache.clear();
+    pathSolveCache.clear();
+    reachabilityCache.clear();
+    nearestWalkableCache.clear();
+
+    dynamicObstacleSnapshot.at = -1e9;
+    dynamicObstacleSnapshot.includePickups = false;
+    dynamicObstacleSnapshot.includeClosePickups = false;
+    dynamicObstacleSnapshot.signature = "";
+
+    lastPlannedSignature.static = "";
+    lastPlannedSignature.dynamic = "";
+    lastAStarDebug.mode = "none";
+    lastAStarDebug.start = null;
+    lastAStarDebug.goal = null;
+    lastAStarDebug.edges = [];
+    lastAStarDebug.finalPath = [];
+    lastAStarDebug.timestamp = 0;
+  }
+
   function getLastAStarDebugData() {
     return {
       mode: lastAStarDebug.mode,
@@ -2408,5 +2447,6 @@ export function createCatPathfindingRuntime(ctx) {
     ensureCatPathNoFallback,
     stepDetourCrowdToward,
     resetDetourCrowd: destroyCrowdState,
+    invalidateNavCaches,
   };
 }

@@ -111,6 +111,10 @@ export function createCatNavigationRuntime(ctx) {
     return pathRuntime.ensureCatPathNoFallback(target, force, useDynamic, queryY);
   }
 
+  function invalidateNavCaches() {
+    return pathRuntime.invalidateNavCaches();
+  }
+
   function stepDetourCrowdToward(target, dt, useDynamicPlan = true, desiredSpeed = null) {
     return pathRuntime.stepDetourCrowdToward(target, dt, useDynamicPlan, desiredSpeed);
   }
@@ -208,6 +212,7 @@ export function createCatNavigationRuntime(ctx) {
     canReachGroundTarget,
     ensureCatPath,
     ensureCatPathNoFallback,
+    invalidateNavCaches,
     stepDetourCrowdToward,
     resetDetourCrowd,
     findSurfacePath: jumpRuntime.findSurfacePath,
