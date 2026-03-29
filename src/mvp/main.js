@@ -1451,7 +1451,7 @@ function simulateStep(stepDt, perfSample = null) {
       lose(game.reason || "A desk item hit the floor.");
       game.pendingLoseAt = null;
     }
-    if (game.endlessMode && game.mess > ENDLESS_SPAWN.loseThreshold) {
+    if (game.endlessMode && game.mess >= ENDLESS_SPAWN.loseThreshold) {
       lose("Mess meter overflowed.");
     }
   }
