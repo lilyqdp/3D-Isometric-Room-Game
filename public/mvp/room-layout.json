@@ -504,6 +504,71 @@
       },
       "surface": null,
       "visible": true
+    },
+    {
+      "id": "bed",
+      "type": "bed",
+      "pos": { "x": 3.0, "y": 0, "z": -3.5 },
+      "width": 2.0,
+      "depth": 3.4,
+      "rotQuarterTurns": 0,
+      "editorLocked": false,
+      "tint": "",
+      "specialFlags": {},
+      "surface": null,
+      "visible": true
+    },
+    {
+      "id": "bedsideTable",
+      "type": "bedsideTable",
+      "pos": { "x": 3.0, "y": 0, "z": -1.6 },
+      "rotQuarterTurns": 0,
+      "editorLocked": false,
+      "tint": "",
+      "specialFlags": {},
+      "surface": null,
+      "visible": true
+    },
+    {
+      "id": "rug",
+      "type": "rug",
+      "pos": { "x": -1.5, "y": 0.035, "z": 0.5 },
+      "width": 2.2,
+      "depth": 3.2,
+      "rotQuarterTurns": 0,
+      "editorLocked": false,
+      "tint": "",
+      "specialFlags": {},
+      "surface": null,
+      "visible": true
+    },
+    {
+      "id": "wardrobe",
+      "type": "wardrobe",
+      "pos": { "x": -6.0, "y": 0, "z": -2.0 },
+      "width": 1.7,
+      "height": 2.2,
+      "depth": 0.55,
+      "rotQuarterTurns": 1,
+      "editorLocked": false,
+      "tint": "",
+      "specialFlags": {},
+      "surface": null,
+      "visible": true
+    }
+    ,{
+      "id": "bookcase",
+      "type": "bookcase",
+      "pos": { "x": -5.5, "y": 0, "z": -5.2 },
+      "width": 1.1,
+      "height": 1.8,
+      "depth": 0.38,
+      "rotQuarterTurns": 0,
+      "editorLocked": false,
+      "tint": "",
+      "specialFlags": {},
+      "surface": null,
+      "visible": true
     }
   ]
 }

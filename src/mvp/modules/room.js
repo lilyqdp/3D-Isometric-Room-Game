@@ -422,6 +422,274 @@ export function makeDesk(scene, desk) {
   scene.add(group);
 }
 
+export function makeBed(scene, bed) {
+  const group = new THREE.Group();
+  group.position.copy(bed.pos);
+  group.rotation.y = (bed.rotQuarterTurns || 0) * Math.PI * 0.5;
+
+  // Frame
+  const frameMat = new THREE.MeshStandardMaterial({ color: 0x7a5c3a, roughness: 0.82 });
+  const frame = new THREE.Mesh(new THREE.BoxGeometry(bed.width, 0.18, bed.depth), frameMat);
+  frame.position.set(0, 0.09, 0);
+  group.add(frame);
+
+  // Mattress
+  const mattressMat = new THREE.MeshStandardMaterial({ color: 0xf0e6d8, roughness: 0.9 });
+  const mattress = new THREE.Mesh(new THREE.BoxGeometry(bed.width - 0.1, 0.22, bed.depth - 0.1), mattressMat);
+  mattress.position.set(0, 0.29, 0);
+  group.add(mattress);
+
+  // Blanket (covers lower 2/3 of mattress)
+  const blanketMat = new THREE.MeshStandardMaterial({ color: 0x7a9cbf, roughness: 0.95 });
+  const blanket = new THREE.Mesh(new THREE.BoxGeometry(bed.width - 0.12, 0.07, bed.depth * 0.68), blanketMat);
+  blanket.position.set(0, 0.415, bed.depth * 0.16);
+  group.add(blanket);
+
+  // Pillow
+  const pillowMat = new THREE.MeshStandardMaterial({ color: 0xfaf0e6, roughness: 0.88 });
+  const pillow = new THREE.Mesh(new THREE.BoxGeometry(bed.width * 0.55, 0.1, 0.38), pillowMat);
+  pillow.position.set(0, 0.41, -(bed.depth * 0.5 - 0.28));
+  group.add(pillow);
+
+  // Headboard
+  const headboardMat = new THREE.MeshStandardMaterial({ color: 0x6b4f30, roughness: 0.78 });
+  const headboard = new THREE.Mesh(new THREE.BoxGeometry(bed.width, 0.72, 0.1), headboardMat);
+  headboard.position.set(0, 0.54, -(bed.depth * 0.5 + 0.05));
+  group.add(headboard);
+
+  tagRoomObject(group, bed);
+  scene.add(group);
+}
+export function makeBedsideTable(scene, table) {
+  const group = new THREE.Group();
+  group.position.copy(table.pos);
+
+  // Main body
+  const bodyMat = new THREE.MeshStandardMaterial({ color: 0x8a6240, roughness: 0.8 });
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.58, 0.42), bodyMat);
+  body.position.set(0, 0.29, 0);
+  group.add(body);
+
+  // Table top
+  const topMat = new THREE.MeshStandardMaterial({ color: 0x9e7250, roughness: 0.72 });
+  const top = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.05, 0.48), topMat);
+  top.position.set(0, 0.605, 0);
+  group.add(top);
+
+  // Small drawer line
+  const drawerMat = new THREE.MeshStandardMaterial({ color: 0x7a5535, roughness: 0.85 });
+  const drawer = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.12, 0.02), drawerMat);
+  drawer.position.set(0, 0.32, 0.22);
+  group.add(drawer);
+
+  // Drawer handle
+  const handleMat = new THREE.MeshStandardMaterial({ color: 0xc8a870, roughness: 0.5, metalness: 0.3 });
+  const handle = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.025, 0.025), handleMat);
+  handle.position.set(0, 0.32, 0.235);
+  group.add(handle);
+
+  tagRoomObject(group, table);
+  scene.add(group);
+}
+export function makeRug(scene, rug) {
+  const group = new THREE.Group();
+  group.position.copy(rug.pos);
+  group.position.y = 0.055;
+
+  const w = rug.width || 2.2;
+  const d = rug.depth || 3.2;
+
+  // Base — deep navy
+  const base = new THREE.Mesh(
+    new THREE.BoxGeometry(w, 0.018, d),
+    new THREE.MeshStandardMaterial({ color: 0x0b3d6b, roughness: 0.95 })
+  );
+  group.add(base);
+
+  // Middle band — medium blue
+  const mid = new THREE.Mesh(
+    new THREE.BoxGeometry(w * 0.78, 0.019, d * 0.78),
+    new THREE.MeshStandardMaterial({ color: 0x3182bd, roughness: 0.93 })
+  );
+  group.add(mid);
+
+  // Inner band — steel blue
+  const inner = new THREE.Mesh(
+    new THREE.BoxGeometry(w * 0.56, 0.02, d * 0.56),
+    new THREE.MeshStandardMaterial({ color: 0x6baed6, roughness: 0.92 })
+  );
+  group.add(inner);
+
+  // Center — light blue
+  const center = new THREE.Mesh(
+    new THREE.BoxGeometry(w * 0.34, 0.021, d * 0.34),
+    new THREE.MeshStandardMaterial({ color: 0x9ecae1, roughness: 0.9 })
+  );
+  group.add(center);
+
+  // Cross stripes horizontal — white
+  const stripeMatW = new THREE.MeshStandardMaterial({ color: 0xeff3ff, roughness: 0.9 });
+  const stripeH = new THREE.Mesh(new THREE.BoxGeometry(w * 0.76, 0.022, d * 0.06), stripeMatW);
+  group.add(stripeH);
+
+  // Cross stripes vertical — white
+  const stripeV = new THREE.Mesh(new THREE.BoxGeometry(w * 0.06, 0.022, d * 0.76), stripeMatW);
+  group.add(stripeV);
+
+  // Corner dots — dark navy accents
+  const dotMat = new THREE.MeshStandardMaterial({ color: 0x08519c, roughness: 0.88 });
+  const dotPositions = [
+    [ w * 0.28,  d * 0.28],
+    [-w * 0.28,  d * 0.28],
+    [ w * 0.28, -d * 0.28],
+    [-w * 0.28, -d * 0.28],
+  ];
+  for (const [dx, dz] of dotPositions) {
+    const dot = new THREE.Mesh(new THREE.BoxGeometry(w * 0.09, 0.023, d * 0.09), dotMat);
+    dot.position.set(dx, 0, dz);
+    group.add(dot);
+  }
+
+  tagRoomObject(group, rug);
+  scene.add(group);
+}
+export function makeWardrobe(scene, wardrobe) {
+  const group = new THREE.Group();
+  group.position.copy(wardrobe.pos);
+  group.rotation.y = (wardrobe.rotQuarterTurns || 0) * Math.PI * 0.5;
+
+  const w = wardrobe.width || 1.7;
+  const h = wardrobe.height || 2.2;
+  const d = wardrobe.depth || 0.55;
+
+  const darkWood = new THREE.MeshStandardMaterial({ color: 0x5f5347, roughness: 0.82 });
+  const midWood  = new THREE.MeshStandardMaterial({ color: 0x7a6352, roughness: 0.78 });
+  const lightWood = new THREE.MeshStandardMaterial({ color: 0x9e8060, roughness: 0.72 });
+  const handleMat = new THREE.MeshStandardMaterial({ color: 0xc8a870, roughness: 0.4, metalness: 0.5 });
+
+  // Main body
+  const body = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), darkWood);
+  body.position.set(0, h * 0.5, 0);
+  group.add(body);
+
+  // Cornice step 1 — slightly wider and shallower
+  const cornice1 = new THREE.Mesh(new THREE.BoxGeometry(w + 0.06, 0.1, d + 0.04), midWood);
+  cornice1.position.set(0, h + 0.05, 0);
+  group.add(cornice1);
+
+  // Cornice step 2 — even wider, thin cap
+  const cornice2 = new THREE.Mesh(new THREE.BoxGeometry(w + 0.12, 0.06, d + 0.08), lightWood);
+  cornice2.position.set(0, h + 0.13, 0);
+  group.add(cornice2);
+
+  // Cornice step 3 — narrow top ridge
+  const cornice3 = new THREE.Mesh(new THREE.BoxGeometry(w + 0.04, 0.08, d + 0.02), darkWood);
+  cornice3.position.set(0, h + 0.21, 0);
+  group.add(cornice3);
+
+  // Door divider (center vertical line)
+  const divider = new THREE.Mesh(new THREE.BoxGeometry(0.04, h - 0.1, 0.03), midWood);
+  divider.position.set(0, h * 0.5, d * 0.5 + 0.01);
+  group.add(divider);
+
+  // Left door panel
+  const leftPanel = new THREE.Mesh(new THREE.BoxGeometry(w * 0.46, h * 0.72, 0.025), midWood);
+  leftPanel.position.set(-w * 0.25, h * 0.5, d * 0.5 + 0.01);
+  group.add(leftPanel);
+
+  // Right door panel
+  const rightPanel = new THREE.Mesh(new THREE.BoxGeometry(w * 0.46, h * 0.72, 0.025), midWood);
+  rightPanel.position.set(w * 0.25, h * 0.5, d * 0.5 + 0.01);
+  group.add(rightPanel);
+
+  // Left handle
+  const leftHandle = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.18, 0.04), handleMat);
+  leftHandle.position.set(-w * 0.08, h * 0.5, d * 0.5 + 0.03);
+  group.add(leftHandle);
+
+  // Right handle
+  const rightHandle = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.18, 0.04), handleMat);
+  rightHandle.position.set(w * 0.08, h * 0.5, d * 0.5 + 0.03);
+  group.add(rightHandle);
+
+  // Base plinth
+  const plinth = new THREE.Mesh(new THREE.BoxGeometry(w + 0.04, 0.1, d + 0.02), darkWood);
+  plinth.position.set(0, 0.05, 0);
+  group.add(plinth);
+
+  tagRoomObject(group, wardrobe);
+  scene.add(group);
+}
+export function makeBookcase(scene, bookcase) {
+  const group = new THREE.Group();
+  group.position.copy(bookcase.pos);
+  group.rotation.y = (bookcase.rotQuarterTurns || 0) * Math.PI * 0.5;
+
+  const w = bookcase.width || 1.1;
+  const h = bookcase.height || 1.8;
+  const d = bookcase.depth || 0.38;
+
+  const frameMat = new THREE.MeshStandardMaterial({ color: 0xc49a6c, roughness: 0.8 });
+  const shelfMat = new THREE.MeshStandardMaterial({ color: 0xd4aa7d, roughness: 0.75 });
+
+  // Back panel
+  const back = new THREE.Mesh(new THREE.BoxGeometry(w, h, 0.03), frameMat);
+  back.position.set(0, h * 0.5, -d * 0.5 + 0.015);
+  group.add(back);
+
+  // Left side
+  const left = new THREE.Mesh(new THREE.BoxGeometry(0.05, h, d), frameMat);
+  left.position.set(-w * 0.5 + 0.025, h * 0.5, 0);
+  group.add(left);
+
+  // Right side
+  const right = new THREE.Mesh(new THREE.BoxGeometry(0.05, h, d), frameMat);
+  right.position.set(w * 0.5 - 0.025, h * 0.5, 0);
+  group.add(right);
+
+  // Bottom
+  const bottom = new THREE.Mesh(new THREE.BoxGeometry(w, 0.05, d), frameMat);
+  bottom.position.set(0, 0.025, 0);
+  group.add(bottom);
+
+  // Top
+  const top = new THREE.Mesh(new THREE.BoxGeometry(w + 0.04, 0.05, d + 0.03), shelfMat);
+  top.position.set(0, h + 0.025, 0);
+  group.add(top);
+
+  // 3 shelves
+  const shelfYs = [h * 0.28, h * 0.54, h * 0.78];
+  for (const sy of shelfYs) {
+    const shelf = new THREE.Mesh(new THREE.BoxGeometry(w - 0.05, 0.04, d), shelfMat);
+    shelf.position.set(0, sy, 0);
+    group.add(shelf);
+  }
+
+  // Books — each shelf gets a row of varied colored spines
+  const bookColors = [
+    0x3182bd, 0x9ecae1, 0x08519c, 0xc6e5f5,
+    0x6baed6, 0x2c6e9e, 0xeff3ff, 0x4a90c4,
+  ];
+  const shelfBookYs = [h * 0.14, h * 0.41, h * 0.66];
+  for (const by of shelfBookYs) {
+    let curX = -w * 0.44;
+    let i = Math.floor(Math.random() * bookColors.length);
+    while (curX < w * 0.4) {
+      const bw = 0.055 + (i % 3) * 0.018;
+      const bh = 0.18 + (i % 4) * 0.04;
+      const bookMat = new THREE.MeshStandardMaterial({ color: bookColors[i % bookColors.length], roughness: 0.85 });
+      const book = new THREE.Mesh(new THREE.BoxGeometry(bw, bh, d * 0.72), bookMat);
+      book.position.set(curX + bw * 0.5, by + bh * 0.5, 0);
+      group.add(book);
+      curX += bw + 0.008;
+      i++;
+    }
+  }
+
+  tagRoomObject(group, bookcase);
+  scene.add(group);
+}
+
 export function makeChair(scene, chair) {
   const seatMat = makeTintedStandardMaterial(0x544a41, { roughness: 0.82 }, chair);
   const legMat = makeTintedStandardMaterial(0x39332d, { roughness: 0.84 }, chair);
@@ -1057,6 +1325,21 @@ export function buildRoomSceneFromLayout({
   for (const object of objects) {
     if (!object?.type) continue;
     switch (object.type) {
+      case "bed":
+        makeBed(scene, object);
+        break;
+      case "bedsideTable":
+        makeBedsideTable(scene, object);
+        break;
+      case "rug":
+        makeRug(scene, object);
+        break;
+      case "wardrobe":
+        makeWardrobe(scene, object);
+        break;
+      case "bookcase":
+        makeBookcase(scene, object);
+        break;
       case "desk":
         makeDesk(scene, object);
         break;
