@@ -885,15 +885,39 @@ export function createDebugOverlayRuntime(ctx) {
     const navAnimSpecialClip = cat.nav?.animSpecialClip;
     const activeSpecialClip = cat.clipSpecialAction?.getClip?.()?.name;
     const activeAnyClip = cat.activeClipAction?.getClip?.()?.name;
+    const specialAction = cat.clipSpecialAction || null;
+    const specialClipDur = specialAction?.getClip?.()?.duration || 0;
+    const specialClipTime = specialAction?.time || 0;
+    const specialClipWeight =
+      typeof specialAction?.getEffectiveWeight === "function"
+        ? specialAction.getEffectiveWeight()
+        : 0;
+    const activeClipWeight =
+      typeof cat.activeClipAction?.getEffectiveWeight === "function"
+        ? cat.activeClipAction.getEffectiveWeight()
+        : 0;
     lines.push(
       `anim specialState=${navAnimSpecialState || cat.clipSpecialState || "none"} specialClip=${navAnimSpecialClip || activeSpecialClip || activeAnyClip || "none"}`
     );
+    lines.push(
+      `anim specialTime=${formatNum(specialClipTime, 3)}/${formatNum(specialClipDur, 3)} weight=${formatNum(specialClipWeight, 3)} activeWeight=${formatNum(activeClipWeight, 3)} activeClip=${activeAnyClip || "none"}`
+    );
     lines.push(`pos=(${formatNum(cat.pos.x, 2)}, ${formatNum(cat.group.position.y, 2)}, ${formatNum(cat.pos.z, 2)}) surface=${getCatSurfaceId(cat)}`);
+    const lastPathDebug = typeof ctx.getLastAStarDebugData === "function" ? ctx.getLastAStarDebugData() : null;
+    const nextWaypoint = Array.isArray(cat.nav?.path) && cat.nav.path.length > 1
+      ? cat.nav.path[Math.min(Math.max(cat.nav.index || 1, 1), cat.nav.path.length - 1)]
+      : null;
     lines.push(`path len=${cat.nav?.path?.length || 0} idx=${cat.nav?.index || 0} stuckT=${formatNum(cat.nav?.stuckT || 0, 3)} repathAt=${formatNum((cat.nav?.repathAt || 0) - clockTime, 2)}s`);
+    lines.push(`path mode=${lastPathDebug?.mode || "na"} bypass=${cat.nav?.dynamicBypassActive ? "y" : "n"} bypassFails=${cat.nav?.dynamicBypassFailCount || 0} next=(${formatNum(nextWaypoint?.x, 2)}, ${formatNum(nextWaypoint?.z, 2)})`);
     lines.push(`step reason=${step.reason || "na"} phase=${step.phase || "na"} direct=${step.direct ? "y" : "n"} dynIgnore=${step.ignoreDynamic ? "y" : "n"} turnOnly=${step.turnOnly ? "y" : "n"} turnOnlyT=${formatNum(step.turnOnlyT || 0, 2)} noSteerFrames=${step.noSteerFrames || 0} segBlockedFrames=${cat.nav?.segmentBlockedFrames || 0} staleInvalidFrames=${cat.nav?.staleInvalidFrames || 0}`);
     lines.push(`target=(${formatNum(step.targetX, 2)}, ${formatNum(step.targetZ, 2)}) chase=(${formatNum(step.chaseX, 2)}, ${formatNum(step.chaseZ, 2)}) d=${formatNum(step.distToChase || 0, 3)}`);
     lines.push(`yawDelta=${formatNum(step.rawYawDelta || 0, 3)} overlapDynamic=${formatNum(step.overlapDynamic || 0, 3)} overlapStatic=${formatNum(step.overlapStatic || 0, 3)} blockedPosS=${step.posBlockedStatic ? "y" : "n"} blockedPosD=${step.posBlockedDynamic ? "y" : "n"} speed=${formatNum(cat.nav?.lastSpeed || 0, 3)} cmd=${formatNum(cat.nav?.commandedSpeed || 0, 3)}`);
+    lines.push(`clip=${step.locomotionClip || "na"} directRejectTarget=${step.directRejectTargetObstacle || "none"} directRejectLine=${step.directRejectLineObstacle || "none"}`);
+    lines.push(`crowd state=${step.crowdState || "na"} vel=${formatNum(step.crowdVelLen ?? step.crowdSpeed ?? 0, 3)} step=${formatNum(step.crowdStepLen || 0, 3)} drift=${formatNum(step.crowdDrift || 0, 3)} distGoal=${formatNum(step.crowdDistToGoal || 0, 3)} req=(${formatNum(step.crowdReqX, 2)}, ${formatNum(step.crowdReqZ, 2)})`);
+    lines.push(`crowd flags changed=${step.crowdTargetChanged ? "y" : "n"} recreated=${step.crowdRecreated ? "y" : "n"} teleported=${step.crowdTeleported ? "y" : "n"} age=${formatNum(step.crowdLastRequestAge || 0, 2)}s agent=(${formatNum(step.crowdAgentX, 2)}, ${formatNum(step.crowdAgentZ, 2)}) dt=${formatNum(step.crowdStepDt || 0, 3)}`);
     lines.push(`segmentBlock obstacle=${step.blockedObstacle || "none"} kind=${step.blockedObstacleKind || "na"} at=(${formatNum(step.blockedAtX, 2)}, ${formatNum(step.blockedAtZ, 2)})`);
+    lines.push(`groundDiag posS=${step.posStaticObstacle || "none"} posD=${step.posDynamicObstacle || "none"} targetS=${step.targetStaticObstacle || "none"} targetD=${step.targetDynamicObstacle || "none"}`);
+    lines.push(`groundDiag lineS=${step.lineStaticObstacle || "none"} lineD=${step.lineDynamicObstacle || "none"} softPos=${step.softPosObstacle || "none"}(${formatNum(step.softPosScore || 0, 2)}) softTarget=${step.softTargetObstacle || "none"}(${formatNum(step.softTargetScore || 0, 2)})`);
     if (jumpDown) {
       lines.push(
         `jumpDown phase=${jumpDown.phase || "na"} planPhase=${jumpDown.planPhase || "na"} planValid=${jumpDown.planValid ? "y" : "n"} refreshOk=${jumpDown.refreshOk ? "y" : "n"} fail=${jumpDown.failReason || jumpDown.planFailure || "none"}`
@@ -1086,10 +1110,20 @@ export function createDebugOverlayRuntime(ctx) {
     lines.push(`resolvedSurface auth=${surfaceResolve.authoritativeSurfaceId || "na"}@${surfaceResolve.authoritativeSource || "na"} strict=${surfaceResolve.strictSurfaceId || "na"} loose=${surfaceResolve.looseSurfaceId || "na"} hinted=${surfaceResolve.hintedSurfaceId || "na"} final=${surfaceResolve.resolvedSurfaceId || "na"}`);
     lines.push(`route active=${route?.active ? "y" : "n"} approach=${route?.approachSurfaceId || "na"} surf=${route?.surfaceId || "na"} final=${route?.finalSurfaceId || "na"} directJump=${route?.directJump ? "y" : "n"} seg=${route?.segments?.[route?.segmentIndex || 0]?.kind || "none"} segIdx=${route?.segmentIndex || 0}/${route?.segments?.length || 0}`);
     lines.push(`route target=${makeVecSig(route?.target)} finalTarget=${makeVecSig(route?.finalTarget)} queryY=${formatNum(route?.y,2)} finalY=${formatNum(route?.finalY,2)}`);
+    const lastPathDebug = typeof ctx.getLastAStarDebugData === "function" ? ctx.getLastAStarDebugData() : null;
+    const nextWaypoint = Array.isArray(cat.nav?.path) && cat.nav.path.length > 1
+      ? cat.nav.path[Math.min(Math.max(cat.nav.index || 1, 1), cat.nav.path.length - 1)]
+      : null;
     lines.push(`goal current=${makeVecSig(cat.nav?.goal)} pending=${quantizeDebugValue(cat.nav?.goalChangePendingX,0.05)},${quantizeDebugValue(cat.nav?.goalChangePendingZ,0.05)} idx=${cat.nav?.index || 0} pathLen=${cat.nav?.path?.length || 0}`);
+    lines.push(`path mode=${lastPathDebug?.mode || "na"} bypass=${cat.nav?.dynamicBypassActive ? "y" : "n"} bypassFails=${cat.nav?.dynamicBypassFailCount || 0} next=${quantizeDebugValue(nextWaypoint?.x,0.05)},${quantizeDebugValue(nextWaypoint?.z,0.05)}`);
     lines.push(`window hold=${cat.nav?.windowHoldActive ? "y" : "n"} noRouteStreak=${cat.nav?.windowNoRouteStreak || 0} stallT=${formatNum(cat.nav?.windowStallT || 0, 2)} pathCheckIn=${formatNum((cat.nav?.windowPathCheckAt || 0) - clockTime, 2)}s`);
     lines.push(`invalidation pending=${routeInvalidation?.pending ? "y" : "n"} kind=${routeInvalidation?.kind || "none"} count=${routeInvalidation?.count || 0} target=${makeVecSig(routeInvalidation?.target)}`);
     lines.push(`step reason=${step.reason || "na"} phase=${step.phase || "na"} target=${quantizeDebugValue(step.targetX,0.05)},${quantizeDebugValue(step.targetZ,0.05)} chase=${quantizeDebugValue(step.chaseX,0.05)},${quantizeDebugValue(step.chaseZ,0.05)} blocked=${step.blockedObstacle || "none"}`);
+    lines.push(`clip=${step.locomotionClip || "na"} directRejectTarget=${step.directRejectTargetObstacle || "none"} directRejectLine=${step.directRejectLineObstacle || "none"}`);
+    lines.push(`crowd state=${step.crowdState || "na"} vel=${formatNum(step.crowdVelLen ?? step.crowdSpeed ?? 0,3)} step=${formatNum(step.crowdStepLen || 0,3)} drift=${formatNum(step.crowdDrift || 0,3)} distGoal=${formatNum(step.crowdDistToGoal || 0,3)} req=${quantizeDebugValue(step.crowdReqX,0.05)},${quantizeDebugValue(step.crowdReqZ,0.05)}`);
+    lines.push(`crowd flags changed=${step.crowdTargetChanged ? "y" : "n"} recreated=${step.crowdRecreated ? "y" : "n"} teleported=${step.crowdTeleported ? "y" : "n"} age=${formatNum(step.crowdLastRequestAge || 0,2)}s agent=${quantizeDebugValue(step.crowdAgentX,0.05)},${quantizeDebugValue(step.crowdAgentZ,0.05)}`);
+    lines.push(`groundDiag posS=${step.posStaticObstacle || "none"} posD=${step.posDynamicObstacle || "none"} targetS=${step.targetStaticObstacle || "none"} targetD=${step.targetDynamicObstacle || "none"} lineS=${step.lineStaticObstacle || "none"} lineD=${step.lineDynamicObstacle || "none"}`);
+    lines.push(`groundSoft pos=${step.softPosObstacle || "none"}@${formatNum(step.softPosScore || 0,2)} target=${step.softTargetObstacle || "none"}@${formatNum(step.softTargetScore || 0,2)}`);
     lines.push(`elev support=${step.supportSurfaceId || "na"} rawTarget=${quantizeDebugValue(step.rawTargetX,0.05)},${quantizeDebugValue(step.rawTargetZ,0.05)} resolvedTarget=${quantizeDebugValue(step.resolvedTargetX,0.05)},${quantizeDebugValue(step.resolvedTargetZ,0.05)} snapDist=${formatNum(step.targetSnapDist || 0, 3)}`);
     if (jumpDown) lines.push(`jumpDown phase=${jumpDown.phase || "na"} plan=${jumpDown.planPhase || "na"} valid=${jumpDown.planValid ? "y" : "n"} fail=${jumpDown.failReason || jumpDown.planFailure || "none"} source=${jumpDown.planSourceSurfaceId || "na"} desired=${jumpDown.desiredLandingSurfaceId || jumpDown.planDesiredLandingSurfaceId || "na"}`);
     lines.push(`events/1s skipExisting=${countEvents(events,1,clockTime,["route-plan-skip-existing"])} rejectJumpdown=${countEvents(events,1,clockTime,["route-queue-reject-no-jumpdown-link","route-move-reject-no-jumpdown-link"])} rejectElev=${countEvents(events,1,clockTime,["route-queue-reject-no-surface-link"])} repathElevNoProg=${countEvents(events,1,clockTime,["repath-surface-no-progress"])} routeInvalidate=${countEvents(events,1,clockTime,["route-invalidate"])}`);
@@ -2572,6 +2606,55 @@ export function createDebugOverlayRuntime(ctx) {
     return appended;
   }
 
+  function getPlannedPathTarget(route = null) {
+    if (route?.active) {
+      const finalTarget = route.finalTarget || route.target || cat.nav?.debugDestination || null;
+      if (finalTarget && Number.isFinite(finalTarget.x) && Number.isFinite(finalTarget.z)) {
+        const fallbackY = getSurfaceY(route.finalSurfaceId || route.surfaceId || "floor", cat.group.position.y);
+        return cloneRoutePoint(finalTarget, fallbackY);
+      }
+    }
+    const target = cat.nav?.debugDestination || null;
+    if (target && Number.isFinite(target.x) && Number.isFinite(target.z)) {
+      return cloneRoutePoint(target, cat.group.position.y);
+    }
+    return null;
+  }
+
+  function normalizePlannedPath(points, target = null) {
+    if (!Array.isArray(points) || points.length < 2) return points;
+    const normalized = [];
+    const sameXZTol = 0.012;
+    const finalTarget = target && Number.isFinite(target.x) && Number.isFinite(target.z) ? target : null;
+
+    for (const point of points) {
+      if (!point) continue;
+      const p = point.clone ? point.clone() : new THREE.Vector3(point.x, point.y, point.z);
+      const prev = normalized[normalized.length - 1];
+      if (
+        prev &&
+        Math.abs(prev.x - p.x) <= sameXZTol &&
+        Math.abs(prev.z - p.z) <= sameXZTol
+      ) {
+        // Avoid drawing "teleport poles" where the path repeats the same X/Z with only Y changing.
+        prev.y = p.y;
+        continue;
+      }
+      normalized.push(p);
+    }
+
+    if (finalTarget && normalized.length > 0) {
+      const last = normalized[normalized.length - 1];
+      const dx = last.x - finalTarget.x;
+      const dz = last.z - finalTarget.z;
+      if (dx * dx + dz * dz > 0.08 * 0.08) {
+        normalized.push(new THREE.Vector3(finalTarget.x, liftedY(getVecY(finalTarget, last.y - PATH_LIFT)), finalTarget.z));
+      }
+    }
+
+    return normalized.length >= 2 ? normalized : points;
+  }
+
   function buildPlannedPath() {
     const points = [];
     const route = cat.nav?.route || null;
@@ -2581,29 +2664,29 @@ export function createDebugOverlayRuntime(ctx) {
       const jumpToY = Number.isFinite(cat.jump.toY) ? cat.jump.toY : cat.group.position.y;
       appendActiveJumpPath(points, cat.jump, 16);
       if (appendRemainingRouteSegments(points, route, new THREE.Vector3(jumpTo.x, jumpToY, jumpTo.z))) {
-        return points;
+        return normalizePlannedPath(points, getPlannedPathTarget(route));
       }
       const target = cat.nav?.debugDestination;
       if (target && Number.isFinite(target.x) && Number.isFinite(target.z)) {
         appendSurfaceLine(points, new THREE.Vector3(jumpTo.x, jumpToY, jumpTo.z), target, getVecY(target, jumpToY));
       }
-      return points;
+      return normalizePlannedPath(points, getPlannedPathTarget(route));
     }
 
     const startPoint = new THREE.Vector3(cat.pos.x, cat.group.position.y, cat.pos.z);
     pushPathPoint(points, startPoint.x, liftedY(startPoint.y), startPoint.z);
 
     if (route?.active && appendRemainingRouteSegments(points, route, startPoint)) {
-      return points;
+      return normalizePlannedPath(points, getPlannedPathTarget(route));
     }
 
-    if (appendGroundNavPath(points)) return points;
+    if (appendGroundNavPath(points)) return normalizePlannedPath(points, getPlannedPathTarget(route));
 
     const target = cat.nav?.debugDestination;
     if (target && Number.isFinite(target.x) && Number.isFinite(target.z)) {
       appendSurfaceLine(points, startPoint, target, getVecY(target, startPoint.y));
     }
-    return points;
+    return normalizePlannedPath(points, getPlannedPathTarget(route));
   }
 
   function buildPathKey() {

@@ -1566,27 +1566,17 @@ export function createCatPathfindingRuntime(ctx) {
       }
 
       const driftSq = (agentPos.x - cat.pos.x) ** 2 + (agentPos.z - cat.pos.z) ** 2;
-      if (recreated || driftSq > 0.32 * 0.32) {
+      const teleportedToCat = recreated || driftSq > 0.32 * 0.32;
+      if (teleportedToCat) {
         agent.teleport({ x: cat.pos.x, y: 0, z: cat.pos.z });
       }
 
       const snapRadius = Math.max(0.06, Number.isFinite(CAT_NAV.detourArriveSnapRadius) ? CAT_NAV.detourArriveSnapRadius : 0.1);
-      const leadRadius = Math.max(0.2, Number.isFinite(CAT_NAV.detourLeadRadius) ? CAT_NAV.detourLeadRadius : 0.9);
-      const leadDistance = Math.max(0.1, Number.isFinite(CAT_NAV.detourLeadDistance) ? CAT_NAV.detourLeadDistance : 0.45);
       const toGoalX = target.x - agentPos.x;
       const toGoalZ = target.z - agentPos.z;
       const distToGoal = Math.hypot(toGoalX, toGoalZ);
       let requestX = target.x;
       let requestZ = target.z;
-      if (distToGoal > snapRadius && distToGoal < leadRadius) {
-        const from = new THREE.Vector3(agentPos.x, 0, agentPos.z);
-        const to = new THREE.Vector3(target.x, 0, target.z);
-        if (hasClearTravelLine(from, to, obstacles, clearance * 0.98, 0)) {
-          const inv = 1 / Math.max(1e-6, distToGoal);
-          requestX = target.x + toGoalX * inv * leadDistance;
-          requestZ = target.z + toGoalZ * inv * leadDistance;
-        }
-      }
 
       const reqDx = requestX - crowdState.lastTarget.x;
       const reqDz = requestZ - crowdState.lastTarget.z;
@@ -1614,6 +1604,16 @@ export function createCatPathfindingRuntime(ctx) {
         position: new THREE.Vector3(nextPos.x, 0, nextPos.z),
         velocity: new THREE.Vector3(velocity.x, 0, velocity.z),
         state,
+        recreated,
+        teleportedToCat,
+        driftSq,
+        distToGoal,
+        requestX,
+        requestZ,
+        targetChanged,
+        lastRequestAge: now - crowdState.lastRequestAt,
+        agentPos: new THREE.Vector3(agentPos.x, 0, agentPos.z),
+        stepDt,
       };
     } finally {
       finishPathProfilerMetric("stepDetourCrowdToward", startedAt, profileMeta, 3.5);
@@ -1816,8 +1816,9 @@ export function createCatPathfindingRuntime(ctx) {
   }
 
   function getActiveNavMeshDebugData() {
-    // Always resolve against current obstacles so debug reflects live navmesh changes.
-    return getNavMeshDebugData(activeNavMeshMode.includePickups, activeNavMeshMode.includeClosePickups);
+    // Always resolve against current dynamic pickup obstacles so the debug navmesh
+    // matches the live floor cutouts users see around settled clutter.
+    return getNavMeshDebugData(true, true);
   }
 
   function findTriangleForPoint(point, navMesh, obstacles, clearance, queryY = 0) {
@@ -2379,6 +2380,45 @@ export function createCatPathfindingRuntime(ctx) {
     await ensureRecastInitialized();
   }
 
+  function invalidateNavCaches() {
+    destroyCrowdState();
+
+    if (navMeshCache.static) {
+      try { if (navMeshCache.static.tileCache) navMeshCache.static.tileCache.destroy(); } catch {}
+      try { navMeshCache.static.navQuery?.destroy(); } catch {}
+      try { navMeshCache.static.navMesh?.destroy(); } catch {}
+    }
+    if (navMeshCache.dynamic && navMeshCache.dynamic !== navMeshCache.static) {
+      try { if (navMeshCache.dynamic.tileCache) navMeshCache.dynamic.tileCache.destroy(); } catch {}
+      try { navMeshCache.dynamic.navQuery?.destroy(); } catch {}
+      try { navMeshCache.dynamic.navMesh?.destroy(); } catch {}
+    }
+    navMeshCache.static = null;
+    navMeshCache.dynamic = null;
+    navMeshCache.active = null;
+
+    obstacleBuildCache.clear();
+    triangleNavMeshCache.clear();
+    pathFamilyCache.clear();
+    pathSolveCache.clear();
+    reachabilityCache.clear();
+    nearestWalkableCache.clear();
+
+    dynamicObstacleSnapshot.at = -1e9;
+    dynamicObstacleSnapshot.includePickups = false;
+    dynamicObstacleSnapshot.includeClosePickups = false;
+    dynamicObstacleSnapshot.signature = "";
+
+    lastPlannedSignature.static = "";
+    lastPlannedSignature.dynamic = "";
+    lastAStarDebug.mode = "none";
+    lastAStarDebug.start = null;
+    lastAStarDebug.goal = null;
+    lastAStarDebug.edges = [];
+    lastAStarDebug.finalPath = [];
+    lastAStarDebug.timestamp = 0;
+  }
+
   function getLastAStarDebugData() {
     return {
       mode: lastAStarDebug.mode,
@@ -2407,5 +2447,6 @@ export function createCatPathfindingRuntime(ctx) {
     ensureCatPathNoFallback,
     stepDetourCrowdToward,
     resetDetourCrowd: destroyCrowdState,
+    invalidateNavCaches,
   };
 }

@@ -96,10 +96,12 @@ function animateCatPose(dt, moving) {
   const isPullUp = cat.state === "pullUp";
   const isJumpSettle = cat.state === "jumpSettle";
   const isJumpDown = cat.state === "jumpDown";
+  const isCatnipIdleBlend = cat.state === "catnipIdleBlend";
   const isJumpState = isPrepareJump || isLaunchUp || isForepawHook || isPullUp || isJumpSettle || isJumpDown || !!cat.jump;
   const forceStill =
     cat.state === "swipe" ||
     cat.state === "sit" ||
+    isCatnipIdleBlend ||
     isPrepareJump ||
     isForepawHook ||
     isJumpSettle ||
@@ -124,6 +126,7 @@ function animateCatPose(dt, moving) {
   if (cat.usingRealisticModel) {
     const isSit = cat.state === "sit";
     const isEatingCatnip = cat.state === "distracted";
+    const isRecoveringFromCatnip = cat.state === "catnipRecover";
     const usesSpecialPose =
       cat.state === "swipe" ||
       isPrepareJump ||
@@ -133,6 +136,7 @@ function animateCatPose(dt, moving) {
       isJumpSettle ||
       cat.state === "landStop" ||
       isEatingCatnip ||
+      isRecoveringFromCatnip ||
       isSit ||
       !!cat.jump;
     if (cat.useClipLocomotion && cat.clipMixer) {
@@ -168,12 +172,20 @@ function animateCatPose(dt, moving) {
         const clipMotionDur = Math.max(1e-5, airDur + launchDelay);
         const isDownJumpClip = cat.jump.toY <= cat.jump.fromY + 0.03;
         if (isDownJumpClip) {
+          const prepActive = prepDur > 1e-5 && Number(cat.jump.preT || 0) < prepDur - 1e-5;
+          const launchHoldActive =
+            !prepActive &&
+            launchDelay > 1e-5 &&
+            Number(cat.jump.launchDelayT || 0) < launchDelay - 1e-5;
           const prepAction = cat.stateClipActions?.jumpDownPrepare?.action;
           const downAction = cat.stateClipActions?.jumpDown?.action;
           const prepClipDur = prepAction?.getClip?.()?.duration;
           const downClipDur = downAction?.getClip?.()?.duration;
           if (Number.isFinite(prepClipDur) && prepClipDur > 1e-5 && prepDur > 1e-5) {
             speedOverrides.jumpDownPrepare = THREE.MathUtils.clamp(prepClipDur / prepDur, 0.2, 2.5);
+          }
+          if (launchHoldActive) {
+            speedOverrides.jumpDownPrepare = 0;
           }
           if (Number.isFinite(downClipDur) && downClipDur > 1e-5 && airDur > 1e-5) {
             speedOverrides.jumpDown = THREE.MathUtils.clamp(downClipDur / clipMotionDur, 0.2, 2.5);
@@ -205,6 +217,7 @@ function animateCatPose(dt, moving) {
       if (cat.state === "swipe") clipSpecialState = "swipe";
       else if (cat.state === "sit") clipSpecialState = "sit";
       else if (cat.state === "distracted") clipSpecialState = "eat";
+      else if (cat.state === "catnipRecover") clipSpecialState = "eatRecover";
       else if (cat.state === "jumpDown" && cat.jump) clipSpecialState = pickJumpDownClipState();
       else if (cat.state === "landStop") clipSpecialState = "landStop";
       else if (cat.state === "jumpSettle") clipSpecialState = "jumpSettle";
@@ -213,6 +226,7 @@ function animateCatPose(dt, moving) {
         clipSpecialState = cat.jump.toY > cat.jump.fromY + 0.03 ? pickJumpUpClipState() : pickJumpDownClipState();
       }
 
+      const rig = cat.rig;
       const handledByClip = setCatClipSpecialPose(cat, clipSpecialState, dt);
       const activeClipName =
         cat.clipSpecialAction?.getClip?.()?.name ||
@@ -220,14 +234,40 @@ function animateCatPose(dt, moving) {
         "none";
       setAnimDebug(clipSpecialState || "none", activeClipName);
       if (handledByClip) {
+        if (isEatingCatnip && rig) {
+          const eatHeadAlpha = THREE.MathUtils.clamp(dt * 22, 0.24, 1.0);
+          const lookDownPose = cat.catnipLookDownPose || {};
+          const applySampledPose = (bone, sampled) => {
+            if (!bone || !sampled) return false;
+            if (sampled.position) bone.position.lerp(sampled.position, eatHeadAlpha);
+            if (sampled.quaternion) bone.quaternion.slerp(sampled.quaternion, eatHeadAlpha);
+            return true;
+          };
+          const appliedBase = applySampledPose(rig.neckBase, lookDownPose.neckBase);
+          const appliedNeck = applySampledPose(rig.neck1, lookDownPose.neck1);
+          const appliedHead = applySampledPose(rig.head, lookDownPose.head);
+          const appliedAny = appliedBase || appliedNeck || appliedHead;
+          if (!appliedAny) {
+            setBonePose(rig, rig.neckBase, -0.16, 0, 0, eatHeadAlpha);
+            setBonePose(rig, rig.neck1, -0.24, 0, 0, eatHeadAlpha);
+            setBonePose(rig, rig.head, -0.18, 0, 0, eatHeadAlpha);
+          }
+        }
         cat.modelAnchor.position.y = THREE.MathUtils.damp(cat.modelAnchor.position.y, 0, 10, dt);
-        cat.modelAnchor.rotation.x = THREE.MathUtils.damp(cat.modelAnchor.rotation.x, 0, 14, dt);
+        cat.modelAnchor.rotation.x = THREE.MathUtils.damp(
+          cat.modelAnchor.rotation.x,
+          0,
+          10,
+          dt
+        );
         cat.modelAnchor.rotation.z = THREE.MathUtils.damp(cat.modelAnchor.rotation.z, 0, 10, dt);
         // When a clip is active, avoid layering procedural pose edits to prevent visual pops.
         return;
       }
       if (!usesSpecialPose) {
-        const clipMoving = !forceStill && (moving || worldSpeed > 0.12 || navSpeedNorm > 0.16);
+        const clipMoving =
+          !forceStill &&
+          (moving || worldSpeed > 0.12 || navSpeedNorm > 0.16);
         updateCatClipLocomotion(cat, dt, clipMoving, navSpeedNorm, worldSpeed);
         setAnimDebug("none", cat.activeClipAction?.getClip?.()?.name || "none");
 
@@ -240,7 +280,6 @@ function animateCatPose(dt, moving) {
       setAnimDebug(clipSpecialState || "none", activeClipName);
     }
 
-    const rig = cat.rig;
     if (!rig) return;
 
     const gaitL = Math.sin(cat.walkT) * movingAmt;

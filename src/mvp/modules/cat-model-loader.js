@@ -229,6 +229,8 @@ export function createCatModelRuntime(ctx) {
         patrolPathCheckAt: 0,
         catnipPathCheckAt: 0,
         catnipUseExactTarget: false,
+        catnipRecoverUntil: 0,
+        catnipIdleBlendUntil: 0,
         windowPathCheckAt: 0,
         windowHoldActive: false,
         stuckT: 0,
@@ -456,6 +458,44 @@ export function createCatModelRuntime(ctx) {
     return new THREE.AnimationClip(clip.name, clip.duration, tracks);
   }
 
+  function makeLoopFriendlyClip(clip) {
+    if (!clip?.tracks?.length) return clip;
+    const tracks = clip.tracks.map((track) => track.clone());
+    let changed = false;
+    for (const track of tracks) {
+      const times = track.times;
+      const values = track.values;
+      const valueSize = typeof track.getValueSize === "function" ? track.getValueSize() : 0;
+      if (!times || !values || times.length < 2 || valueSize <= 0 || values.length < valueSize * 2) continue;
+      const lastOffset = values.length - valueSize;
+      let differs = false;
+      for (let i = 0; i < valueSize; i++) {
+        if (Math.abs(values[i] - values[lastOffset + i]) > 1e-5) {
+          differs = true;
+          break;
+        }
+      }
+      if (!differs) continue;
+      for (let i = 0; i < valueSize; i++) {
+        values[lastOffset + i] = values[i];
+      }
+      if (track.ValueTypeName === "quaternion" && valueSize === 4) {
+        const qx = values[lastOffset];
+        const qy = values[lastOffset + 1];
+        const qz = values[lastOffset + 2];
+        const qw = values[lastOffset + 3];
+        const len = Math.hypot(qx, qy, qz, qw) || 1;
+        values[lastOffset] = qx / len;
+        values[lastOffset + 1] = qy / len;
+        values[lastOffset + 2] = qz / len;
+        values[lastOffset + 3] = qw / len;
+      }
+      changed = true;
+    }
+    if (!changed) return clip;
+    return new THREE.AnimationClip(clip.name, clip.duration, tracks);
+  }
+
   function makeFrameRangeClip(clip, name, startFrame, endFrame, fps = 30) {
     if (!clip) return null;
     const safeStart = Math.max(0, Math.floor(startFrame));
@@ -467,6 +507,137 @@ export function createCatModelRuntime(ctx) {
     } catch {
       return null;
     }
+  }
+
+  function makeClipTailClip(clip, name, startFrame, fps = 30) {
+    if (!clip) return null;
+    const totalFrames = Math.max(1, Math.ceil((clip.duration || 0) * fps));
+    return makeFrameRangeClip(clip, name, startFrame, totalFrames, fps);
+  }
+
+  function makeHoldFrameClip(clip, name, frame, fps = 30, duration = null) {
+    if (!clip?.tracks?.length) return null;
+    const time = Math.max(0, Math.floor(frame)) / fps;
+    const holdDuration = Math.max(1 / fps, Number.isFinite(duration) ? duration : 1 / fps);
+    const tracks = [];
+    for (const track of clip.tracks) {
+      const valueSize = typeof track.getValueSize === "function" ? track.getValueSize() : 0;
+      const times = track.times;
+      const values = track.values;
+      if (!times || !values || !valueSize || values.length < valueSize) continue;
+      const sampleTime = THREE.MathUtils.clamp(
+        time,
+        Number(times[0] || 0),
+        Number(times[times.length - 1] || 0)
+      );
+      const interpolant =
+        typeof track.createInterpolant === "function" ? track.createInterpolant(new values.constructor(valueSize)) : null;
+      let sampledValues = null;
+      if (interpolant) {
+        sampledValues = interpolant.evaluate(sampleTime);
+      }
+      const offset = (() => {
+        if (sampledValues) return -1;
+        let sampleIndex = 0;
+        for (let i = 0; i < times.length; i++) {
+          if (times[i] <= sampleTime + 1e-6) sampleIndex = i;
+          else break;
+        }
+        return sampleIndex * valueSize;
+      })();
+      const heldValues = new values.constructor(valueSize * 2);
+      for (let i = 0; i < valueSize; i++) {
+        const value = sampledValues ? sampledValues[i] : values[offset + i];
+        heldValues[i] = value;
+        heldValues[valueSize + i] = value;
+      }
+      if (track.ValueTypeName === "quaternion" && valueSize === 4) {
+        const len = Math.hypot(heldValues[0], heldValues[1], heldValues[2], heldValues[3]) || 1;
+        heldValues[0] /= len;
+        heldValues[1] /= len;
+        heldValues[2] /= len;
+        heldValues[3] /= len;
+        heldValues[4] = heldValues[0];
+        heldValues[5] = heldValues[1];
+        heldValues[6] = heldValues[2];
+        heldValues[7] = heldValues[3];
+      }
+      const heldTimes = new times.constructor([0, holdDuration]);
+      tracks.push(new track.constructor(track.name, heldTimes, heldValues));
+    }
+    return tracks.length ? new THREE.AnimationClip(name, holdDuration, tracks) : null;
+  }
+
+  function sampleTrackValueAtTime(track, time) {
+    if (!track) return null;
+    const valueSize = typeof track.getValueSize === "function" ? track.getValueSize() : 0;
+    const values = track.values;
+    const times = track.times;
+    if (!valueSize || !values || !times || !times.length) return null;
+    const sampleTime = THREE.MathUtils.clamp(
+      time,
+      Number(times[0] || 0),
+      Number(times[times.length - 1] || 0)
+    );
+    if (typeof track.createInterpolant === "function") {
+      const interpolant = track.createInterpolant(new values.constructor(valueSize));
+      return Array.from(interpolant.evaluate(sampleTime));
+    }
+    let sampleIndex = 0;
+    for (let i = 0; i < times.length; i++) {
+      if (times[i] <= sampleTime + 1e-6) sampleIndex = i;
+      else break;
+    }
+    const offset = sampleIndex * valueSize;
+    return Array.from(values.slice(offset, offset + valueSize));
+  }
+
+  function sampleClipNodePose(clip, nodeName, time) {
+    if (!clip || !nodeName) return null;
+    const positionTrack = clip.tracks.find((track) => track.name === `${nodeName}.position`);
+    const quaternionTrack = clip.tracks.find((track) => track.name === `${nodeName}.quaternion`);
+    const sampledPosition = sampleTrackValueAtTime(positionTrack, time);
+    const sampledQuaternion = sampleTrackValueAtTime(quaternionTrack, time);
+    return {
+      position:
+        sampledPosition && sampledPosition.length >= 3
+          ? new THREE.Vector3(sampledPosition[0], sampledPosition[1], sampledPosition[2])
+          : null,
+      quaternion:
+        sampledQuaternion && sampledQuaternion.length >= 4
+          ? new THREE.Quaternion(
+              sampledQuaternion[0],
+              sampledQuaternion[1],
+              sampledQuaternion[2],
+              sampledQuaternion[3]
+            ).normalize()
+          : null,
+    };
+  }
+
+  function makeCompositeClip(name, baseClip, overlayClip, overlayTrackPattern) {
+    if (!baseClip && !overlayClip) return null;
+    if (!overlayClip || !overlayTrackPattern) return baseClip || overlayClip || null;
+    if (!baseClip) return overlayClip;
+    const resultTracks = [];
+    const overlayTracks = overlayClip.tracks || [];
+    const baseTracks = baseClip.tracks || [];
+    const overlayTrackNames = new Set();
+    for (const track of overlayTracks) {
+      if (!track || !overlayTrackPattern.test(track.name)) continue;
+      resultTracks.push(track.clone());
+      overlayTrackNames.add(track.name);
+    }
+    for (const track of baseTracks) {
+      if (!track || overlayTrackNames.has(track.name)) continue;
+      resultTracks.push(track.clone());
+    }
+    if (!resultTracks.length) return baseClip;
+    return new THREE.AnimationClip(
+      name,
+      Math.max(baseClip.duration || 0, overlayClip.duration || 0),
+      resultTracks
+    );
   }
 
   function findRootPositionTrack(clip) {
@@ -572,7 +743,7 @@ export function createCatModelRuntime(ctx) {
 
     if (!clips || clips.length === 0) return;
 
-    const inPlaceClips = clips.map((clip) => makeInPlaceClip(clip));
+    const inPlaceClips = clips.map((clip) => makeLoopFriendlyClip(makeInPlaceClip(clip)));
     const sourceClipByName = new Map(clips.map((clip) => [clip.name, clip]));
     const mixer = new THREE.AnimationMixer(model);
     catObject.clipMixer = mixer;
@@ -664,6 +835,34 @@ export function createCatModelRuntime(ctx) {
     }
 
     const lookDownClip = pickAnimationClip(inPlaceClips, [/lookdown/i]);
+    const drinkDownClip = pickAnimationClip(inPlaceClips, [/^drink_d$/i, /drink_d/i, /^drink$/i, /drink/i]);
+    const eatDownClip = pickAnimationClip(inPlaceClips, [/^eat_d$/i, /eat_d/i, /^eat$/i, /eat/i]);
+    const catnipMouthTrackPattern = /^(jaw|tongue\d*)\./i;
+    const catnipIntroClip = makeCompositeClip(
+      "Catnip__lookDownIntro",
+      makeFrameRangeClip(lookDownClip, "LookDown__eatIntro", 1, 35, 30) || lookDownClip,
+      null,
+      null
+    );
+    const catnipMouthLoopClip =
+      makeFrameRangeClip(drinkDownClip, "Drink_D__eatLoop", 18, 44, 30) ||
+      drinkDownClip ||
+      makeFrameRangeClip(eatDownClip, "Eat_D__eatLoop", 18, 44, 30) ||
+      eatDownClip;
+    const catnipLoopClip = makeLoopFriendlyClip(
+      makeCompositeClip(
+        "Catnip__lookDownHoldDrinkLoop",
+        makeHoldFrameClip(
+          lookDownClip,
+          "LookDown__eatHoldPose",
+          34,
+          30,
+          catnipMouthLoopClip?.duration
+        ) || lookDownClip,
+        catnipMouthLoopClip,
+        catnipMouthTrackPattern
+      )
+    );
     const lookUpClip = pickAnimationClip(inPlaceClips, [
       /^look_up$/i,
       /^lookup$/i,
@@ -671,6 +870,28 @@ export function createCatModelRuntime(ctx) {
       /head[-_. ]?up/i,
       /up[-_. ]?look/i,
     ]);
+    const catnipRecoverClip =
+      makeFrameRangeClip(lookDownClip, "LookDown__eatRecover", 39, 74, 30) ||
+      lookUpClip ||
+      pickAnimationClip(inPlaceClips, [/^look$/i, /look/i, /^idle$/i, /base/i]);
+    const jumpDownPrepareSourceClip = pickAnimationClip(inPlaceClips, [/^edge_to$/i]);
+    const jumpDownPrepareClip = (() => {
+      if (!jumpDownPrepareSourceClip) return null;
+      const totalFrames = Math.max(1, Math.ceil((jumpDownPrepareSourceClip.duration || 0) * 30));
+      return (
+        makeFrameRangeClip(
+          jumpDownPrepareSourceClip,
+          "Edge_To__jumpDownPrepareTrimmed",
+          0,
+          Math.max(1, totalFrames - 1),
+          30
+        ) || jumpDownPrepareSourceClip
+      );
+    })();
+    const jumpDownSourceClip = pickAnimationClip(inPlaceClips, [/^edge_from$/i]);
+    const jumpDownClip =
+      makeClipTailClip(jumpDownSourceClip, "Edge_From__jumpDownTrimmed", 4, 30) ||
+      jumpDownSourceClip;
     const rearUpPrepClip = pickAnimationClip(inPlaceClips, [
       /^edge_to$/i,
       /^edge_idle$/i,
@@ -690,11 +911,19 @@ export function createCatModelRuntime(ctx) {
       jumpPrepareSequenceClips.push(rearUpPrepClip);
     }
     const eatIntroClip =
+      catnipIntroClip ||
       makeFrameRangeClip(lookDownClip, "LookDown__eatIntro", 1, 28, 30) ||
-      pickAnimationClip(inPlaceClips, [/eat_/i, /look/i, /licking_sit/i, /drink_/i, /sit_idle/i]);
+      pickAnimationClip(inPlaceClips, [/look/i, /sit_idle/i]);
     const eatLoopClip =
+      catnipLoopClip ||
       makeFrameRangeClip(lookDownClip, "LookDown__eatLoop", 29, 32, 30) ||
-      pickAnimationClip(inPlaceClips, [/licking_sit/i, /eat_/i, /drink_/i, /sit_idle/i, /look/i]);
+      pickAnimationClip(inPlaceClips, [/sit_idle/i, /look/i]);
+    const catnipHoldTime = 34 / 30;
+    catObject.catnipLookDownPose = {
+      neckBase: sampleClipNodePose(lookDownClip, catObject.rig?.neckBase?.name, catnipHoldTime),
+      neck1: sampleClipNodePose(lookDownClip, catObject.rig?.neck1?.name, catnipHoldTime),
+      head: sampleClipNodePose(lookDownClip, catObject.rig?.head?.name, catnipHoldTime),
+    };
 
     const clipStates = {
       jumpPrepare: {
@@ -722,12 +951,12 @@ export function createCatModelRuntime(ctx) {
         speed: 1.0,
       },
       jumpDownPrepare: {
-        clip: pickAnimationClip(inPlaceClips, [/^edge_to$/i]),
+        clip: jumpDownPrepareClip,
         loop: false,
         speed: 1.0,
       },
       jumpDown: {
-        clip: pickAnimationClip(inPlaceClips, [/^edge_from$/i]),
+        clip: jumpDownClip,
         loop: false,
         speed: 1.08,
       },
@@ -757,6 +986,11 @@ export function createCatModelRuntime(ctx) {
         loopClip: eatLoopClip,
         introSpeed: 1.0,
         loopSpeed: 1.0,
+      },
+      eatRecover: {
+        clip: catnipRecoverClip,
+        loop: false,
+        speed: 1.0,
       },
     };
     for (const [stateKey, def] of Object.entries(clipStates)) {
@@ -816,9 +1050,22 @@ export function createCatModelRuntime(ctx) {
       action.setLoop(loop ? THREE.LoopRepeat : THREE.LoopOnce, loop ? Infinity : 1);
       action.setEffectiveTimeScale(resolvedSpeed ?? 1);
       if (catObject.clipSpecialAction !== action) {
+        const fadeFromAction = catObject.clipSpecialAction || catObject.activeClipAction;
+        if (
+          catObject.clipSpecialState === "jumpDownPrepare" &&
+          specialState === "jumpDown" &&
+          fadeFromAction &&
+          fadeFromAction !== action
+        ) {
+          const fadeFromClipDur = Math.max(fadeFromAction.getClip()?.duration || 0, 0.001);
+          fadeFromAction.enabled = true;
+          fadeFromAction.play();
+          fadeFromAction.time = Math.max(0, fadeFromClipDur - 1 / 60);
+          fadeFromAction.paused = true;
+          fadeFromAction.setEffectiveWeight(1);
+        }
         action.reset().play();
         action.setEffectiveWeight(1);
-        const fadeFromAction = catObject.clipSpecialAction || catObject.activeClipAction;
         if (crossFade && fadeFromAction && fadeFromAction !== action) {
           const fadeDur = typeof crossFade === "number" ? Math.max(0.01, crossFade) : 0.1;
           fadeFromAction.crossFadeTo(action, fadeDur, false);
@@ -834,10 +1081,11 @@ export function createCatModelRuntime(ctx) {
     const resolveSpecialCrossFade = (fromState, toState) => {
       if (!fromState || !toState) return 0.1;
       if (fromState === toState) return 0.08;
+      if (toState === "eat") return 0.24;
       if (fromState === "jumpPrepare" && toState === "jumpUp") return 0.14;
-      if (fromState === "jumpDownPrepare" && toState === "jumpDown") return 0.08;
-      if (fromState === "jumpDown" && toState === "landStop") return 0.1;
-      if (fromState === "jumpDownPrepare" && toState === "landStop") return 0.1;
+      if (fromState === "jumpDownPrepare" && toState === "jumpDown") return 0.18;
+      if (fromState === "jumpDown" && toState === "landStop") return 0.12;
+      if (fromState === "jumpDownPrepare" && toState === "landStop") return 0.12;
       return 0.12;
     };
     const stateCrossFade = resolveSpecialCrossFade(catObject.clipSpecialState, specialState);
@@ -937,9 +1185,54 @@ export function createCatModelRuntime(ctx) {
     return true;
   }
 
+  function clearCatClipSpecialPose(catObject, reseedLocomotion = true) {
+    if (!catObject) return;
+    if (catObject.clipSpecialAction) {
+      catObject.clipSpecialAction.stop();
+      catObject.clipSpecialAction = null;
+    }
+    catObject.clipSpecialState = "";
+    catObject.clipSpecialPhase = "";
+    catObject.clipSpecialSeqIndex = 0;
+    catObject.catnipRecoverBlendTargetKey = "";
+
+    if (!reseedLocomotion || !catObject.useClipLocomotion) return;
+
+    const locomotionActions = catObject.locomotionActions || {};
+    const idleAction = locomotionActions.idle || catObject.idleAction;
+    const locomotionWeights = catObject.locomotionWeights || new Map();
+    catObject.locomotionWeights = locomotionWeights;
+
+    for (const action of Object.values(locomotionActions)) {
+      if (!action) continue;
+      action.enabled = true;
+      action.play();
+      const isIdle = action === idleAction;
+      const weight = isIdle ? 1 : 0;
+      action.setEffectiveWeight(weight);
+      action.setEffectiveTimeScale(1);
+      locomotionWeights.set(action, weight);
+    }
+
+    if (idleAction) {
+      idleAction.enabled = true;
+      idleAction.play();
+      idleAction.setEffectiveWeight(1);
+      idleAction.setEffectiveTimeScale(1);
+      catObject.activeClipAction = idleAction;
+      catObject.locomotionLastTargetKey = "idle";
+    }
+    catObject.clipWalkScale = 0;
+    if (catObject.locomotion) {
+      catObject.locomotion.activeClip = "idle";
+      catObject.locomotion.clipScale = 0;
+    }
+  }
+
   function updateCatClipLocomotion(catObject, dt, moving, speedNorm, worldSpeed = 0) {
     if (!catObject.useClipLocomotion || !catObject.clipMixer || !catObject.walkAction || !catObject.idleAction) return;
     let lingeringSpecialAction = null;
+    let blendingOutOfCatnipRecover = false;
     if (catObject.clipSpecialAction) {
       const specialAction = catObject.clipSpecialAction;
       specialAction.enabled = true;
@@ -947,7 +1240,9 @@ export function createCatModelRuntime(ctx) {
       const specialWeight = Number.isFinite(specialAction.getEffectiveWeight())
         ? specialAction.getEffectiveWeight()
         : 1;
-      const fadedWeight = THREE.MathUtils.damp(specialWeight, 0, 18, Math.max(dt, 0));
+      blendingOutOfCatnipRecover = catObject.clipSpecialState === "eatRecover";
+      const specialFadeRate = blendingOutOfCatnipRecover ? 12 : 18;
+      const fadedWeight = THREE.MathUtils.damp(specialWeight, 0, specialFadeRate, Math.max(dt, 0));
       specialAction.setEffectiveWeight(fadedWeight);
       if (fadedWeight <= 0.01) {
         specialAction.stop();
@@ -955,6 +1250,7 @@ export function createCatModelRuntime(ctx) {
         catObject.clipSpecialState = "";
         catObject.clipSpecialPhase = "";
         catObject.clipSpecialSeqIndex = 0;
+        catObject.catnipRecoverBlendTargetKey = "";
       } else {
         lingeringSpecialAction = specialAction;
       }
@@ -965,9 +1261,9 @@ export function createCatModelRuntime(ctx) {
     catObject.locomotionWeights = locomotionWeights;
     const walkAction = locomotionActions.walkF || catObject.walkAction;
     const idleAction = locomotionActions.idle || catObject.idleAction;
-    const clipKey =
-      catObject.locomotion?.activeClip ||
-      (moving ? "walkF" : "idle");
+    const clipKey = moving
+      ? (catObject.locomotion?.activeClip || "walkF")
+      : "idle";
     const requestedAction = locomotionActions[clipKey] || (moving ? walkAction : idleAction);
     const target = requestedAction || idleAction;
     const keyMap = catObject.locomotionActionKeys || new Map();
@@ -981,6 +1277,15 @@ export function createCatModelRuntime(ctx) {
       key === "runL" ||
       key === "runR";
     const isTurnKey = (key) => key === "turn90L" || key === "turn90R" || key === "turn45L" || key === "turn45R";
+
+    if (blendingOutOfCatnipRecover) {
+      if (catObject.catnipRecoverBlendTargetKey !== targetKey) {
+        target.reset();
+        catObject.catnipRecoverBlendTargetKey = targetKey;
+      }
+    } else {
+      catObject.catnipRecoverBlendTargetKey = "";
+    }
 
     if (targetKey !== prevTargetKey && isTurnKey(targetKey) && !isTurnKey(prevTargetKey)) {
       // Entering a turn from walk/idle: start from a deterministic pose and blend in.
@@ -1060,6 +1365,15 @@ export function createCatModelRuntime(ctx) {
         ? trackedWeight
         : action.getEffectiveWeight();
       let weightRate = targetWeight > currentWeight ? 13 : 18;
+      if (blendingOutOfCatnipRecover) {
+        if (action === target) {
+          weightRate = targetWeight > currentWeight ? 22 : 12;
+        } else if (action === lingeringSpecialAction) {
+          weightRate = targetWeight > currentWeight ? 8 : 12;
+        } else {
+          weightRate = targetWeight > currentWeight ? 12 : 18;
+        }
+      }
       if (isTurnKey(targetKey)) {
         // Snap hard into turn clips so walk influence doesn't cause visible turn skid.
         if (actionKey === targetKey) {
@@ -1159,6 +1473,7 @@ export function createCatModelRuntime(ctx) {
     buildCat,
     loadCatModel,
     setBonePose,
+    clearCatClipSpecialPose,
     setCatClipSpecialPose,
     updateCatClipLocomotion,
   };

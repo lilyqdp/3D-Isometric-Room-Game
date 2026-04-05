@@ -629,6 +629,9 @@ const debugControlsRuntime = createDebugControlsRuntime({
   getDebugRoot: () => debugRuntime.root,
   queueSharedDebugRouteRequest: (request) => {
     if (!cat.nav || typeof cat.nav !== "object") cat.nav = {};
+    const windowRouteActive =
+      !!cat.nav?.windowHoldActive || clockTime < Number(game.windowOpenUntil || 0);
+    if (game.catnip || game.placeCatnipMode || windowRouteActive) return false;
     const finalPoint = request?.finalPoint;
     if (!finalPoint) return false;
     cat.nav.pendingSharedRouteRequest = {
@@ -971,6 +974,8 @@ function resetGame() {
     getSurfaceIdsByCapability,
     addPickup: pickupsRuntime.addPickup,
   });
+  navRuntime.invalidateNavCaches();
+  navRuntime.getActiveNavMeshDebugData();
   game.total = pickups.length;
   game.mess = pickups.length * ENDLESS_SPAWN.messPerItem;
 
@@ -1074,6 +1079,7 @@ function resetGame() {
   cat.nav.jumpDownPlanAt = 0;
   cat.nav.jumpDownPlanValid = false;
   cat.nav.jumpDownNoMoveT = 0;
+  cat.nav.jumpDownLinkId = "";
   cat.nav.jumpDownLandingSurfaceId = null;
   cat.nav.jumpDownDebug = {};
   resetCatJumpBypass();
@@ -1094,6 +1100,7 @@ function resetGame() {
   cat.nav.catnipApproachZ = NaN;
   cat.nav.windowPathCheckAt = 0;
   cat.nav.windowHoldActive = false;
+  cat.nav.suppressCupUntil = 0;
   cat.nav.goalChangePendingSince = 0;
   cat.nav.goalChangePendingX = NaN;
   cat.nav.goalChangePendingZ = NaN;
@@ -1347,6 +1354,7 @@ function updateCat(dt) {
       knockCup,
       sampleSwipePose: navRuntime.sampleSwipePose,
       resetCatUnstuckTracking,
+      clearCatClipSpecialPose: catModelRuntime.clearCatClipSpecialPose,
       setCatClipSpecialPose: catModelRuntime.setCatClipSpecialPose,
       updateCatClipLocomotion: catModelRuntime.updateCatClipLocomotion,
       setBonePose: catModelRuntime.setBonePose,
@@ -1446,7 +1454,7 @@ function simulateStep(stepDt, perfSample = null) {
       lose(game.reason || "A desk item hit the floor.");
       game.pendingLoseAt = null;
     }
-    if (game.endlessMode && game.mess > ENDLESS_SPAWN.loseThreshold) {
+    if (game.endlessMode && game.mess >= ENDLESS_SPAWN.loseThreshold) {
       lose("Mess meter overflowed.");
     }
   }

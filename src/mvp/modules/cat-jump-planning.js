@@ -81,6 +81,28 @@ export function createCatJumpPlanningRuntime(ctx) {
     return out;
   }
 
+  function normalizeExcludeLinkIds(excludeLinkIds) {
+    const out = new Set();
+    if (!excludeLinkIds) return out;
+    if (excludeLinkIds instanceof Set) {
+      for (const id of excludeLinkIds) {
+        const key = String(id || "");
+        if (key) out.add(key);
+      }
+      return out;
+    }
+    if (Array.isArray(excludeLinkIds)) {
+      for (const id of excludeLinkIds) {
+        const key = String(id || "");
+        if (key) out.add(key);
+      }
+      return out;
+    }
+    const key = String(excludeLinkIds || "");
+    if (key) out.add(key);
+    return out;
+  }
+
   function traceFunction(name, details = "") {
     if (typeof recordFunctionTrace === "function") {
       recordFunctionTrace(name, details);
@@ -1132,12 +1154,26 @@ export function createCatJumpPlanningRuntime(ctx) {
     const landingY = Number.isFinite(fromSurface?.y) ? fromSurface.y : floorY;
     const sourceY = Number.isFinite(toSurface?.y) ? toSurface.y : floorY;
     const anchorClearance = CAT_NAV.clearance * 0.9;
+    const landingClearance = CAT_COLLISION.catBodyRadius * SURFACE_CFG.landingClearanceMul;
     if (!isJumpPointSafeAtY(link.top, sourceY, linkObstacles, anchorClearance)) return false;
-    if (!isJumpPointSafeAtY(link.jumpFrom, landingY, linkObstacles, anchorClearance)) return false;
+    if (!isJumpPointSafeAtY(link.jumpFrom, landingY, linkObstacles, landingClearance)) return false;
+    if (!isJumpPointSafeAtY(link.jumpFrom, landingY + 0.18, linkObstacles, landingClearance)) return false;
     if (isSegmentBlocked(link.top, link.jumpFrom, anchorClearance, sourceY, landingY, linkObstacles)) {
       return false;
     }
     if (!safetyOptions.ignoreMovableLandingObjects && isMovableObjectNearLanding(link.jumpFrom, landingY)) return false;
+    if (!cup.broken && !cup.falling) {
+      const cupAvoid = Math.max(
+        landingClearance + CUP_COLLISION.radius + 0.08,
+        Number(CUP_COLLISION.catAvoidRadius || 0) + landingClearance * 0.5
+      );
+      const dxTop = link.top.x - cup.group.position.x;
+      const dzTop = link.top.z - cup.group.position.z;
+      if (dxTop * dxTop + dzTop * dzTop < cupAvoid * cupAvoid) return false;
+      const dxLanding = link.jumpFrom.x - cup.group.position.x;
+      const dzLanding = link.jumpFrom.z - cup.group.position.z;
+      if (dxLanding * dxLanding + dzLanding * dzLanding < cupAvoid * cupAvoid) return false;
+    }
     return true;
   }
 
@@ -1656,7 +1692,8 @@ export function createCatJumpPlanningRuntime(ctx) {
     surfaceId,
     fromTopPoint,
     desiredGroundPoint = null,
-    desiredLandingSurfaceId = null
+    desiredLandingSurfaceId = null,
+    options = null
   ) {
     if (!fromTopPoint) {
       traceFunction("computeSurfaceJumpDownTargets", `from=${surfaceId || "na"} ok=0 reason=no-top-point`);
@@ -1687,54 +1724,66 @@ export function createCatJumpPlanningRuntime(ctx) {
       candidateLinks = exactMatches;
     }
     const dynamicObstacles = buildCatObstacles(true, true);
+    const excludedLinkIds = new Set(
+      Array.isArray(options?.excludeLinkIds) ? options.excludeLinkIds.map((id) => String(id || "")) : []
+    );
+    const computeBestLink = (linksToScore, allowPushableBlockedLinks) => {
+      let localBest = null;
+      let localBestScore = Infinity;
+      for (const link of linksToScore) {
+        if (!isSurfaceJumpDownSafe(link, dynamicObstacles, allowPushableBlockedLinks)) continue;
+        const rawStageTop = new THREE.Vector3(
+          THREE.MathUtils.lerp(link.top.x, link.hook.x, THREE.MathUtils.clamp(SURFACE_CFG.downJumpEdgeBias, 0, 0.95)),
+          surfaceY,
+          THREE.MathUtils.lerp(link.top.z, link.hook.z, THREE.MathUtils.clamp(SURFACE_CFG.downJumpEdgeBias, 0, 0.95))
+        );
+        const stageTop = rawStageTop.clone();
+        let stageTopWasClamped = false;
+        // Keep down-jump staging strictly inside the same support bounds used by surface steering.
+        if (toSurface?.inner) {
+          const clamped = clampPointToSurfaceXZ(toSurface, stageTop.x, stageTop.z, 0.006);
+          if (Math.abs(clamped.x - stageTop.x) > 1e-6 || Math.abs(clamped.z - stageTop.z) > 1e-6) {
+            stageTopWasClamped = true;
+            stageTop.set(clamped.x, surfaceY, clamped.z);
+          }
+        }
+        const stagePathCost = surfacePathCost(
+          fromTopPoint,
+          stageTop,
+          dynamicObstacles,
+          topClearance,
+          surfaceId
+        );
+        if (!Number.isFinite(stagePathCost)) continue;
+        if (!isJumpPointSafeAtY(stageTop, surfaceY, dynamicObstacles, topClearance)) continue;
+
+        let score = stagePathCost * 1.2 + 0.2;
+        if (desired) score += link.jumpFrom.distanceTo(desired) * 0.45;
+        if (score < localBestScore) {
+          localBestScore = score;
+          localBest = {
+            link,
+            stageTop,
+            stageTopWasClamped,
+          };
+        }
+      }
+      return localBest;
+    };
     let allowPushableBlockedLinks = false;
-    let traversableLinks = candidateLinks.filter((link) => isSurfaceJumpDownSafe(link, dynamicObstacles, false));
-    if (!traversableLinks.length) {
-      traversableLinks = candidateLinks.filter((link) => isSurfaceJumpDownSafe(link, dynamicObstacles, true));
-      allowPushableBlockedLinks = traversableLinks.length > 0;
-    }
     const surfaceY = toSurface.y;
     const topClearance = CAT_COLLISION.catBodyRadius * 1.08;
     const desired = desiredGroundPoint ? cloneXZ(desiredGroundPoint) : null;
-    let best = null;
-    let bestScore = Infinity;
-    for (const link of traversableLinks) {
-      if (!isSurfaceJumpDownSafe(link, dynamicObstacles, allowPushableBlockedLinks)) continue;
-      const rawStageTop = new THREE.Vector3(
-        THREE.MathUtils.lerp(link.top.x, link.hook.x, THREE.MathUtils.clamp(SURFACE_CFG.downJumpEdgeBias, 0, 0.95)),
-        surfaceY,
-        THREE.MathUtils.lerp(link.top.z, link.hook.z, THREE.MathUtils.clamp(SURFACE_CFG.downJumpEdgeBias, 0, 0.95))
-      );
-      const stageTop = rawStageTop.clone();
-      let stageTopWasClamped = false;
-      // Keep down-jump staging strictly inside the same support bounds used by surface steering.
-      if (toSurface?.inner) {
-        const clamped = clampPointToSurfaceXZ(toSurface, stageTop.x, stageTop.z, 0.006);
-        if (Math.abs(clamped.x - stageTop.x) > 1e-6 || Math.abs(clamped.z - stageTop.z) > 1e-6) {
-          stageTopWasClamped = true;
-          stageTop.set(clamped.x, surfaceY, clamped.z);
-        }
-      }
-      const stagePathCost = surfacePathCost(
-        fromTopPoint,
-        stageTop,
-        dynamicObstacles,
-        topClearance,
-        surfaceId
-      );
-      if (!Number.isFinite(stagePathCost)) continue;
-      if (!isJumpPointSafeAtY(stageTop, surfaceY, dynamicObstacles, topClearance)) continue;
-
-      let score = stagePathCost * 1.2 + 0.2;
-      if (desired) score += link.jumpFrom.distanceTo(desired) * 0.45;
-      if (score < bestScore) {
-        bestScore = score;
-        best = {
-          link,
-          stageTop,
-          stageTopWasClamped,
-        };
-      }
+    const strictPreferredLinks = excludedLinkIds.size
+      ? candidateLinks.filter((link) => !excludedLinkIds.has(String(link.id || "")))
+      : candidateLinks;
+    let best = computeBestLink(strictPreferredLinks, false);
+    if (!best && strictPreferredLinks !== candidateLinks) {
+      best = computeBestLink(candidateLinks, false);
+    }
+    if (!best) {
+      allowPushableBlockedLinks = true;
+      best = computeBestLink(candidateLinks, true);
     }
     if (!best) {
       traceFunction(
@@ -1748,6 +1797,7 @@ export function createCatJumpPlanningRuntime(ctx) {
       `from=${surfaceId || "na"} to=${String(best.link.fromSurfaceId || "floor")} ok=1`
     );
     return {
+      linkId: String(best.link.id || ""),
       top: best.stageTop.clone(),
       hook: best.link.hook.clone(),
       jumpFrom: best.link.jumpFrom.clone(),
@@ -1774,9 +1824,9 @@ export function createCatJumpPlanningRuntime(ctx) {
     if (probe.blockedByImmovableUp) return "staticBlocked";
     if (probe.blockedByMovableUp) return "dynamicBlocked";
     if (probe.staticValidUp !== true && probe.staticValidDown !== true) return "staticBlocked";
-    if (probe.validDown || probe.staticValidDown) return "validDown";
     if (probe.blockedByImmovableDown) return "staticBlocked";
     if (probe.blockedByMovableDown) return "dynamicBlocked";
+    if (probe.validDown || probe.staticValidDown) return "validDown";
     return "staticBlocked";
   }
 

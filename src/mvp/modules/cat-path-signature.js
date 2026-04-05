@@ -10,10 +10,13 @@ export function createCatPathSignatureRuntime(ctx) {
     const specs = [];
     for (const obs of obstacles) {
       const mode = String(obs?.mode || "hard");
+      const isPickupObstacle = !!obs?.pickupKey;
       // Soft and pushable clutter should influence high-level planning but should not
       // churn detour/tile-cache updates every time the cat brushes them. Those are
       // handled by the lightweight runtime steering and pickup shove logic instead.
-      if (mode !== "hard") continue;
+      // Exception: pickups need to appear in the live navmesh debug and on-surface
+      // nav cutouts, even though they are still pushable at runtime.
+      if (mode !== "hard" && !isPickupObstacle) continue;
       const navPad = Math.max(0, Number(obs?.navPad) || 0);
       if (obs.tag === "cup") {
         specs.push({
