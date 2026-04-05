@@ -1194,23 +1194,26 @@ export function makeBins({
     return { hamperRoot: null, trashCanRoot: null };
   }
 
-  // Hamper: open basket + visible laundry so it's clearly the laundry bin.
-  const hamperWallMat = makeTintedStandardMaterial(0x5b9bd2, { roughness: 0.84 }, hamper);
-  const hamperTrimMat = makeTintedStandardMaterial(0xd5ecff, { roughness: 0.56 }, hamper);
+// Hamper: woven basket style
+  const basketMat = makeTintedStandardMaterial(0xf0ece4, { roughness: 0.96 }, hamper);
+  const weaveLight = makeTintedStandardMaterial(0xfaf7f2, { roughness: 0.94 }, hamper);
+  const weaveDark = makeTintedStandardMaterial(0xddd5c8, { roughness: 0.97 }, hamper);
   const hamperClothMat = makeTintedStandardMaterial(0xe8eff8, { roughness: 0.95 }, hamper);
 
   const hamperGroup = new THREE.Group();
   hamperGroup.position.set(hamper.pos.x, 0, hamper.pos.z);
 
-  const wallThick = 0.06;
   const wallH = 0.88;
   const xSpan = hamper.outerHalfX * 2;
   const zSpan = hamper.outerHalfZ * 2;
+  const wallThick = 0.07;
+
+  // Main basket walls
   const walls = [
-    new THREE.Mesh(new THREE.BoxGeometry(xSpan, wallH, wallThick), hamperWallMat),
-    new THREE.Mesh(new THREE.BoxGeometry(xSpan, wallH, wallThick), hamperWallMat),
-    new THREE.Mesh(new THREE.BoxGeometry(wallThick, wallH, zSpan), hamperWallMat),
-    new THREE.Mesh(new THREE.BoxGeometry(wallThick, wallH, zSpan), hamperWallMat),
+    new THREE.Mesh(new THREE.BoxGeometry(xSpan, wallH, wallThick), basketMat),
+    new THREE.Mesh(new THREE.BoxGeometry(xSpan, wallH, wallThick), basketMat),
+    new THREE.Mesh(new THREE.BoxGeometry(wallThick, wallH, zSpan), basketMat),
+    new THREE.Mesh(new THREE.BoxGeometry(wallThick, wallH, zSpan), basketMat),
   ];
   walls[0].position.set(0, wallH * 0.5, hamper.outerHalfZ);
   walls[1].position.set(0, wallH * 0.5, -hamper.outerHalfZ);
@@ -1218,11 +1221,37 @@ export function makeBins({
   walls[3].position.set(-hamper.outerHalfX, wallH * 0.5, 0);
   for (const w of walls) hamperGroup.add(w);
 
+  // Horizontal weave bands across all 4 sides
+  const bandCount = 6;
+  for (let b = 0; b < bandCount; b++) {
+    const by = 0.08 + b * (wallH / bandCount);
+    const mat = b % 2 === 0 ? weaveLight : weaveDark;
+    const bandThick = wallThick + 0.01;
+    const front = new THREE.Mesh(new THREE.BoxGeometry(xSpan + 0.01, 0.06, bandThick), mat);
+    front.position.set(0, by, hamper.outerHalfZ);
+    hamperGroup.add(front);
+    const back = new THREE.Mesh(new THREE.BoxGeometry(xSpan + 0.01, 0.06, bandThick), mat);
+    back.position.set(0, by, -hamper.outerHalfZ);
+    hamperGroup.add(back);
+    const leftB = new THREE.Mesh(new THREE.BoxGeometry(bandThick, 0.06, zSpan + 0.01), mat);
+    leftB.position.set(hamper.outerHalfX, by, 0);
+    hamperGroup.add(leftB);
+    const rightB = new THREE.Mesh(new THREE.BoxGeometry(bandThick, 0.06, zSpan + 0.01), mat);
+    rightB.position.set(-hamper.outerHalfX, by, 0);
+    hamperGroup.add(rightB);
+  }
+
+  // Base
+  const base = new THREE.Mesh(new THREE.BoxGeometry(xSpan, 0.05, zSpan), weaveDark);
+  base.position.set(0, 0.025, 0);
+  hamperGroup.add(base);
+
+  // Rim — slightly wider, rounded look
   const rimBars = [
-    new THREE.Mesh(new THREE.BoxGeometry(xSpan + 0.08, 0.05, 0.05), hamperTrimMat),
-    new THREE.Mesh(new THREE.BoxGeometry(xSpan + 0.08, 0.05, 0.05), hamperTrimMat),
-    new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.05, zSpan + 0.08), hamperTrimMat),
-    new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.05, zSpan + 0.08), hamperTrimMat),
+    new THREE.Mesh(new THREE.BoxGeometry(xSpan + 0.1, 0.06, 0.06), weaveLight),
+    new THREE.Mesh(new THREE.BoxGeometry(xSpan + 0.1, 0.06, 0.06), weaveLight),
+    new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, zSpan + 0.1), weaveLight),
+    new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, zSpan + 0.1), weaveLight),
   ];
   rimBars[0].position.set(0, hamper.rimY, hamper.outerHalfZ + 0.02);
   rimBars[1].position.set(0, hamper.rimY, -hamper.outerHalfZ - 0.02);
@@ -1230,11 +1259,6 @@ export function makeBins({
   rimBars[3].position.set(-hamper.outerHalfX - 0.02, hamper.rimY, 0);
   for (const bar of rimBars) hamperGroup.add(bar);
 
-  for (let i = -1; i <= 1; i++) {
-    const vent = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.24, 0.03), hamperTrimMat);
-    vent.position.set(i * 0.2, 0.28, hamper.outerHalfZ + 0.04);
-    hamperGroup.add(vent);
-  }
 
   const hamperInside = new THREE.Mesh(
     new THREE.BoxGeometry(xSpan - 0.08, 0.48, zSpan - 0.08),
