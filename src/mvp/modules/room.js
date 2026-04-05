@@ -278,13 +278,35 @@ export function makeRoomCorner(scene, options = {}) {
     : -1;
   const floorY = Number.isFinite(Number(bounds?.floorY)) ? Number(bounds.floorY) : 0;
   if (isRoomObjectVisible(floorObject)) {
+    // Base floor slab (sits slightly below planks)
     const floor = new THREE.Mesh(
       new THREE.BoxGeometry(floorWidth, 0.2, floorDepth),
-      makeTintedStandardMaterial(0xd4b896, { roughness: 0.92 }, floorObject)
+      makeTintedStandardMaterial(0xb8966e, { roughness: 0.95 }, floorObject)
     );
     floor.position.set(floorCenterX, floorY - 0.1, floorCenterZ);
     if (floorObject) tagRoomObject(floor, floorObject);
     scene.add(floor);
+
+    // Wood planks running left-to-right across the floor
+    const plankColors = [0xd4b896, 0xc9a47e, 0xdbbf98, 0xc4996e, 0xd8b48a];
+    const plankCount = 11;
+    const plankGap = 0.025;
+    const plankThickness = 0.022;
+    const plankDepth = floorDepth - 0.05;
+    const totalGaps = (plankCount - 1) * plankGap;
+    const plankWidth = (floorWidth - totalGaps - 0.1) / plankCount;
+    const startX = floorCenterX - floorWidth * 0.5 + 0.05;
+
+    for (let i = 0; i < plankCount; i++) {
+      const px = startX + i * (plankWidth + plankGap) + plankWidth * 0.5;
+      const color = plankColors[i % plankColors.length];
+      const plank = new THREE.Mesh(
+        new THREE.BoxGeometry(plankWidth, plankThickness, plankDepth),
+        new THREE.MeshStandardMaterial({ color, roughness: 0.88 })
+      );
+      plank.position.set(px, floorY + plankThickness * 0.5, floorCenterZ);
+      scene.add(plank);
+    }
   }
 
   const wallMat = new THREE.MeshStandardMaterial({ color: 0xe8ddd0, roughness: 0.96 });
