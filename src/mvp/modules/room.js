@@ -689,6 +689,56 @@ export function makeBookcase(scene, bookcase) {
   tagRoomObject(group, bookcase);
   scene.add(group);
 }
+export function makeCurtains(scene, windowSill) {
+  if (!windowSill) return;
+
+  const curtainW = 0.42;
+  const curtainH = windowSill.windowHeight + 0.5;
+  const wallZ = windowSill.wallZ;
+  const centerX = windowSill.pos.x;
+  const centerY = windowSill.openingCenterY;
+  const halfOpening = windowSill.windowWidth * 0.5;
+  const rodY = centerY + windowSill.windowHeight * 0.5 + 0.14;
+
+  // Curtain rod
+  const rodMat = new THREE.MeshStandardMaterial({ color: 0xb89050, roughness: 0.4, metalness: 0.5 });
+  const rodWidth = windowSill.windowWidth + curtainW * 2 + 0.3;
+  const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, rodWidth, 10), rodMat);
+  rod.rotation.z = Math.PI * 0.5;
+  rod.position.set(centerX, rodY, wallZ + 0.06);
+  scene.add(rod);
+
+  // Rod end caps
+  const capMat = new THREE.MeshStandardMaterial({ color: 0xc8a870, roughness: 0.3, metalness: 0.6 });
+  for (const side of [-1, 1]) {
+    const cap = new THREE.Mesh(new THREE.SphereGeometry(0.04, 8, 8), capMat);
+    cap.position.set(centerX + side * (rodWidth * 0.5), rodY, wallZ + 0.06);
+    scene.add(cap);
+  }
+
+  // Left and right curtain panels
+  const curtainColors = [0x2c6e9e, 0x2c6e9e];
+  const foldColor = 0x1a5a8a;
+
+  for (const [i, side] of [[-1, -1], [1, 1]]) {
+    const cx = centerX + side * (halfOpening + curtainW * 0.5 + 0.04);
+
+    // Main panel
+    const panelMat = new THREE.MeshStandardMaterial({ color: 0x2c6e9e, roughness: 0.97 });
+    const panel = new THREE.Mesh(new THREE.BoxGeometry(curtainW, curtainH, 0.045), panelMat);
+    panel.position.set(cx, rodY - curtainH * 0.5, wallZ + 0.06);
+    scene.add(panel);
+
+    // 3 fold lines for fabric texture
+    const foldMat = new THREE.MeshStandardMaterial({ color: foldColor, roughness: 0.96 });
+    for (let f = 0; f < 3; f++) {
+      const foldX = cx + side * (f * 0.1 - 0.08);
+      const fold = new THREE.Mesh(new THREE.BoxGeometry(0.028, curtainH * 0.97, 0.05), foldMat);
+      fold.position.set(foldX, rodY - curtainH * 0.5, wallZ + 0.065);
+      scene.add(fold);
+    }
+  }
+}
 
 export function makeChair(scene, chair) {
   const seatMat = makeTintedStandardMaterial(0x544a41, { roughness: 0.82 }, chair);
@@ -1378,6 +1428,7 @@ export function buildRoomSceneFromLayout({
       trashCanModelCandidates,
     });
   }
-
+  const windowSillObj = layout.objectsById?.windowSill || null;
+  if (windowSillObj) makeCurtains(scene, windowSillObj);
   return { windowSillRuntime };
 }

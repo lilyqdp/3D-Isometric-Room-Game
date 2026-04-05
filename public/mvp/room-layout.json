@@ -417,21 +417,21 @@
       "pos": {
         "x": -1.15,
         "y": 0,
-        "z": -5.51
+        "z": -5.3
       },
-      "width": 1.18,
-      "depth": 0.78,
+      "width": 2.1,
+      "depth": 0.6,
       "thickness": 0.06,
-      "surfaceY": 1.46,
-      "wallZ": -5.98,
-      "windowWidth": 1.24,
-      "windowHeight": 0.94,
-      "openingCenterY": 1.88,
+      "surfaceY": 1.1,
+      "wallZ": -5.32,
+      "windowWidth": 2.1,
+      "windowHeight": 1.8,
+      "openingCenterY": 2.0,
       "openDuration": 20,
       "sitPoint": {
         "x": -1.15,
         "y": 0,
-        "z": -5.51
+        "z": -5.3
       },
       "outsideYaw": 3.141592653589793,
       "rotQuarterTurns": 0,
