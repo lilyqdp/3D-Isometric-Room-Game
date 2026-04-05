@@ -1,9 +1,9 @@
 {
   "roomBounds": {
-    "minX": -8,
-    "maxX": 6,
+    "minX": -7,
+    "maxX": 5,
     "minZ": -6,
-    "maxZ": 4,
+    "maxZ": 3,
     "floorY": 0
   },
   "targetBounds": {
@@ -23,8 +23,8 @@
         "y": 0,
         "z": -1
       },
-      "width": 14,
-      "depth": 10,
+      "width": 12,
+      "depth": 9,
       "y": 0,
       "rotQuarterTurns": 0,
       "editorLocked": true,

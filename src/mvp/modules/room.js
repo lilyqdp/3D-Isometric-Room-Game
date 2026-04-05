@@ -311,10 +311,10 @@ export function makeRoomCorner(scene, options = {}) {
 
   const wallMat = new THREE.MeshStandardMaterial({ color: 0xe8ddd0, roughness: 0.96 });
   const wallCenterX = floorCenterX;
-  const wallCenterY = 2.0;
+  const wallCenterY = 1.6;
   const wallCenterZ = Number.isFinite(Number(bounds?.minZ)) ? Number(bounds.minZ) : -6;
   const wallWidth = floorWidth;
-  const wallHeight = 4.2;
+  const wallHeight = 3.2;
   const wallThickness = 0.2;
   const wallMinX = wallCenterX - wallWidth * 0.5;
   const wallMaxX = wallCenterX + wallWidth * 0.5;
@@ -381,8 +381,8 @@ export function makeRoomCorner(scene, options = {}) {
     scene.add(backWall);
   }
 
-  const leftWall = new THREE.Mesh(new THREE.BoxGeometry(0.2, 4.2, floorDepth), wallMat);
-  leftWall.position.set(Number.isFinite(Number(bounds?.minX)) ? Number(bounds.minX) : -8, 2.0, floorCenterZ);
+  const leftWall = new THREE.Mesh(new THREE.BoxGeometry(0.2, 3.2, floorDepth), wallMat);
+  leftWall.position.set(Number.isFinite(Number(bounds?.minX)) ? Number(bounds.minX) : -8, 1.6, floorCenterZ);
   scene.add(leftWall);
 }
 
