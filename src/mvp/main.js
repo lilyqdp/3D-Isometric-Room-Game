@@ -118,7 +118,7 @@ renderer.outputColorSpace = THREE.SRGBColorSpace;
 document.body.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0xd9dce2);
+scene.background = new THREE.Color(0xdde8f0);
 
 let aspect = window.innerWidth / window.innerHeight;
 const camera = new THREE.PerspectiveCamera(44, aspect, 0.01, 100);
@@ -141,10 +141,10 @@ controls.mouseButtons = {
 controls.target.set(-1.2, 1.4, -1.2);
 camera.updateProjectionMatrix();
 
-const hemi = new THREE.HemisphereLight(0xf5f7fb, 0x8792a1, 0.95);
+const hemi = new THREE.HemisphereLight(0xfff4e0, 0xc8b89a, 1.1);
 scene.add(hemi);
 
-const sun = new THREE.DirectionalLight(0xffffff, 0.9);
+const sun = new THREE.DirectionalLight(0xfff8ec, 1.05);
 sun.position.set(9, 12, 6);
 scene.add(sun);
 

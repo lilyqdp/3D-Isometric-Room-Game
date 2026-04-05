@@ -280,14 +280,14 @@ export function makeRoomCorner(scene, options = {}) {
   if (isRoomObjectVisible(floorObject)) {
     const floor = new THREE.Mesh(
       new THREE.BoxGeometry(floorWidth, 0.2, floorDepth),
-      makeTintedStandardMaterial(0xbcc3ce, { roughness: 0.95 }, floorObject)
+      makeTintedStandardMaterial(0xd4b896, { roughness: 0.92 }, floorObject)
     );
     floor.position.set(floorCenterX, floorY - 0.1, floorCenterZ);
     if (floorObject) tagRoomObject(floor, floorObject);
     scene.add(floor);
   }
 
-  const wallMat = new THREE.MeshStandardMaterial({ color: 0x7f8690, roughness: 0.98 });
+  const wallMat = new THREE.MeshStandardMaterial({ color: 0xe8ddd0, roughness: 0.96 });
   const wallCenterX = floorCenterX;
   const wallCenterY = 2.0;
   const wallCenterZ = Number.isFinite(Number(bounds?.minZ)) ? Number(bounds.minZ) : -6;
@@ -336,7 +336,7 @@ export function makeRoomCorner(scene, options = {}) {
     addBackWallPiece(openMinX, openMaxX, openMaxY, wallMaxY); // top
 
     // Window reveal so the wall opening has visible depth.
-    const revealMat = new THREE.MeshStandardMaterial({ color: 0x6f7680, roughness: 0.86 });
+    const revealMat = new THREE.MeshStandardMaterial({ color: 0xd4c8b8, roughness: 0.84 });
     const revealT = 0.03;
     const revealLeft = new THREE.Mesh(new THREE.BoxGeometry(revealT, openMaxY - openMinY, wallThickness), revealMat);
     revealLeft.position.set(openMinX + revealT * 0.5, (openMinY + openMaxY) * 0.5, wallCenterZ);
@@ -455,9 +455,9 @@ export function makeChair(scene, chair) {
 }
 
 export function makeShelf(scene, shelf) {
-  const postMat = makeTintedStandardMaterial(0x4a4f59, { roughness: 0.84 }, shelf);
-  const boardMat = makeTintedStandardMaterial(0x656c78, { roughness: 0.78 }, shelf);
-  const backMat = makeTintedStandardMaterial(0x57606d, { roughness: 0.86 }, shelf);
+  const postMat = makeTintedStandardMaterial(0x7a5c48, { roughness: 0.84 }, shelf);
+  const boardMat = makeTintedStandardMaterial(0x9c7355, { roughness: 0.78 }, shelf);
+  const backMat = makeTintedStandardMaterial(0x8a6650, { roughness: 0.86 }, shelf);
 
   const group = new THREE.Group();
   group.position.copy(shelf.pos);
@@ -510,7 +510,7 @@ export function makeShelf(scene, shelf) {
 }
 
 export function makePlatform(scene, platform) {
-  const boardMat = makeTintedStandardMaterial(0x6a7280, { roughness: 0.78 }, platform);
+  const boardMat = makeTintedStandardMaterial(0xc4a882, { roughness: 0.78 }, platform);
   const group = new THREE.Group();
   group.position.copy(platform.pos);
   group.rotation.y = getObjectRotation(platform);
