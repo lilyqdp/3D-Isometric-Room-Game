@@ -6,6 +6,10 @@ export function setupPhysicsWorld({
   desk,
   hamper,
   trashCan,
+  bed,
+  wardrobe,
+  bookcase,
+  bedsideTable,
   EXTRA_STATIC_BOXES = [],
 }) {
   const world = physics.world;
@@ -46,17 +50,56 @@ export function setupPhysicsWorld({
     physics.staticBoxes.push({ x, y, z, hx, hy, hz, rotY });
   };
 
-  addStaticBox(-1, -0.05, -1, 7, 0.05, 5, 0, floorMat);
-  addStaticBox(ROOM.minX - 0.03, 0.8, -1, 0.03, 0.8, 5);
-  addStaticBox(ROOM.maxX + 0.03, 0.8, -1, 0.03, 0.8, 5);
-  addStaticBox(-1, 0.8, ROOM.minZ - 0.03, 7, 0.8, 0.03);
-  addStaticBox(-1, 0.8, ROOM.maxZ + 0.03, 7, 0.8, 0.03);
+  // Floor at plank surface height
+  const floorCX = (ROOM.minX + ROOM.maxX) * 0.5;
+  const floorCZ = (ROOM.minZ + ROOM.maxZ) * 0.5;
+  const floorHX = (ROOM.maxX - ROOM.minX) * 0.5;
+  const floorHZ = (ROOM.maxZ - ROOM.minZ) * 0.5;
+  addStaticBox(floorCX, 0.055, floorCZ, floorHX, 0.055, floorHZ, 0, floorMat);
 
+  // Walls
+  const wallH = 1.6;
+  addStaticBox(ROOM.minX - 0.03, wallH, floorCZ, 0.03, wallH, floorHZ);
+  addStaticBox(ROOM.maxX + 0.03, wallH, floorCZ, 0.03, wallH, floorHZ);
+  addStaticBox(floorCX, wallH, ROOM.minZ - 0.03, floorHX, wallH, 0.03);
+  addStaticBox(floorCX, wallH, ROOM.maxZ + 0.03, floorHX, wallH, 0.03);
+
+  // Desk
   for (const leg of DESK_LEGS) {
     addStaticBox(leg.x, 0.5, leg.z, leg.halfX, 0.5, leg.halfZ);
   }
   addStaticBox(desk.pos.x, 1.02, desk.pos.z, desk.sizeX * 0.5, 0.06, desk.sizeZ * 0.5, 0, shellMat);
 
+  // Bed
+  if (bed) {
+    const bedW = (bed.width || 2.0) * 0.5;
+    const bedD = (bed.depth || 3.4) * 0.5;
+    addStaticBox(bed.pos.x, 0.4, bed.pos.z, bedW, 0.02, bedD, 0, shellMat);
+    addStaticBox(bed.pos.x, 0.2, bed.pos.z, bedW, 0.2, bedD, 0, shellMat);
+  }
+
+  // Wardrobe
+  if (wardrobe) {
+    const ww = (wardrobe.width || 1.7) * 0.5;
+    const wd = (wardrobe.depth || 0.55) * 0.5;
+    const wh = (wardrobe.height || 2.2) * 0.5;
+    addStaticBox(wardrobe.pos.x, wh, wardrobe.pos.z, ww, wh, wd, (wardrobe.rotQuarterTurns || 0) * Math.PI * 0.5, shellMat);
+  }
+
+  // Bookcase
+  if (bookcase) {
+    const bw = (bookcase.width || 1.1) * 0.5;
+    const bd = (bookcase.depth || 0.38) * 0.5;
+    const bh = (bookcase.height || 1.8) * 0.5;
+    addStaticBox(bookcase.pos.x, bh, bookcase.pos.z, bw, bh, bd, 0, shellMat);
+  }
+
+  // Bedside table
+  if (bedsideTable) {
+    addStaticBox(bedsideTable.pos.x, 0.32, bedsideTable.pos.z, 0.29, 0.32, 0.24, 0, shellMat);
+  }
+
+  // Hamper
   addStaticBox(hamper.pos.x, hamper.rimY * 0.5, hamper.pos.z + hamper.outerHalfZ, hamper.outerHalfX, hamper.rimY * 0.5, 0.03);
   addStaticBox(hamper.pos.x, hamper.rimY * 0.5, hamper.pos.z - hamper.outerHalfZ, hamper.outerHalfX, hamper.rimY * 0.5, 0.03);
   addStaticBox(hamper.pos.x + hamper.outerHalfX, hamper.rimY * 0.5, hamper.pos.z, 0.03, hamper.rimY * 0.5, hamper.outerHalfZ);
@@ -66,6 +109,7 @@ export function setupPhysicsWorld({
   addStaticBox(hamper.pos.x + hamper.outerHalfX, hamper.rimY + 0.02, hamper.pos.z, 0.03, 0.02, hamper.outerHalfZ + 0.02, 0, rimMat);
   addStaticBox(hamper.pos.x - hamper.outerHalfX, hamper.rimY + 0.02, hamper.pos.z, 0.03, 0.02, hamper.outerHalfZ + 0.02, 0, rimMat);
 
+  // Trash can
   const segments = 48;
   const halfWallH = trashCan.rimY * 0.5;
   for (let i = 0; i < segments; i++) {

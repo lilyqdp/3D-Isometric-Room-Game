@@ -232,7 +232,7 @@ const physics = {
 const raycaster = new THREE.Raycaster();
 const mouse = new THREE.Vector2();
 const tempV3 = new THREE.Vector3();
-const floorPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+const floorPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -0.055);
 const gltfLoader = new GLTFLoader();
 const CAT_MODEL_URL = `${import.meta.env.BASE_URL}mvp/cat.glb`;
 const CAT_MODEL_YAW_OFFSET = Math.PI * 0.5;
@@ -695,6 +695,10 @@ setupPhysicsWorld({
   desk,
   hamper,
   trashCan,
+   bed: roomLayout.objectsById?.bed || null,
+  wardrobe: roomLayout.objectsById?.wardrobe || null,
+  bookcase: roomLayout.objectsById?.bookcase || null,
+  bedsideTable: roomLayout.objectsById?.bedsideTable || null,
   EXTRA_STATIC_BOXES,
 });
 await navRuntime.initPathfinding();

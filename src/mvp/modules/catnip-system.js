@@ -461,8 +461,8 @@ export function createCatnipRuntime(ctx) {
         surface: "floor",
         x: THREE.MathUtils.clamp(floorHit.x, ROOM.minX + 0.6, ROOM.maxX - 0.6),
         z: THREE.MathUtils.clamp(floorHit.z, ROOM.minZ + 0.6, ROOM.maxZ - 0.6),
-        y: CATNIP_HALF_HEIGHT,
-        surfaceY: 0,
+        y: 0.055 + CATNIP_HALF_HEIGHT,
+        surfaceY: 0.055,
       };
       return placement;
     } finally {
