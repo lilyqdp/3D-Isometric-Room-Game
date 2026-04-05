@@ -194,31 +194,47 @@ export function createPickupsRuntime(ctx) {
     let body;
     let mass;
     if (type === "laundry") {
-      const clothMat = new THREE.MeshStandardMaterial({ color: 0xf2f4f9, roughness: 0.96 });
-      const foldMat = new THREE.MeshStandardMaterial({ color: 0xe4e9f2, roughness: 0.95 });
+      // Pick a random clothing color each spawn
+      const clothColors = [0x3182bd, 0x9ecae1, 0xc45c8a, 0xe8a838, 0x6db86d, 0xd45f5f, 0x9b6dd4, 0x4a90c4];
+      const foldColors = [0x2c6e9e, 0x7ab8d8, 0xb04878, 0xc88c28, 0x4a9e4a, 0xb84040, 0x7a50b0, 0x3278a8];
+      const ci = Math.floor(Math.random() * clothColors.length);
+      const clothMat = new THREE.MeshStandardMaterial({ color: clothColors[ci], roughness: 0.97 });
+      const foldMat = new THREE.MeshStandardMaterial({ color: foldColors[ci], roughness: 0.96 });
       const pile = new THREE.Group();
 
-      const baseGeo = new THREE.BoxGeometry(0.48, 0.04, 0.36, 6, 1, 6);
-      jitterGeometry(baseGeo, 0.01);
+      // Main crumpled body — wider and thicker than before
+      const baseGeo = new THREE.BoxGeometry(0.52, 0.07, 0.4, 6, 1, 6);
+      jitterGeometry(baseGeo, 0.025);
       const base = new THREE.Mesh(baseGeo, clothMat);
-      base.position.set(0, 0.03, 0);
+      base.position.set(0, 0.04, 0);
       pile.add(base);
 
-      const foldGeo = new THREE.BoxGeometry(0.38, 0.035, 0.27, 6, 1, 6);
-      jitterGeometry(foldGeo, 0.009);
+      // Second layer — angled like a sleeve or fold
+      const foldGeo = new THREE.BoxGeometry(0.42, 0.055, 0.28, 6, 1, 6);
+      jitterGeometry(foldGeo, 0.02);
       const fold = new THREE.Mesh(foldGeo, foldMat);
-      fold.position.set(0.02, 0.055, -0.02);
-      fold.rotation.y = 0.32;
-      fold.rotation.x = 0.06;
+      fold.position.set(0.03, 0.09, -0.03);
+      fold.rotation.y = 0.45;
+      fold.rotation.x = 0.1;
       pile.add(fold);
 
-      const flapGeo = new THREE.BoxGeometry(0.2, 0.03, 0.14, 4, 1, 4);
-      jitterGeometry(flapGeo, 0.008);
+      // Top flap — like a sleeve or collar sticking up
+      const flapGeo = new THREE.BoxGeometry(0.22, 0.05, 0.16, 4, 1, 4);
+      jitterGeometry(flapGeo, 0.018);
       const flap = new THREE.Mesh(flapGeo, clothMat);
-      flap.position.set(0.09, 0.08, 0.08);
-      flap.rotation.y = -0.5;
-      flap.rotation.x = -0.05;
+      flap.position.set(0.1, 0.13, 0.07);
+      flap.rotation.y = -0.6;
+      flap.rotation.x = -0.18;
       pile.add(flap);
+
+      // Extra scrunch — small piece poking out the other side
+      const scrunchGeo = new THREE.BoxGeometry(0.16, 0.04, 0.12, 4, 1, 4);
+      jitterGeometry(scrunchGeo, 0.015);
+      const scrunch = new THREE.Mesh(scrunchGeo, foldMat);
+      scrunch.position.set(-0.14, 0.07, 0.1);
+      scrunch.rotation.y = 0.8;
+      scrunch.rotation.x = 0.12;
+      pile.add(scrunch);
 
       mesh = pile;
       mesh.rotation.x = (Math.random() - 0.5) * 0.07;
