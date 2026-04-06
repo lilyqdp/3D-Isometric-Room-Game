@@ -254,6 +254,58 @@ export function createCatPathfindingRuntime(ctx) {
     return String(obs.mode || "hard") === "hard";
   }
 
+  function buildSpecialRoomObstacles() {
+    const obstacles = [];
+    if (hamper?.obstacle?.enabled) {
+      obstacles.push(makeObstacle({
+        kind: "box",
+        mode: "soft",
+        tag: "hamper",
+        x: hamper.pos.x,
+        z: hamper.pos.z,
+        hx: hamper.outerHalfX + 0.01,
+        hz: hamper.outerHalfZ + 0.01,
+        navPad: 0.03,
+        steerPad: 0.012,
+        collisionPad: 0,
+        y: hamper.rimY * 0.5,
+        h: hamper.rimY + 0.06,
+      }));
+    }
+    if (trashCan?.obstacle?.enabled) {
+      obstacles.push(makeObstacle({
+        kind: "circle",
+        mode: "soft",
+        tag: "trashcan",
+        x: trashCan.pos.x,
+        z: trashCan.pos.z,
+        r: trashCan.outerRadius + 0.08,
+        navPad: 0.06,
+        steerPad: 0.016,
+        collisionPad: 0,
+        y: trashCan.rimY * 0.5,
+        h: trashCan.rimY + 0.08,
+      }));
+    }
+    for (const leg of DESK_LEGS) {
+      obstacles.push(applyOptionalObstacleMeta(makeObstacle({
+        kind: "box",
+        mode: "hard",
+        x: leg.x,
+        z: leg.z,
+        hx: leg.halfX + 0.02,
+        hz: leg.halfZ + 0.02,
+        navPad: 0.025,
+        steerPad: 0.02,
+        collisionPad: 0,
+        jumpIgnoreSurfaceIds: ["desk"],
+        y: leg.topY * 0.5,
+        h: leg.topY + 0.04,
+      }), leg));
+    }
+    return obstacles;
+  }
+
   function inflateObstacleForStage(obs, stage = "plan") {
     const pad = getObstaclePad(obs, stage);
     if (!pad) return obs;
@@ -555,52 +607,7 @@ export function createCatPathfindingRuntime(ctx) {
       return cached;
     }
     bumpPathProfilerCounter("obstacleCacheMisses");
-    const obstacles = [
-      makeObstacle({
-        kind: "box",
-        mode: "soft",
-        tag: "hamper",
-        x: hamper.pos.x,
-        z: hamper.pos.z,
-        hx: hamper.outerHalfX + 0.01,
-        hz: hamper.outerHalfZ + 0.01,
-        navPad: 0.03,
-        steerPad: 0.012,
-        collisionPad: 0,
-        y: hamper.rimY * 0.5,
-        h: hamper.rimY + 0.06,
-      }),
-      makeObstacle({
-        kind: "circle",
-        mode: "soft",
-        tag: "trashcan",
-        x: trashCan.pos.x,
-        z: trashCan.pos.z,
-        r: trashCan.outerRadius + 0.08,
-        navPad: 0.06,
-        steerPad: 0.016,
-        collisionPad: 0,
-        y: trashCan.rimY * 0.5,
-        h: trashCan.rimY + 0.08,
-      }),
-    ];
-    for (const leg of DESK_LEGS) {
-      obstacles.push(applyOptionalObstacleMeta(makeObstacle({
-        kind: "box",
-        mode: "hard",
-        x: leg.x,
-        z: leg.z,
-        hx: leg.halfX + 0.02,
-        hz: leg.halfZ + 0.02,
-        navPad: 0.025,
-        steerPad: 0.02,
-        collisionPad: 0,
-        // "desk" is the surface id used by jump-planning for the table top.
-        jumpIgnoreSurfaceIds: ["desk"],
-        y: leg.topY * 0.5,
-        h: leg.topY + 0.04,
-      }), leg));
-    }
+    const obstacles = buildSpecialRoomObstacles();
     for (const obs of EXTRA_NAV_OBSTACLES) {
       if (!obs) continue;
       if (obs.kind === "circle") {
@@ -735,51 +742,7 @@ export function createCatPathfindingRuntime(ctx) {
 
   function buildStaticSourceObstacles() {
     if (staticSourceObstaclesCache) return staticSourceObstaclesCache;
-    const obstacles = [
-      makeObstacle({
-        kind: "box",
-        mode: "soft",
-        tag: "hamper",
-        x: hamper.pos.x,
-        z: hamper.pos.z,
-        hx: hamper.outerHalfX + 0.01,
-        hz: hamper.outerHalfZ + 0.01,
-        navPad: 0.03,
-        steerPad: 0.012,
-        collisionPad: 0,
-        y: hamper.rimY * 0.5,
-        h: hamper.rimY + 0.06,
-      }),
-      makeObstacle({
-        kind: "circle",
-        mode: "soft",
-        tag: "trashcan",
-        x: trashCan.pos.x,
-        z: trashCan.pos.z,
-        r: trashCan.outerRadius + 0.08,
-        navPad: 0.06,
-        steerPad: 0.016,
-        collisionPad: 0,
-        y: trashCan.rimY * 0.5,
-        h: trashCan.rimY + 0.08,
-      }),
-    ];
-    for (const leg of DESK_LEGS) {
-      obstacles.push(applyOptionalObstacleMeta(makeObstacle({
-        kind: "box",
-        mode: "hard",
-        x: leg.x,
-        z: leg.z,
-        hx: leg.halfX + 0.02,
-        hz: leg.halfZ + 0.02,
-        navPad: 0.025,
-        steerPad: 0.02,
-        collisionPad: 0,
-        jumpIgnoreSurfaceIds: ["desk"],
-        y: leg.topY * 0.5,
-        h: leg.topY + 0.04,
-      }), leg));
-    }
+    const obstacles = buildSpecialRoomObstacles();
     for (const obs of EXTRA_NAV_OBSTACLES) {
       if (!obs) continue;
       if (obs.kind === "circle") {

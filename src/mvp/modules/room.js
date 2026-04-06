@@ -1352,6 +1352,7 @@ export function makeBins({
   hamperRing.rotation.x = -Math.PI / 2;
   hamperRing.position.set(0, hamper.rimY + 0.03, 0);
   hamperGroup.add(hamperRing);
+  if (hamper.surface?.enabled) addInvisibleSurfaceProxy(hamperGroup, hamper, Number(hamper.rimY) + 0.01);
 
   if (isRoomObjectVisible(hamper)) {
     scene.add(hamperGroup);
@@ -1427,6 +1428,7 @@ export function makeBins({
   trashRing.rotation.x = -Math.PI / 2;
   trashRing.position.set(0, trashCan.rimY + 0.035, 0);
   trashGroup.add(trashRing);
+  if (trashCan.surface?.enabled) addInvisibleSurfaceProxy(trashGroup, trashCan, Number(trashCan.rimY) + 0.01);
 
   const trashFallbackMeshes = [trashBody, trashBottom, trashRim, trashInside];
   loadTrashCanModel({

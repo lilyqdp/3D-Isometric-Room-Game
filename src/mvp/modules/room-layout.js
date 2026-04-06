@@ -343,6 +343,55 @@ function vectorFieldKeys() {
   return ["pos", "approach", "perch", "cup", "sitPoint"];
 }
 
+const SUPPORTED_ROOM_OBJECT_TYPES = new Set([
+  "floor",
+  "desk",
+  "chair",
+  "shelf",
+  "platform",
+  "windowSill",
+  "primitive",
+  "model",
+  "hamper",
+  "trashCan",
+  "bed",
+  "bedsideTable",
+  "rug",
+  "wardrobe",
+  "bookcase",
+]);
+
+function isSupportedRoomObjectType(type) {
+  const normalized = String(type || "").trim();
+  return !!normalized && SUPPORTED_ROOM_OBJECT_TYPES.has(normalized);
+}
+
+function coerceImportedObjectToSupportedType(sourceObject) {
+  const sourceType = String(sourceObject?.type || "").trim();
+  if (!sourceType || isSupportedRoomObjectType(sourceType)) return sourceObject;
+  const coerced = {
+    ...(sourceObject && typeof sourceObject === "object" ? sourceObject : {}),
+  };
+  if (!coerced.sourceType) coerced.sourceType = sourceType;
+  const shapeKind = String(coerced.shapeKind || "").trim();
+  const hasPrimitiveHints =
+    !!shapeKind ||
+    Number.isFinite(Number(coerced.radius)) ||
+    Number.isFinite(Number(coerced.centerY));
+  if (hasPrimitiveHints) {
+    coerced.type = "primitive";
+    if (!shapeKind) {
+      coerced.shapeKind =
+        Number.isFinite(Number(coerced.centerY)) && !Number.isFinite(Number(coerced.height))
+          ? "sphere"
+          : "box";
+    }
+    return coerced;
+  }
+  coerced.type = "model";
+  return coerced;
+}
+
 function cloneRoomObjectFromTemplate(THREE, template) {
   const serial = toSerializableValue(template || {}, { includeTransient: true });
   const clone = {};
@@ -357,7 +406,7 @@ function cloneRoomObjectFromTemplate(THREE, template) {
 }
 
 function instantiateRoomObject(THREE, source, templateLayout) {
-  const sourceObject = source && typeof source === "object" ? source : {};
+  const sourceObject = coerceImportedObjectToSupportedType(source && typeof source === "object" ? source : {});
   const templateById = templateLayout?.objectsById || {};
   const templateObjects = Array.isArray(templateLayout?.objects) ? templateLayout.objects : [];
   const fallbackTemplate =
@@ -461,8 +510,39 @@ function createDefaultObstacleConfig({ enabled = false, mode = "soft", jumpIgnor
   };
 }
 
+function objectSupportsObstacleSettings(object) {
+  return !!object && [
+    "desk",
+    "chair",
+    "shelf",
+    "platform",
+    "windowSill",
+    "primitive",
+    "model",
+    "hamper",
+    "trashCan",
+    "bed",
+    "bedsideTable",
+    "rug",
+    "wardrobe",
+    "bookcase",
+  ].includes(object.type);
+}
+
 function objectSupportsGenericObstacle(object) {
-  return !!object && ["primitive", "model", "bed", "bedsideTable", "rug", "wardrobe", "bookcase"].includes(object.type);
+  return !!object && [
+    "chair",
+    "shelf",
+    "platform",
+    "windowSill",
+    "primitive",
+    "model",
+    "bed",
+    "bedsideTable",
+    "rug",
+    "wardrobe",
+    "bookcase",
+  ].includes(object.type);
 }
 
 function getDefaultSurfaceSpecialType(object) {
@@ -473,7 +553,7 @@ function getDefaultSurfaceSpecialType(object) {
 }
 
 function getDefaultObstacleConfigForObject(object) {
-  if (["bed", "bedsideTable", "wardrobe", "bookcase"].includes(object?.type)) {
+  if (["desk", "hamper", "trashCan", "bed", "bedsideTable", "wardrobe", "bookcase"].includes(object?.type)) {
     return createDefaultObstacleConfig({ enabled: true, mode: "hard" });
   }
   return createDefaultObstacleConfig({ enabled: false, mode: "soft" });
@@ -521,7 +601,43 @@ function ensureRoomObjectDefaults(object) {
       break;
   }
 
-  if (objectSupportsGenericObstacle(object)) {
+  if (objectCanSupportSurface(object) && (!object.surface || typeof object.surface !== "object")) {
+    object.surface = createDefaultSurfaceConfig({
+      enabled: false,
+      shape: object.type === "primitive" && object.shapeKind === "cylinder" ? "circle" : "rect",
+      specialType: getDefaultSurfaceSpecialType(object),
+    });
+  }
+  if (objectCanSupportSurface(object) && object.surface && typeof object.surface === "object") {
+    const defaults = createDefaultSurfaceConfig({
+      enabled: false,
+      shape: object.type === "primitive" && object.shapeKind === "cylinder" ? "circle" : "rect",
+      specialType: getDefaultSurfaceSpecialType(object),
+    });
+    object.surface.enabled = object.surface.enabled != null ? !!object.surface.enabled : defaults.enabled;
+    object.surface.shape = String(
+      object.surface.shape || defaults.shape || createDefaultSurfaceShape(getDefaultSurfaceSpecialType(object))
+    ).toLowerCase();
+    if (!Number.isFinite(Number(object.surface.width))) object.surface.width = defaults.width;
+    if (!Number.isFinite(Number(object.surface.depth))) object.surface.depth = defaults.depth;
+    if (!Number.isFinite(Number(object.surface.radius))) object.surface.radius = defaults.radius;
+    if (!Number.isFinite(Number(object.surface.offsetX))) object.surface.offsetX = defaults.offsetX;
+    if (!Number.isFinite(Number(object.surface.offsetZ))) object.surface.offsetZ = defaults.offsetZ;
+    object.surface.flags = {
+      ...defaults.flags,
+      ...(object.surface.flags && typeof object.surface.flags === "object" ? object.surface.flags : {}),
+    };
+    object.surface.special = {
+      ...defaults.special,
+      ...(object.surface.special && typeof object.surface.special === "object" ? object.surface.special : {}),
+    };
+    object.surface.supportOffsets = Array.isArray(object.surface.supportOffsets) ? object.surface.supportOffsets : [];
+    object.surface.blockerOffsets = Array.isArray(object.surface.blockerOffsets) ? object.surface.blockerOffsets : [];
+    object.surface.supports = Array.isArray(object.surface.supports) ? object.surface.supports : [];
+    object.surface.blockers = Array.isArray(object.surface.blockers) ? object.surface.blockers : [];
+  }
+
+  if (objectSupportsObstacleSettings(object)) {
     const defaults = getDefaultObstacleConfigForObject(object);
     if (!object.obstacle || typeof object.obstacle !== "object") {
       object.obstacle = defaults;
@@ -752,7 +868,7 @@ function getLayoutObjectCenterY(object) {
 
 function objectCanSupportSurface(object) {
   if (!object) return false;
-  if (["floor", "desk", "chair", "shelf", "platform", "windowSill", "model", "bed", "bedsideTable", "rug", "wardrobe", "bookcase"].includes(object.type)) return true;
+  if (["floor", "desk", "chair", "shelf", "platform", "windowSill", "model", "hamper", "trashCan", "bed", "bedsideTable", "rug", "wardrobe", "bookcase"].includes(object.type)) return true;
   if (object.type === "primitive") return object.shapeKind !== "sphere";
   return false;
 }
@@ -1198,6 +1314,21 @@ function getObjectBaseSurfaceDimensions(object) {
         depth: Number(object.depth) || 0,
         y: Number(object.surfaceY) || Number(object.height) || 0,
       };
+    case "hamper":
+      return {
+        width: Math.max(0.1, Number(object.openingHalfX) || Number(object.outerHalfX) || 0) * 2,
+        depth: Math.max(0.1, Number(object.openingHalfZ) || Number(object.outerHalfZ) || 0) * 2,
+        y: Number(object.rimY) || 0,
+      };
+    case "trashCan": {
+      const radius = Math.max(0.05, Number(object.openingRadius) || Number(object.outerRadius) || 0);
+      return {
+        width: radius * 2,
+        depth: radius * 2,
+        radius,
+        y: Number(object.rimY) || 0,
+      };
+    }
     case "model":
       return {
         width: Number.isFinite(runtimeModelBounds?.width) ? runtimeModelBounds.width : Number(object.width) || 0,
@@ -1419,7 +1550,7 @@ export function buildRoomDerivedData(layout) {
     if (staticBox) extraStaticBoxes.push(staticBox);
   }
   return {
-    deskLegs: desk ? buildDeskLegs(desk) : [],
+    deskLegs: desk?.obstacle?.enabled ? buildDeskLegs(desk) : [],
     chairLegs: chair ? buildChairLegs(chair) : [],
     chairBackCollider: chair ? buildChairBackCollider(chair) : null,
     shelfPosts: shelf ? buildShelfPosts(shelf) : [],
@@ -1616,18 +1747,90 @@ export function setRoomObjectRuntimeAsset(layout, objectId, { url = "", name = "
 
 export function calibrateRoomObjectDimensionsFromRuntimeBounds(layout, objectId) {
   const object = layout?.objectsById?.[objectId];
-  if (!object || object.type !== "model" || !object.runtimeAssetBounds || typeof object.runtimeAssetBounds !== "object") {
+  if (!object || !object.runtimeAssetBounds || typeof object.runtimeAssetBounds !== "object") {
     return null;
   }
   const width = Math.max(0.05, Number(object.runtimeAssetBounds.width) || 0);
   const depth = Math.max(0.05, Number(object.runtimeAssetBounds.depth) || 0);
   const height = Math.max(0.05, Number(object.runtimeAssetBounds.height) || 0);
   if (![width, depth, height].every(Number.isFinite)) return null;
-  object.width = roundLayoutNumber(width);
-  object.depth = roundLayoutNumber(depth);
-  object.height = roundLayoutNumber(height);
-  object.surfaceY = roundLayoutNumber(height);
-  object.modelScale = 1;
+  switch (object.type) {
+    case "model":
+      object.width = roundLayoutNumber(width);
+      object.depth = roundLayoutNumber(depth);
+      object.height = roundLayoutNumber(height);
+      object.surfaceY = roundLayoutNumber(height);
+      object.modelScale = 1;
+      break;
+    case "primitive":
+      if (["sphere", "cylinder"].includes(String(object.shapeKind || "").toLowerCase())) return null;
+      object.width = roundLayoutNumber(width);
+      object.depth = roundLayoutNumber(depth);
+      object.height = roundLayoutNumber(height);
+      object.surfaceY = roundLayoutNumber(height);
+      break;
+    case "desk":
+      object.sizeX = roundLayoutNumber(width);
+      object.sizeZ = roundLayoutNumber(depth);
+      object.topY = roundLayoutNumber(height);
+      break;
+    case "chair": {
+      const prevSeatY = Math.max(0.05, Number(object.seatY) || 0.45);
+      const prevBackHeight = Math.max(0.05, Number(object.backHeight) || 0.5);
+      const prevTotal = Math.max(0.1, prevSeatY + prevBackHeight);
+      const seatRatio = Math.min(0.8, Math.max(0.18, prevSeatY / prevTotal));
+      const seatY = Math.max(0.05, height * seatRatio);
+      object.sizeX = roundLayoutNumber(width);
+      object.sizeZ = roundLayoutNumber(depth);
+      object.seatY = roundLayoutNumber(seatY);
+      object.backHeight = roundLayoutNumber(Math.max(0.05, height - seatY));
+      break;
+    }
+    case "shelf": {
+      const boardThickness = Math.max(0.02, Number(object.boardThickness) || 0.08);
+      object.width = roundLayoutNumber(width);
+      object.depth = roundLayoutNumber(depth);
+      object.surfaceY = roundLayoutNumber(Math.max(0.05, height - boardThickness));
+      break;
+    }
+    case "platform":
+    case "windowSill": {
+      const thickness = Math.max(0.02, Number(object.thickness) || 0.08);
+      object.width = roundLayoutNumber(width);
+      object.depth = roundLayoutNumber(depth);
+      object.surfaceY = roundLayoutNumber(Math.max(0.05, height - thickness));
+      break;
+    }
+    case "bed":
+    case "bedsideTable":
+    case "rug":
+    case "wardrobe":
+    case "bookcase":
+      object.width = roundLayoutNumber(width);
+      object.depth = roundLayoutNumber(depth);
+      object.height = roundLayoutNumber(height);
+      object.surfaceY = roundLayoutNumber(height);
+      break;
+    case "hamper":
+      object.outerHalfX = roundLayoutNumber(width * 0.5);
+      object.outerHalfZ = roundLayoutNumber(depth * 0.5);
+      object.rimY = roundLayoutNumber(height);
+      break;
+    case "trashCan": {
+      const outerRadius = Math.max(0.05, Math.min(width, depth) * 0.5);
+      const previousOuterRadius = Math.max(0.05, Number(object.outerRadius) || outerRadius);
+      const openingRatio = Math.min(
+        0.98,
+        Math.max(0.45, (Number(object.openingRadius) || outerRadius * 0.85) / previousOuterRadius)
+      );
+      object.outerRadius = roundLayoutNumber(outerRadius);
+      object.openingRadius = roundLayoutNumber(Math.max(0.04, outerRadius * openingRatio));
+      object.rimY = roundLayoutNumber(height);
+      break;
+    }
+    default:
+      return null;
+  }
   if (object.surface && typeof object.surface === "object") {
     if (String(object.surface.shape || "rect").toLowerCase() === "circle") {
       object.surface.radius = roundLayoutNumber(Math.min(width, depth) * 0.5);
@@ -1833,7 +2036,7 @@ export function addModelRoomObject(THREE, layout, options = {}) {
 }
 
 export function roomObjectSupportsObstacleSettings(object) {
-  return objectSupportsGenericObstacle(object);
+  return objectSupportsObstacleSettings(object);
 }
 
 export function roomObjectSupportsSurface(object) {

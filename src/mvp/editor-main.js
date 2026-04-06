@@ -491,7 +491,7 @@ function buildEditorStaticObstacles(roomDerived, extraNavObstacles) {
   const obstacles = [];
   const hamper = roomLayout.objectsById?.hamper || null;
   const trashCan = roomLayout.objectsById?.trashCan || null;
-  if (hamper) {
+  if (hamper?.obstacle?.enabled) {
     obstacles.push({
       kind: "box",
       mode: "soft",
@@ -507,7 +507,7 @@ function buildEditorStaticObstacles(roomDerived, extraNavObstacles) {
       h: hamper.rimY + 0.06,
     });
   }
-  if (trashCan) {
+  if (trashCan?.obstacle?.enabled) {
     obstacles.push({
       kind: "circle",
       mode: "soft",
@@ -570,31 +570,15 @@ function buildEditorObjectCollisionShapes() {
   };
 
   const desk = roomLayout.objectsById?.desk || null;
-  if (desk) {
+  if (desk?.obstacle?.enabled) {
     for (const leg of roomDerived?.deskLegs || []) {
       pushBox(leg.x, 0.5, leg.z, leg.halfX, leg.halfZ, 1.0, 0);
     }
     pushBox(desk.pos.x, 1.02, desk.pos.z, desk.sizeX * 0.5, desk.sizeZ * 0.5, 0.12, getObjectRotationRadians(desk));
   }
 
-  for (const leg of roomDerived?.chairLegs || []) {
-    pushBox(leg.x, leg.topY * 0.5, leg.z, leg.halfX, leg.halfZ, leg.topY, 0);
-  }
-  if (roomDerived?.chairBackCollider) {
-    const collider = roomDerived.chairBackCollider;
-    pushBox(collider.x, collider.y, collider.z, collider.halfX, collider.halfZ, collider.h, getObjectRotationRadians(roomLayout.objectsById?.chair || null));
-  }
-
-  for (const post of roomDerived?.shelfPosts || []) {
-    pushBox(post.x, post.topY * 0.5, post.z, post.halfX, post.halfZ, post.topY, 0);
-  }
-  if (roomDerived?.shelfBackCollider) {
-    const collider = roomDerived.shelfBackCollider;
-    pushBox(collider.x, collider.y, collider.z, collider.halfX, collider.halfZ, collider.h, getObjectRotationRadians(roomLayout.objectsById?.shelf || null));
-  }
-
   const hamper = roomLayout.objectsById?.hamper || null;
-  if (hamper) {
+  if (hamper?.obstacle?.enabled) {
     pushBox(hamper.pos.x, hamper.rimY * 0.5, hamper.pos.z + hamper.outerHalfZ, hamper.outerHalfX, 0.03, hamper.rimY, 0);
     pushBox(hamper.pos.x, hamper.rimY * 0.5, hamper.pos.z - hamper.outerHalfZ, hamper.outerHalfX, 0.03, hamper.rimY, 0);
     pushBox(hamper.pos.x + hamper.outerHalfX, hamper.rimY * 0.5, hamper.pos.z, 0.03, hamper.outerHalfZ, hamper.rimY, 0);
@@ -602,7 +586,7 @@ function buildEditorObjectCollisionShapes() {
   }
 
   const trashCan = roomLayout.objectsById?.trashCan || null;
-  if (trashCan) {
+  if (trashCan?.obstacle?.enabled) {
     const segments = 24;
     const halfWallH = trashCan.rimY * 0.5;
     for (let i = 0; i < segments; i += 1) {
@@ -1014,8 +998,8 @@ function formatNumber(value) {
   return Number(value || 0).toFixed(3);
 }
 
-function getModelRuntimeBounds(object) {
-  if (!object || object.type !== "model" || !object.runtimeAssetBounds || typeof object.runtimeAssetBounds !== "object") {
+function getRuntimeMeasuredBounds(object) {
+  if (!object || !object.runtimeAssetBounds || typeof object.runtimeAssetBounds !== "object") {
     return null;
   }
   const width = Number(object.runtimeAssetBounds.width);
@@ -1025,12 +1009,76 @@ function getModelRuntimeBounds(object) {
   return { width, depth, height };
 }
 
+function forEachBoundingCorner(box, callback) {
+  if (!box || typeof callback !== "function") return;
+  const xs = [box.min.x, box.max.x];
+  const ys = [box.min.y, box.max.y];
+  const zs = [box.min.z, box.max.z];
+  for (const x of xs) {
+    for (const y of ys) {
+      for (const z of zs) {
+        callback(x, y, z);
+      }
+    }
+  }
+}
+
+function nodeContributesToCalibration(node) {
+  if (!node?.isMesh || !node.geometry) return false;
+  if (node.visible === false) return false;
+  const materials = Array.isArray(node.material) ? node.material : [node.material];
+  if (!materials.length) return true;
+  return materials.some((material) => {
+    if (!material) return false;
+    if (material.transparent && Number(material.opacity) <= 0.001) return false;
+    return true;
+  });
+}
+
+function measureRenderedObjectBounds(objectId) {
+  const object = roomLayout.objectsById?.[objectId] || null;
+  if (!object || !roomRoot) return null;
+  const objectWorldMatrix = new THREE.Matrix4().makeRotationY(getObjectRotationRadians(object));
+  objectWorldMatrix.setPosition(object.pos.x, object.pos.y, object.pos.z);
+  const objectWorldInverse = objectWorldMatrix.clone().invert();
+  const localBounds = new THREE.Box3();
+  const tempCorner = new THREE.Vector3();
+  let hasPoints = false;
+
+  roomRoot.traverse((node) => {
+    if (!nodeContributesToCalibration(node)) return;
+    if (String(node.userData?.roomObjectId || "") !== String(objectId)) return;
+    if (!node.geometry.boundingBox) node.geometry.computeBoundingBox();
+    const geometryBounds = node.geometry.boundingBox;
+    if (!geometryBounds) return;
+    forEachBoundingCorner(geometryBounds, (x, y, z) => {
+      tempCorner.set(x, y, z).applyMatrix4(node.matrixWorld).applyMatrix4(objectWorldInverse);
+      if (!hasPoints) {
+        localBounds.min.copy(tempCorner);
+        localBounds.max.copy(tempCorner);
+        hasPoints = true;
+      } else {
+        localBounds.expandByPoint(tempCorner);
+      }
+    });
+  });
+
+  if (!hasPoints || localBounds.isEmpty()) return null;
+  const size = new THREE.Vector3();
+  localBounds.getSize(size);
+  const width = Math.max(0.05, size.x);
+  const depth = Math.max(0.05, size.z);
+  const height = Math.max(0.05, size.y);
+  if (![width, depth, height].every(Number.isFinite)) return null;
+  return { width, depth, height };
+}
+
 function getRotatedRectSize(width, depth, object) {
   return getRotatedRectAabb(width, depth, getObjectRotationRadians(object));
 }
 
 function getObjectHeight(object) {
-  const runtimeModelBounds = getModelRuntimeBounds(object);
+  const runtimeModelBounds = getRuntimeMeasuredBounds(object);
   switch (object?.type) {
     case "floor":
       return 0.2;
@@ -1065,7 +1113,7 @@ function getObjectHeight(object) {
 }
 
 function getObjectFootprint(object) {
-  const runtimeModelBounds = getModelRuntimeBounds(object);
+  const runtimeModelBounds = getRuntimeMeasuredBounds(object);
   switch (object?.type) {
     case "floor":
       return getRotatedRectSize(object.width, object.depth, object);
@@ -1106,7 +1154,7 @@ function getObjectFootprint(object) {
 }
 
 function getObjectBaseSurfaceDimensions(object) {
-  const runtimeModelBounds = getModelRuntimeBounds(object);
+  const runtimeModelBounds = getRuntimeMeasuredBounds(object);
   switch (object?.type) {
     case "floor":
       return { width: Number(object.width) || 0, depth: Number(object.depth) || 0, radius: null };
@@ -1124,6 +1172,16 @@ function getObjectBaseSurfaceDimensions(object) {
     case "wardrobe":
     case "bookcase":
       return { width: Number(object.width) || 0, depth: Number(object.depth) || 0, radius: null };
+    case "hamper":
+      return {
+        width: Math.max(0.1, Number(object.openingHalfX) || Number(object.outerHalfX) || 0) * 2,
+        depth: Math.max(0.1, Number(object.openingHalfZ) || Number(object.outerHalfZ) || 0) * 2,
+        radius: null,
+      };
+    case "trashCan": {
+      const radius = Math.max(0.05, Number(object.openingRadius) || Number(object.outerRadius) || 0);
+      return { width: radius * 2, depth: radius * 2, radius };
+    }
     case "model":
       return {
         width: Number.isFinite(runtimeModelBounds?.width) ? runtimeModelBounds.width : Number(object.width) || 0,
@@ -1196,6 +1254,16 @@ function objectHasSpecialModel(object) {
   return !!object && (object.type === "trashCan" || object.type === "model");
 }
 
+function canCalibrateObjectDimensions(object) {
+  if (!object) return false;
+  if (["model", "desk", "chair", "shelf", "platform", "windowSill", "bed", "bedsideTable", "rug", "wardrobe", "bookcase", "hamper", "trashCan"].includes(object.type)) {
+    return true;
+  }
+  if (object.type !== "primitive") return false;
+  const shapeKind = String(object.shapeKind || "").toLowerCase();
+  return shapeKind !== "sphere" && shapeKind !== "cylinder";
+}
+
 function getSpecialModelLabel(object) {
   if (!objectHasSpecialModel(object)) return "none";
   if (object.type === "model") {
@@ -1209,7 +1277,9 @@ function getSpecialModelLabel(object) {
 
 function getSurfaceFlagNames(object) {
   const keys = Object.keys(object?.surface?.flags || {});
-  return keys.length ? keys : ["randomPatrol", "manualPatrol", "allowCatnip"];
+  return keys.length
+    ? keys
+    : ["randomPatrol", "manualPatrol", "allowCatSpawn", "allowTrashSpawn", "allowLaundrySpawn", "allowCatnip"];
 }
 
 function getSpecialFlagNames(object) {
@@ -1228,19 +1298,13 @@ function getRotationDegrees(object) {
   return normalizeRotationDegrees(getObjectRotationDegrees(object));
 }
 
-function getSurfaceChoiceOptions(object) {
-  const options = [{ value: "", label: "None" }];
+function getSurfaceChoiceHint() {
+  const ids = [];
   for (const candidate of roomLayout.objects || []) {
     if (!candidate?.surface?.enabled) continue;
-    options.push({ value: candidate.id, label: getRoomObjectDisplayName(candidate) });
+    ids.push(String(candidate.id));
   }
-  const current = Array.isArray(object?.obstacle?.jumpIgnoreSurfaceIds)
-    ? object.obstacle.jumpIgnoreSurfaceIds[0] || ""
-    : "";
-  if (current && !options.some((option) => option.value === current)) {
-    options.push({ value: current, label: current });
-  }
-  return options;
+  return ids.join(", ");
 }
 
 function getObjectLabel(object) {
@@ -1534,18 +1598,24 @@ function commitRuntimeAsset(objectId, { url = "", name = "" } = {}) {
   setStatus(name ? `${objectId} local GLB set to ${name}` : `${objectId} local GLB cleared`);
 }
 
-function commitCalibrateModelDimensions(objectId) {
+function commitCalibrateObjectDimensions(objectId) {
   const object = roomLayout.objectsById?.[objectId] || null;
-  if (!object || object.type !== "model") return;
+  if (!object || !canCalibrateObjectDimensions(object)) return;
   if (isObjectLocked(object)) {
     setStatus(`${objectId} is locked`);
     return;
   }
-  if (!getModelRuntimeBounds(object)) {
-    setStatus(`Load the model first so ${objectId} has measured bounds`);
+  const measuredBounds = getRuntimeMeasuredBounds(object) || measureRenderedObjectBounds(objectId);
+  if (!measuredBounds) {
+    setStatus(`Could not measure rendered bounds for ${objectId}`);
     return;
   }
   pushUndoSnapshot(`Calibrate ${objectId} dimensions`);
+  object.runtimeAssetBounds = {
+    width: measuredBounds.width,
+    depth: measuredBounds.depth,
+    height: measuredBounds.height,
+  };
   const updated = calibrateRoomObjectDimensionsFromRuntimeBounds(roomLayout, objectId);
   if (!updated) {
     undoHistory.pop();
@@ -1990,10 +2060,13 @@ function renderObjectDetails(object) {
 
   const wrapper = document.createElement("div");
   const locked = isObjectLocked(object);
-  const runtimeBounds = getModelRuntimeBounds(object);
+  const runtimeBounds = getRuntimeMeasuredBounds(object);
   wrapper.appendChild(createReadOnlyRow("Id", object.id));
   wrapper.appendChild(createReadOnlyRow("Name", object.name || "(uses id)"));
   wrapper.appendChild(createReadOnlyRow("Type", object.type));
+  if (object.sourceType && object.sourceType !== object.type) {
+    wrapper.appendChild(createReadOnlyRow("Imported Type", object.sourceType));
+  }
   if (object.type === "primitive") {
     wrapper.appendChild(createReadOnlyRow("Shape", object.shapeKind || "box"));
   }
@@ -2072,6 +2145,7 @@ function renderObjectDetails(object) {
     const shapeGrid = document.createElement("div");
     shapeGrid.className = "fieldGrid";
     for (const field of editableFields) appendNumericField(shapeGrid, object, field, locked);
+    const shouldShowCalibrationActions = canCalibrateObjectDimensions(object);
     if (object.type === "model") {
       appendTextField(shapeGrid, object, {
         key: "assetPath",
@@ -2080,27 +2154,35 @@ function renderObjectDetails(object) {
       }, locked);
     }
     shapeBlock.appendChild(shapeGrid);
-    if (object.type === "model") {
-      appendActionRow(shapeBlock, [
-        {
+    if (shouldShowCalibrationActions || object.type === "model") {
+      const actionButtons = [];
+      if (shouldShowCalibrationActions) {
+        actionButtons.push({
           label: "Calibrate Dimensions",
           secondary: true,
-          disabled: locked || !runtimeBounds,
-          onClick: () => commitCalibrateModelDimensions(object.id),
-        },
-        {
-          label: "Load Local GLB...",
-          secondary: true,
           disabled: locked,
-          onClick: () => chooseLocalGlbForObject(object.id),
-        },
-        {
-          label: "Clear Local GLB",
-          secondary: true,
-          disabled: locked || !object.runtimeAssetUrl,
-          onClick: () => commitRuntimeAsset(object.id, { url: "", name: "" }),
-        },
-      ]);
+          onClick: () => commitCalibrateObjectDimensions(object.id),
+        });
+      }
+      if (object.type === "model") {
+        actionButtons.push(
+          {
+            label: "Load Local GLB...",
+            secondary: true,
+            disabled: locked,
+            onClick: () => chooseLocalGlbForObject(object.id),
+          },
+          {
+            label: "Clear Local GLB",
+            secondary: true,
+            disabled: locked || !object.runtimeAssetUrl,
+            onClick: () => commitRuntimeAsset(object.id, { url: "", name: "" }),
+          }
+        );
+      }
+      if (actionButtons.length) {
+        appendActionRow(shapeBlock, actionButtons);
+      }
     }
     wrapper.appendChild(shapeBlock);
   }
@@ -2197,10 +2279,13 @@ function renderObjectDetails(object) {
       ],
       onChange: (value) => commitObstacleMode(object.id, value),
     }, locked);
-    appendSelectField(obstacleGrid, object, {
-      label: "Ignore Jump Surface",
-      value: object.obstacle?.jumpIgnoreSurfaceIds?.[0] || "",
-      options: getSurfaceChoiceOptions(object),
+    appendTextField(obstacleGrid, object, {
+      key: "jumpIgnoreSurfaceIds",
+      label: "Ignore Jump Surfaces",
+      value: Array.isArray(object.obstacle?.jumpIgnoreSurfaceIds)
+        ? object.obstacle.jumpIgnoreSurfaceIds.join(", ")
+        : "",
+      placeholder: getSurfaceChoiceHint() || "desk, shelf, bed",
       onChange: (value) => commitObstacleIgnoreSurfaces(object.id, value),
     }, locked);
     obstacleBlock.appendChild(obstacleGrid);

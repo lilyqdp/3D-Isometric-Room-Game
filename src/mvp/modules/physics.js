@@ -65,32 +65,38 @@ export function setupPhysicsWorld({
   addStaticBox(floorCX, wallH, ROOM.maxZ + 0.03, floorHX, wallH, 0.03);
 
   // Desk
-  for (const leg of DESK_LEGS) {
-    addStaticBox(leg.x, 0.5, leg.z, leg.halfX, 0.5, leg.halfZ);
+  if (desk?.obstacle?.enabled) {
+    for (const leg of DESK_LEGS) {
+      addStaticBox(leg.x, 0.5, leg.z, leg.halfX, 0.5, leg.halfZ);
+    }
+    addStaticBox(desk.pos.x, 1.02, desk.pos.z, desk.sizeX * 0.5, 0.06, desk.sizeZ * 0.5, 0, shellMat);
   }
-  addStaticBox(desk.pos.x, 1.02, desk.pos.z, desk.sizeX * 0.5, 0.06, desk.sizeZ * 0.5, 0, shellMat);
 
   // Hamper
-  addStaticBox(hamper.pos.x, hamper.rimY * 0.5, hamper.pos.z + hamper.outerHalfZ, hamper.outerHalfX, hamper.rimY * 0.5, 0.03);
-  addStaticBox(hamper.pos.x, hamper.rimY * 0.5, hamper.pos.z - hamper.outerHalfZ, hamper.outerHalfX, hamper.rimY * 0.5, 0.03);
-  addStaticBox(hamper.pos.x + hamper.outerHalfX, hamper.rimY * 0.5, hamper.pos.z, 0.03, hamper.rimY * 0.5, hamper.outerHalfZ);
-  addStaticBox(hamper.pos.x - hamper.outerHalfX, hamper.rimY * 0.5, hamper.pos.z, 0.03, hamper.rimY * 0.5, hamper.outerHalfZ);
-  addStaticBox(hamper.pos.x, hamper.rimY + 0.02, hamper.pos.z + hamper.outerHalfZ, hamper.outerHalfX + 0.02, 0.02, 0.03, 0, rimMat);
-  addStaticBox(hamper.pos.x, hamper.rimY + 0.02, hamper.pos.z - hamper.outerHalfZ, hamper.outerHalfX + 0.02, 0.02, 0.03, 0, rimMat);
-  addStaticBox(hamper.pos.x + hamper.outerHalfX, hamper.rimY + 0.02, hamper.pos.z, 0.03, 0.02, hamper.outerHalfZ + 0.02, 0, rimMat);
-  addStaticBox(hamper.pos.x - hamper.outerHalfX, hamper.rimY + 0.02, hamper.pos.z, 0.03, 0.02, hamper.outerHalfZ + 0.02, 0, rimMat);
+  if (hamper?.obstacle?.enabled) {
+    addStaticBox(hamper.pos.x, hamper.rimY * 0.5, hamper.pos.z + hamper.outerHalfZ, hamper.outerHalfX, hamper.rimY * 0.5, 0.03);
+    addStaticBox(hamper.pos.x, hamper.rimY * 0.5, hamper.pos.z - hamper.outerHalfZ, hamper.outerHalfX, hamper.rimY * 0.5, 0.03);
+    addStaticBox(hamper.pos.x + hamper.outerHalfX, hamper.rimY * 0.5, hamper.pos.z, 0.03, hamper.rimY * 0.5, hamper.outerHalfZ);
+    addStaticBox(hamper.pos.x - hamper.outerHalfX, hamper.rimY * 0.5, hamper.pos.z, 0.03, hamper.rimY * 0.5, hamper.outerHalfZ);
+    addStaticBox(hamper.pos.x, hamper.rimY + 0.02, hamper.pos.z + hamper.outerHalfZ, hamper.outerHalfX + 0.02, 0.02, 0.03, 0, rimMat);
+    addStaticBox(hamper.pos.x, hamper.rimY + 0.02, hamper.pos.z - hamper.outerHalfZ, hamper.outerHalfX + 0.02, 0.02, 0.03, 0, rimMat);
+    addStaticBox(hamper.pos.x + hamper.outerHalfX, hamper.rimY + 0.02, hamper.pos.z, 0.03, 0.02, hamper.outerHalfZ + 0.02, 0, rimMat);
+    addStaticBox(hamper.pos.x - hamper.outerHalfX, hamper.rimY + 0.02, hamper.pos.z, 0.03, 0.02, hamper.outerHalfZ + 0.02, 0, rimMat);
+  }
 
   // Trash can
-  const segments = 48;
-  const halfWallH = trashCan.rimY * 0.5;
-  for (let i = 0; i < segments; i++) {
-    const t = (i / segments) * Math.PI * 2;
-    const cx = trashCan.pos.x + Math.cos(t) * trashCan.outerRadius;
-    const cz = trashCan.pos.z + Math.sin(t) * trashCan.outerRadius;
-    addStaticBox(cx, halfWallH, cz, 0.12, halfWallH, 0.055, t, shellMat);
-    const rx = trashCan.pos.x + Math.cos(t) * (trashCan.outerRadius + 0.02);
-    const rz = trashCan.pos.z + Math.sin(t) * (trashCan.outerRadius + 0.02);
-    addStaticBox(rx, trashCan.rimY + 0.015, rz, 0.14, 0.025, 0.06, t, rimMat);
+  if (trashCan?.obstacle?.enabled) {
+    const segments = 48;
+    const halfWallH = trashCan.rimY * 0.5;
+    for (let i = 0; i < segments; i++) {
+      const t = (i / segments) * Math.PI * 2;
+      const cx = trashCan.pos.x + Math.cos(t) * trashCan.outerRadius;
+      const cz = trashCan.pos.z + Math.sin(t) * trashCan.outerRadius;
+      addStaticBox(cx, halfWallH, cz, 0.12, halfWallH, 0.055, t, shellMat);
+      const rx = trashCan.pos.x + Math.cos(t) * (trashCan.outerRadius + 0.02);
+      const rz = trashCan.pos.z + Math.sin(t) * (trashCan.outerRadius + 0.02);
+      addStaticBox(rx, trashCan.rimY + 0.015, rz, 0.14, 0.025, 0.06, t, rimMat);
+    }
   }
 
   for (const box of EXTRA_STATIC_BOXES) {
