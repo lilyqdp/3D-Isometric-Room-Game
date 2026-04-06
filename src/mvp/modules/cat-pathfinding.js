@@ -685,7 +685,15 @@ export function createCatPathfindingRuntime(ctx) {
         const halfY = shape?.halfExtents?.y || (p.type === "laundry" ? 0.04 : 0.03);
         // Keep pickup obstacles tall enough that recast still blocks them after they settle flat.
         const height = p.type === "laundry" ? Math.max(0.2, halfY * 2 + 0.1) : Math.max(0.18, halfY * 2 + 0.1);
-        const centerY = (p.body?.position?.y ?? p.mesh.position.y) + 0.05;
+        const rawCenterY = p.body?.position?.y ?? p.mesh.position.y;
+        const supportY = rawCenterY - halfY;
+        const surfaceId = resolveObstacleSurfaceIdForPoint(px, supportY, pz);
+        const supportSurface = surfaceId !== "floor" && typeof getSurfaceById === "function"
+          ? getSurfaceById(surfaceId)
+          : null;
+        const centerY = Number.isFinite(Number(supportSurface?.y))
+          ? Number(supportSurface.y) + halfY
+          : rawCenterY;
         let yaw = 0;
         if (p.body?.quaternion) {
           tempQ.set(p.body.quaternion.x, p.body.quaternion.y, p.body.quaternion.z, p.body.quaternion.w);
@@ -706,7 +714,7 @@ export function createCatPathfindingRuntime(ctx) {
           mode: pickupMode,
           tag: `pickup-${p.type || "item"}`,
           pickupKey,
-          surfaceId: resolveObstacleSurfaceIdForPoint(px, centerY, pz),
+          surfaceId,
           x: px,
           z: pz,
           hx: halfX,
