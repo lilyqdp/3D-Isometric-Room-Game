@@ -140,6 +140,10 @@ function normalizeTintValue(value, allowEmpty = false) {
   return "#ffffff";
 }
 
+function normalizeObjectName(value) {
+  return String(value ?? "").trim();
+}
+
 function createDefaultSurfaceShape(objectType = "object") {
   if (objectType === "primitiveCylinder") return "circle";
   return "rect";
@@ -457,11 +461,93 @@ function createDefaultObstacleConfig({ enabled = false, mode = "soft", jumpIgnor
   };
 }
 
+function objectSupportsGenericObstacle(object) {
+  return !!object && ["primitive", "model", "bed", "bedsideTable", "rug", "wardrobe", "bookcase"].includes(object.type);
+}
+
+function getDefaultSurfaceSpecialType(object) {
+  if (!object) return "object";
+  if (object.type === "model") return "model";
+  if (object.type === "primitive") return `primitive${String(object.shapeKind || "box")}`;
+  return String(object.type || "object");
+}
+
+function getDefaultObstacleConfigForObject(object) {
+  if (["bed", "bedsideTable", "wardrobe", "bookcase"].includes(object?.type)) {
+    return createDefaultObstacleConfig({ enabled: true, mode: "hard" });
+  }
+  return createDefaultObstacleConfig({ enabled: false, mode: "soft" });
+}
+
+function ensureRoomObjectDefaults(object) {
+  if (!object || typeof object !== "object") return object;
+  object.name = normalizeObjectName(object.name);
+
+  switch (object.type) {
+    case "bed":
+      if (!Number.isFinite(Number(object.width))) object.width = 2.0;
+      if (!Number.isFinite(Number(object.depth))) object.depth = 3.4;
+      if (!Number.isFinite(Number(object.height))) object.height = 0.78;
+      if (!Number.isFinite(Number(object.surfaceY))) object.surfaceY = 0.44;
+      break;
+    case "bedsideTable":
+      if (!Number.isFinite(Number(object.width))) object.width = 0.58;
+      if (!Number.isFinite(Number(object.depth))) object.depth = 0.48;
+      if (!Number.isFinite(Number(object.height))) object.height = 0.63;
+      if (!Number.isFinite(Number(object.surfaceY))) object.surfaceY = 0.63;
+      break;
+    case "rug":
+      if (!Number.isFinite(Number(object.width))) object.width = 2.2;
+      if (!Number.isFinite(Number(object.depth))) object.depth = 3.2;
+      if (!Number.isFinite(Number(object.height))) object.height = 0.022;
+      if (!Number.isFinite(Number(object.surfaceY))) {
+        const posY = Number.isFinite(Number(object.pos?.y)) ? Number(object.pos.y) : 0;
+        object.surfaceY = posY + object.height;
+      }
+      break;
+    case "wardrobe":
+      if (!Number.isFinite(Number(object.width))) object.width = 1.7;
+      if (!Number.isFinite(Number(object.depth))) object.depth = 0.55;
+      if (!Number.isFinite(Number(object.height))) object.height = 2.2;
+      if (!Number.isFinite(Number(object.surfaceY))) object.surfaceY = object.height;
+      break;
+    case "bookcase":
+      if (!Number.isFinite(Number(object.width))) object.width = 1.1;
+      if (!Number.isFinite(Number(object.depth))) object.depth = 0.38;
+      if (!Number.isFinite(Number(object.height))) object.height = 1.8;
+      if (!Number.isFinite(Number(object.surfaceY))) object.surfaceY = object.height;
+      break;
+    default:
+      break;
+  }
+
+  if (objectSupportsGenericObstacle(object)) {
+    const defaults = getDefaultObstacleConfigForObject(object);
+    if (!object.obstacle || typeof object.obstacle !== "object") {
+      object.obstacle = defaults;
+    } else {
+      object.obstacle.enabled = object.obstacle.enabled != null ? !!object.obstacle.enabled : defaults.enabled;
+      object.obstacle.mode = object.obstacle.mode === "hard" ? "hard" : defaults.mode;
+      object.obstacle.jumpIgnoreSurfaceIds = Array.isArray(object.obstacle.jumpIgnoreSurfaceIds)
+        ? object.obstacle.jumpIgnoreSurfaceIds.map((value) => String(value))
+        : object.obstacle.jumpIgnoreSurfaceIds
+          ? [String(object.obstacle.jumpIgnoreSurfaceIds)]
+          : [];
+      if (!Number.isFinite(Number(object.obstacle.navPad))) object.obstacle.navPad = defaults.navPad;
+      if (!Number.isFinite(Number(object.obstacle.steerPad))) object.obstacle.steerPad = defaults.steerPad;
+      if (!Number.isFinite(Number(object.obstacle.collisionPad))) object.obstacle.collisionPad = defaults.collisionPad;
+    }
+  }
+
+  return object;
+}
+
 function createPrimitiveObject(THREE, options = {}) {
   const rawShapeKind = String(options.shapeKind || "box");
   const shapeKind = rawShapeKind === "cube" || rawShapeKind === "rectPrism" ? rawShapeKind : rawShapeKind;
   const object = {
     id: String(options.id || "primitive"),
+    name: normalizeObjectName(options.name),
     type: "primitive",
     shapeKind,
     pos: cloneVector3(THREE, options.pos || { x: 0, y: 0, z: 0 }),
@@ -511,6 +597,7 @@ function createPrimitiveObject(THREE, options = {}) {
 function createModelObject(THREE, options = {}) {
   return {
     id: String(options.id || "model"),
+    name: normalizeObjectName(options.name),
     type: "model",
     pos: cloneVector3(THREE, options.pos || { x: 0, y: 0, z: 0 }),
     width: Number.isFinite(Number(options.width)) ? Number(options.width) : 1.0,
@@ -545,7 +632,7 @@ function getPrimitiveFootprint(object) {
   );
 }
 
-function getLayoutObjectFootprint(object) {
+function getLayoutObjectLocalFootprint(object) {
   const runtimeModelBounds =
     object?.type === "model" && object.runtimeAssetBounds && typeof object.runtimeAssetBounds === "object"
       ? {
@@ -557,26 +644,71 @@ function getLayoutObjectFootprint(object) {
     case "floor":
       return { width: Math.max(0.1, Number(object.width) || 0.1), depth: Math.max(0.1, Number(object.depth) || 0.1) };
     case "desk":
-      return getRotatedRectSize(object.sizeX, object.sizeZ, getObjectRotationRadians(object));
     case "chair":
-      return getRotatedRectSize(object.sizeX, object.sizeZ, getObjectRotationRadians(object));
+      return { width: Math.max(0.1, Number(object.sizeX) || 0.1), depth: Math.max(0.1, Number(object.sizeZ) || 0.1) };
     case "shelf":
-      return getRotatedRectSize(object.width, object.depth, getObjectRotationRadians(object));
     case "platform":
     case "windowSill":
-      return getRotatedRectSize(object.width, object.depth, getObjectRotationRadians(object));
+    case "bed":
+    case "bedsideTable":
+    case "rug":
+    case "wardrobe":
+    case "bookcase":
+      return { width: Math.max(0.1, Number(object.width) || 0.1), depth: Math.max(0.1, Number(object.depth) || 0.1) };
     case "primitive":
-      return getPrimitiveFootprint(object);
+      if (object.shapeKind === "sphere" || object.shapeKind === "cylinder") {
+        const diameter = Math.max(0.1, (Number(object.radius) || 0.5) * 2);
+        return { width: diameter, depth: diameter };
+      }
+      return {
+        width: Math.max(0.1, Number(object.width) || 0.9),
+        depth: Math.max(0.1, Number(object.depth) || 0.9),
+      };
     case "model":
-      return getRotatedRectSize(
-        Number.isFinite(runtimeModelBounds?.width) ? runtimeModelBounds.width : object.width,
-        Number.isFinite(runtimeModelBounds?.depth) ? runtimeModelBounds.depth : object.depth,
-        getObjectRotationRadians(object)
-      );
+      return {
+        width: Math.max(0.1, Number.isFinite(runtimeModelBounds?.width) ? runtimeModelBounds.width : Number(object.width) || 1),
+        depth: Math.max(0.1, Number.isFinite(runtimeModelBounds?.depth) ? runtimeModelBounds.depth : Number(object.depth) || 1),
+      };
     case "hamper":
       return { width: object.outerHalfX * 2, depth: object.outerHalfZ * 2 };
     case "trashCan":
       return { width: object.outerRadius * 2, depth: object.outerRadius * 2 };
+    default:
+      return { width: 1, depth: 1 };
+  }
+}
+
+function getLayoutObjectFootprint(object) {
+  const local = getLayoutObjectLocalFootprint(object);
+  const runtimeModelBounds =
+    object?.type === "model" && object.runtimeAssetBounds && typeof object.runtimeAssetBounds === "object"
+      ? {
+          width: Number(object.runtimeAssetBounds.width),
+          depth: Number(object.runtimeAssetBounds.depth),
+        }
+      : null;
+  switch (object?.type) {
+    case "floor":
+      return local;
+    case "desk":
+    case "chair":
+    case "shelf":
+    case "platform":
+    case "windowSill":
+    case "bed":
+    case "bedsideTable":
+    case "rug":
+    case "wardrobe":
+    case "bookcase":
+      return getRotatedRectSize(local.width, local.depth, getObjectRotationRadians(object));
+    case "primitive":
+      return getPrimitiveFootprint(object);
+    case "model":
+      return getRotatedRectSize(local.width, local.depth, getObjectRotationRadians(object));
+    case "hamper":
+      return local;
+    case "trashCan":
+      return local;
     default:
       return { width: 1, depth: 1 };
   }
@@ -599,6 +731,12 @@ function getLayoutObjectCenterY(object) {
     case "platform":
     case "windowSill":
       return Number(object.surfaceY || 0) - Number(object.thickness || 0.08) * 0.5;
+    case "bed":
+    case "bedsideTable":
+    case "rug":
+    case "wardrobe":
+    case "bookcase":
+      return Number(object.surfaceY || object.height || 0.9) - Number(object.height || 0.9) * 0.5;
     case "primitive":
       if (object.shapeKind === "sphere") return Number(object.centerY) || Number(object.radius) || 0.45;
       return Number(object.surfaceY || 0) - Number(object.height || 0.8) * 0.5;
@@ -614,7 +752,7 @@ function getLayoutObjectCenterY(object) {
 
 function objectCanSupportSurface(object) {
   if (!object) return false;
-  if (["floor", "desk", "chair", "shelf", "platform", "windowSill", "model"].includes(object.type)) return true;
+  if (["floor", "desk", "chair", "shelf", "platform", "windowSill", "model", "bed", "bedsideTable", "rug", "wardrobe", "bookcase"].includes(object.type)) return true;
   if (object.type === "primitive") return object.shapeKind !== "sphere";
   return false;
 }
@@ -624,6 +762,7 @@ export function refreshRoomLayout(layout) {
   const objects = Array.isArray(layout.objects) ? layout.objects : [];
   for (const object of objects) {
     if (!object || typeof object !== "object") continue;
+    ensureRoomObjectDefaults(object);
     object.visible = object.visible !== false;
     if (Number.isFinite(Number(object.rotYDeg))) {
       object.rotYDeg = normalizeRotationDegrees(object.rotYDeg);
@@ -1049,6 +1188,16 @@ function getObjectBaseSurfaceDimensions(object) {
     case "platform":
     case "windowSill":
       return { width: Number(object.width) || 0, depth: Number(object.depth) || 0, y: Number(object.surfaceY) || 0 };
+    case "bed":
+    case "bedsideTable":
+    case "rug":
+    case "wardrobe":
+    case "bookcase":
+      return {
+        width: Number(object.width) || 0,
+        depth: Number(object.depth) || 0,
+        y: Number(object.surfaceY) || Number(object.height) || 0,
+      };
     case "model":
       return {
         width: Number.isFinite(runtimeModelBounds?.width) ? runtimeModelBounds.width : Number(object.width) || 0,
@@ -1128,15 +1277,19 @@ function buildObjectObstacleSpec(object) {
   const obstacle = object?.obstacle;
   if (!object || !obstacle?.enabled) return null;
   const mode = obstacle.mode === "hard" ? "hard" : "soft";
+  const jumpIgnoreSurfaceIds = new Set(
+    Array.isArray(obstacle.jumpIgnoreSurfaceIds)
+      ? obstacle.jumpIgnoreSurfaceIds.map((value) => String(value))
+      : obstacle.jumpIgnoreSurfaceIds
+        ? [String(obstacle.jumpIgnoreSurfaceIds)]
+        : []
+  );
+  if (object.surface?.enabled && object.id) jumpIgnoreSurfaceIds.add(String(object.id));
   const base = {
     mode,
     tag: "layoutObject",
     surfaceId: object.id,
-    jumpIgnoreSurfaceIds: Array.isArray(obstacle.jumpIgnoreSurfaceIds)
-      ? obstacle.jumpIgnoreSurfaceIds.map((value) => String(value))
-      : obstacle.jumpIgnoreSurfaceIds
-        ? [String(obstacle.jumpIgnoreSurfaceIds)]
-        : [],
+    jumpIgnoreSurfaceIds: Array.from(jumpIgnoreSurfaceIds),
     navPad: Number.isFinite(Number(obstacle.navPad)) ? Number(obstacle.navPad) : (mode === "hard" ? 0.02 : 0.03),
     steerPad: Number.isFinite(Number(obstacle.steerPad)) ? Number(obstacle.steerPad) : (mode === "hard" ? 0.02 : 0.01),
     collisionPad: Number.isFinite(Number(obstacle.collisionPad)) ? Number(obstacle.collisionPad) : 0,
@@ -1184,6 +1337,7 @@ function buildObjectObstacleSpec(object) {
             depth: Math.max(0.1, Number(object.depth) || 0.9),
           }
         : getLayoutObjectFootprint(object);
+  const localFootprint = getLayoutObjectLocalFootprint(object);
   const height = object.type === "primitive" || object.type === "model"
     ? Math.max(
         0.05,
@@ -1191,6 +1345,8 @@ function buildObjectObstacleSpec(object) {
           ? runtimeModelBounds.height
           : Number(object.height) || 0.9
       )
+    : ["bed", "bedsideTable", "rug", "wardrobe", "bookcase"].includes(object.type)
+      ? Math.max(0.05, Number(object.height) || 0.9)
     : Math.max(0.05, Number(object.topY || object.surfaceY || object.rimY || 0.9));
   const yaw = getObjectRotationRadians(object);
   return {
@@ -1200,8 +1356,8 @@ function buildObjectObstacleSpec(object) {
     z: object.pos.z,
     y: centerY,
     h: height,
-    hx: Math.max(0.05, footprint.width * 0.5),
-    hz: Math.max(0.05, footprint.depth * 0.5),
+    hx: Math.max(0.05, localFootprint.width * 0.5),
+    hz: Math.max(0.05, localFootprint.depth * 0.5),
     yaw,
   };
 }
@@ -1255,7 +1411,7 @@ export function buildRoomDerivedData(layout) {
   const extraNavObstacles = [];
   const extraStaticBoxes = [];
   for (const object of objects) {
-    if (!object || !["primitive", "model"].includes(object.type)) continue;
+    if (!object || !objectSupportsGenericObstacle(object)) continue;
     const obstacle = buildObjectObstacleSpec(object);
     if (!obstacle) continue;
     extraNavObstacles.push(obstacle);
@@ -1342,6 +1498,13 @@ export function setRoomObjectNumericField(layout, objectId, field, rawValue) {
   if (!object || typeof field !== "string") return null;
   if (field === "x") return moveRoomObject(layout, objectId, rawValue, object.pos?.z ?? 0);
   if (field === "z") return moveRoomObject(layout, objectId, object.pos?.x ?? 0, rawValue);
+  if (field === "y") {
+    if (!object.pos || typeof object.pos.set !== "function") return null;
+    const numeric = roundLayoutNumber(Number(rawValue));
+    if (!Number.isFinite(numeric)) return null;
+    object.pos.set(object.pos.x, numeric, object.pos.z);
+    return refreshRoomLayout(layout).objectsById?.[objectId] || null;
+  }
   if (!Object.prototype.hasOwnProperty.call(object, field)) return null;
   const numeric = sanitizeNumericField(field, rawValue);
   if (numeric == null) return null;
@@ -1357,7 +1520,7 @@ export function setRoomObjectSurfaceEnabled(layout, objectId, enabled) {
     object.surface = createDefaultSurfaceConfig({
       enabled: false,
       shape: object.type === "primitive" && object.shapeKind === "cylinder" ? "circle" : "rect",
-      specialType: object.type === "model" ? "model" : object.type === "primitive" ? `primitive${String(object.shapeKind || "box")}` : object.type,
+      specialType: getDefaultSurfaceSpecialType(object),
     });
   }
   object.surface.enabled = Boolean(enabled);
@@ -1371,7 +1534,7 @@ export function setRoomObjectSurfaceShape(layout, objectId, rawShape) {
     object.surface = createDefaultSurfaceConfig({
       enabled: false,
       shape: rawShape,
-      specialType: object.type === "model" ? "model" : object.type === "primitive" ? `primitive${String(object.shapeKind || "box")}` : object.type,
+      specialType: getDefaultSurfaceSpecialType(object),
     });
   }
   object.surface.shape = String(rawShape || "rect").toLowerCase() === "circle" ? "circle" : "rect";
@@ -1384,7 +1547,7 @@ export function setRoomObjectSurfaceNumericField(layout, objectId, field, rawVal
   if (!object.surface || typeof object.surface !== "object") {
     object.surface = createDefaultSurfaceConfig({
       enabled: false,
-      specialType: object.type === "model" ? "model" : object.type === "primitive" ? `primitive${String(object.shapeKind || "box")}` : object.type,
+      specialType: getDefaultSurfaceSpecialType(object),
     });
   }
   const numeric = roundLayoutNumber(Number(rawValue));
@@ -1396,7 +1559,14 @@ export function setRoomObjectSurfaceNumericField(layout, objectId, field, rawVal
 
 export function setRoomObjectFlag(layout, objectId, flagName, enabled) {
   const object = layout?.objectsById?.[objectId];
-  if (!object?.surface || !flagName) return null;
+  if (!object || !flagName || !objectCanSupportSurface(object)) return null;
+  if (!object.surface || typeof object.surface !== "object") {
+    object.surface = createDefaultSurfaceConfig({
+      enabled: false,
+      shape: object.type === "primitive" && object.shapeKind === "cylinder" ? "circle" : "rect",
+      specialType: getDefaultSurfaceSpecialType(object),
+    });
+  }
   if (!object.surface.flags || typeof object.surface.flags !== "object") object.surface.flags = {};
   object.surface.flags[flagName] = Boolean(enabled);
   return refreshRoomLayout(layout).objectsById?.[objectId] || null;
@@ -1427,8 +1597,12 @@ export function setRoomObjectSpecialFlag(layout, objectId, flagName, enabled) {
 export function setRoomObjectStringField(layout, objectId, field, rawValue) {
   const object = layout?.objectsById?.[objectId];
   if (!object || typeof field !== "string") return null;
-  if (!Object.prototype.hasOwnProperty.call(object, field) && field !== "tint") return null;
-  object[field] = field === "tint" ? normalizeTintValue(rawValue) : String(rawValue ?? "");
+  if (!Object.prototype.hasOwnProperty.call(object, field) && field !== "tint" && field !== "name") return null;
+  object[field] = field === "tint"
+    ? normalizeTintValue(rawValue)
+    : field === "name"
+      ? normalizeObjectName(rawValue)
+      : String(rawValue ?? "");
   return refreshRoomLayout(layout).objectsById?.[objectId] || null;
 }
 
@@ -1440,11 +1614,36 @@ export function setRoomObjectRuntimeAsset(layout, objectId, { url = "", name = "
   return refreshRoomLayout(layout).objectsById?.[objectId] || null;
 }
 
+export function calibrateRoomObjectDimensionsFromRuntimeBounds(layout, objectId) {
+  const object = layout?.objectsById?.[objectId];
+  if (!object || object.type !== "model" || !object.runtimeAssetBounds || typeof object.runtimeAssetBounds !== "object") {
+    return null;
+  }
+  const width = Math.max(0.05, Number(object.runtimeAssetBounds.width) || 0);
+  const depth = Math.max(0.05, Number(object.runtimeAssetBounds.depth) || 0);
+  const height = Math.max(0.05, Number(object.runtimeAssetBounds.height) || 0);
+  if (![width, depth, height].every(Number.isFinite)) return null;
+  object.width = roundLayoutNumber(width);
+  object.depth = roundLayoutNumber(depth);
+  object.height = roundLayoutNumber(height);
+  object.surfaceY = roundLayoutNumber(height);
+  object.modelScale = 1;
+  if (object.surface && typeof object.surface === "object") {
+    if (String(object.surface.shape || "rect").toLowerCase() === "circle") {
+      object.surface.radius = roundLayoutNumber(Math.min(width, depth) * 0.5);
+    } else {
+      object.surface.width = roundLayoutNumber(width);
+      object.surface.depth = roundLayoutNumber(depth);
+    }
+  }
+  return refreshRoomLayout(layout).objectsById?.[objectId] || null;
+}
+
 export function setRoomObjectObstacleEnabled(layout, objectId, enabled) {
   const object = layout?.objectsById?.[objectId];
   if (!object) return null;
   if (!object.obstacle || typeof object.obstacle !== "object") {
-    object.obstacle = createDefaultObstacleConfig({ enabled: false, mode: "soft" });
+    object.obstacle = getDefaultObstacleConfigForObject(object);
   }
   object.obstacle.enabled = Boolean(enabled);
   return refreshRoomLayout(layout).objectsById?.[objectId] || null;
@@ -1454,7 +1653,7 @@ export function setRoomObjectObstacleMode(layout, objectId, mode) {
   const object = layout?.objectsById?.[objectId];
   if (!object) return null;
   if (!object.obstacle || typeof object.obstacle !== "object") {
-    object.obstacle = createDefaultObstacleConfig({ enabled: false, mode: "soft" });
+    object.obstacle = getDefaultObstacleConfigForObject(object);
   }
   object.obstacle.mode = mode === "hard" ? "hard" : "soft";
   return refreshRoomLayout(layout).objectsById?.[objectId] || null;
@@ -1464,7 +1663,7 @@ export function setRoomObjectObstacleIgnoreSurfaceIds(layout, objectId, rawValue
   const object = layout?.objectsById?.[objectId];
   if (!object) return null;
   if (!object.obstacle || typeof object.obstacle !== "object") {
-    object.obstacle = createDefaultObstacleConfig({ enabled: false, mode: "soft" });
+    object.obstacle = getDefaultObstacleConfigForObject(object);
   }
   const values = String(rawValue || "")
     .split(",")
@@ -1633,11 +1832,25 @@ export function addModelRoomObject(THREE, layout, options = {}) {
   return refreshRoomLayout(layout).objectsById?.[nextId] || null;
 }
 
+export function roomObjectSupportsObstacleSettings(object) {
+  return objectSupportsGenericObstacle(object);
+}
+
+export function roomObjectSupportsSurface(object) {
+  return objectCanSupportSurface(object);
+}
+
+export function getRoomObjectDisplayName(object) {
+  if (!object) return "";
+  const name = normalizeObjectName(object.name);
+  return name || String(object.id || object.type || "object");
+}
+
 export function duplicateRoomObject(THREE, layout, objectId, nextId, options = {}) {
   const source = layout?.objectsById?.[objectId] || null;
   const candidateId = String(nextId || "").trim();
   if (!source || !candidateId || layout?.objectsById?.[candidateId]) return null;
-  if (!["chair", "shelf", "platform", "primitive", "model"].includes(source.type)) return null;
+  if (!["chair", "shelf", "platform", "primitive", "model", "bed", "bedsideTable", "rug", "wardrobe", "bookcase"].includes(source.type)) return null;
 
   const clone = instantiateRoomObject(THREE, toSerializableValue(source), createDefaultRoomLayout(THREE));
   clone.id = candidateId;

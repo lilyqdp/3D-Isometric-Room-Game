@@ -9,11 +9,15 @@ import {
   buildFloorSurfaceSpec,
   buildRoomDerivedData,
   buildRoomSurfaceSpecs,
+  calibrateRoomObjectDimensionsFromRuntimeBounds,
   createDefaultRoomLayout,
   createRoomLayoutFromData,
   duplicateRoomObject,
+  getRoomObjectDisplayName,
   moveRoomObject,
   removeRoomObject,
+  roomObjectSupportsObstacleSettings,
+  roomObjectSupportsSurface,
   setRoomObjectRotationDegrees,
   rotateRoomObjectQuarterTurns,
   serializeRoomLayoutData,
@@ -1039,6 +1043,12 @@ function getObjectHeight(object) {
     case "platform":
     case "windowSill":
       return object.surfaceY + object.thickness;
+    case "bed":
+    case "bedsideTable":
+    case "rug":
+    case "wardrobe":
+    case "bookcase":
+      return Math.max(0.1, Number(object.height) || 1);
     case "primitive":
       return object.shapeKind === "sphere"
         ? Math.max(0.1, (Number(object.radius) || 0.45) * 2)
@@ -1067,6 +1077,12 @@ function getObjectFootprint(object) {
       return getRotatedRectSize(object.width, object.depth, object);
     case "platform":
     case "windowSill":
+      return getRotatedRectSize(object.width, object.depth, object);
+    case "bed":
+    case "bedsideTable":
+    case "rug":
+    case "wardrobe":
+    case "bookcase":
       return getRotatedRectSize(object.width, object.depth, object);
     case "primitive":
       if (object.shapeKind === "sphere" || object.shapeKind === "cylinder") {
@@ -1101,6 +1117,12 @@ function getObjectBaseSurfaceDimensions(object) {
     case "shelf":
     case "platform":
     case "windowSill":
+      return { width: Number(object.width) || 0, depth: Number(object.depth) || 0, radius: null };
+    case "bed":
+    case "bedsideTable":
+    case "rug":
+    case "wardrobe":
+    case "bookcase":
       return { width: Number(object.width) || 0, depth: Number(object.depth) || 0, radius: null };
     case "model":
       return {
@@ -1195,7 +1217,7 @@ function getSpecialFlagNames(object) {
 }
 
 function objectSupportsObstacleSettings(object) {
-  return !!object && ["primitive", "model"].includes(object.type);
+  return roomObjectSupportsObstacleSettings(object);
 }
 
 function objectSupportsTint(object) {
@@ -1210,7 +1232,7 @@ function getSurfaceChoiceOptions(object) {
   const options = [{ value: "", label: "None" }];
   for (const candidate of roomLayout.objects || []) {
     if (!candidate?.surface?.enabled) continue;
-    options.push({ value: candidate.id, label: candidate.id });
+    options.push({ value: candidate.id, label: getRoomObjectDisplayName(candidate) });
   }
   const current = Array.isArray(object?.obstacle?.jumpIgnoreSurfaceIds)
     ? object.obstacle.jumpIgnoreSurfaceIds[0] || ""
@@ -1221,19 +1243,23 @@ function getSurfaceChoiceOptions(object) {
   return options;
 }
 
+function getObjectLabel(object) {
+  return getRoomObjectDisplayName(object);
+}
+
 function isObjectLocked(object) {
   return !!object?.editorLocked;
 }
 
 function canRotateObject(object) {
   if (!object) return false;
-  if (["desk", "chair", "shelf", "platform", "model"].includes(object.type)) return true;
+  if (["desk", "chair", "shelf", "platform", "model", "windowSill", "bed", "bedsideTable", "rug", "wardrobe", "bookcase"].includes(object.type)) return true;
   if (object.type === "primitive") return object.shapeKind !== "sphere";
   return false;
 }
 
 function canDuplicateObject(object) {
-  return !!object && !isObjectLocked(object) && ["chair", "shelf", "platform", "primitive", "model"].includes(object.type);
+  return !!object && !isObjectLocked(object) && ["chair", "shelf", "platform", "primitive", "model", "bed", "bedsideTable", "rug", "wardrobe", "bookcase"].includes(object.type);
 }
 
 function suggestDuplicateId(object) {
@@ -1321,8 +1347,40 @@ function getEditableFields(object) {
       ];
     case "model":
       return [
+        { key: "width", label: "Width", step: 0.05 },
+        { key: "depth", label: "Depth", step: 0.05 },
+        { key: "height", label: "Height", step: 0.05 },
         { key: "surfaceY", label: "Top Y", step: 0.05 },
         { key: "modelScale", label: "Model Scale", step: 0.05 },
+      ];
+    case "bed":
+      return [
+        { key: "width", label: "Width", step: 0.05 },
+        { key: "depth", label: "Depth", step: 0.05 },
+        { key: "height", label: "Height", step: 0.05 },
+        { key: "surfaceY", label: "Top Y", step: 0.05 },
+      ];
+    case "bedsideTable":
+      return [
+        { key: "width", label: "Width", step: 0.05 },
+        { key: "depth", label: "Depth", step: 0.05 },
+        { key: "height", label: "Height", step: 0.05 },
+        { key: "surfaceY", label: "Top Y", step: 0.05 },
+      ];
+    case "rug":
+      return [
+        { key: "width", label: "Width", step: 0.05 },
+        { key: "depth", label: "Depth", step: 0.05 },
+        { key: "height", label: "Thickness", step: 0.01 },
+        { key: "surfaceY", label: "Top Y", step: 0.01 },
+      ];
+    case "wardrobe":
+    case "bookcase":
+      return [
+        { key: "width", label: "Width", step: 0.05 },
+        { key: "depth", label: "Depth", step: 0.05 },
+        { key: "height", label: "Height", step: 0.05 },
+        { key: "surfaceY", label: "Top Y", step: 0.05 },
       ];
     case "windowSill":
       return [
@@ -1474,6 +1532,29 @@ function commitRuntimeAsset(objectId, { url = "", name = "" } = {}) {
   rebuildRoomScene({ refreshSidebar: true });
   setSelectedObject(objectId);
   setStatus(name ? `${objectId} local GLB set to ${name}` : `${objectId} local GLB cleared`);
+}
+
+function commitCalibrateModelDimensions(objectId) {
+  const object = roomLayout.objectsById?.[objectId] || null;
+  if (!object || object.type !== "model") return;
+  if (isObjectLocked(object)) {
+    setStatus(`${objectId} is locked`);
+    return;
+  }
+  if (!getModelRuntimeBounds(object)) {
+    setStatus(`Load the model first so ${objectId} has measured bounds`);
+    return;
+  }
+  pushUndoSnapshot(`Calibrate ${objectId} dimensions`);
+  const updated = calibrateRoomObjectDimensionsFromRuntimeBounds(roomLayout, objectId);
+  if (!updated) {
+    undoHistory.pop();
+    updateUndoButton();
+    return;
+  }
+  rebuildRoomScene({ refreshSidebar: true });
+  setSelectedObject(objectId);
+  setStatus(`Calibrated ${objectId} dimensions to the loaded model bounds`);
 }
 
 function commitObstacleEnabled(objectId, enabled) {
@@ -1641,7 +1722,7 @@ function duplicateSelectedObject() {
   const object = roomLayout.objectsById?.[selectedObjectId] || null;
   if (!object) return;
   if (!canDuplicateObject(object)) {
-    setStatus("Only unlocked shelf/platform/shape/model objects can be duplicated right now");
+    setStatus("This object type cannot be duplicated yet");
     return;
   }
   const nextId = promptForUniqueObjectId(object);
@@ -1765,6 +1846,8 @@ function appendNumericField(grid, object, field, disabled = false) {
     ? field.getValue(object)
     : field.key === "x"
     ? object.pos.x
+    : field.key === "y"
+    ? object.pos.y
     : field.key === "z"
       ? object.pos.z
       : object[field.key];
@@ -1907,7 +1990,9 @@ function renderObjectDetails(object) {
 
   const wrapper = document.createElement("div");
   const locked = isObjectLocked(object);
+  const runtimeBounds = getModelRuntimeBounds(object);
   wrapper.appendChild(createReadOnlyRow("Id", object.id));
+  wrapper.appendChild(createReadOnlyRow("Name", object.name || "(uses id)"));
   wrapper.appendChild(createReadOnlyRow("Type", object.type));
   if (object.type === "primitive") {
     wrapper.appendChild(createReadOnlyRow("Shape", object.shapeKind || "box"));
@@ -1925,7 +2010,6 @@ function renderObjectDetails(object) {
     wrapper.appendChild(createReadOnlyRow("Model Preview", getSpecialModelLabel(object)));
     if (object.type === "model") {
       wrapper.appendChild(createReadOnlyRow("Local GLB", object.runtimeAssetName || "none"));
-      const runtimeBounds = getModelRuntimeBounds(object);
       wrapper.appendChild(
         createReadOnlyRow(
           "Loaded Bounds",
@@ -1936,6 +2020,17 @@ function renderObjectDetails(object) {
       );
     }
   }
+
+  const identityBlock = createDetailBlock("Identity");
+  const identityGrid = document.createElement("div");
+  identityGrid.className = "fieldGrid";
+  appendTextField(identityGrid, object, {
+    key: "name",
+    label: "Name",
+    placeholder: "Optional display name",
+  }, locked);
+  identityBlock.appendChild(identityGrid);
+  wrapper.appendChild(identityBlock);
 
   const editorBlock = createDetailBlock("Editor");
   const editorChecks = document.createElement("div");
@@ -1953,6 +2048,7 @@ function renderObjectDetails(object) {
   const transformGrid = document.createElement("div");
   transformGrid.className = "fieldGrid";
   appendNumericField(transformGrid, object, { key: "x", label: "X", step: 0.05 }, locked);
+  appendNumericField(transformGrid, object, { key: "y", label: "Y", step: 0.05 }, locked);
   appendNumericField(transformGrid, object, { key: "z", label: "Z", step: 0.05 }, locked);
   if (canRotateObject(object)) {
     appendRangeField(transformGrid, object, {
@@ -1987,6 +2083,12 @@ function renderObjectDetails(object) {
     if (object.type === "model") {
       appendActionRow(shapeBlock, [
         {
+          label: "Calibrate Dimensions",
+          secondary: true,
+          disabled: locked || !runtimeBounds,
+          onClick: () => commitCalibrateModelDimensions(object.id),
+        },
+        {
           label: "Load Local GLB...",
           secondary: true,
           disabled: locked,
@@ -2003,15 +2105,18 @@ function renderObjectDetails(object) {
     wrapper.appendChild(shapeBlock);
   }
 
-  if (object.surface) {
+  if (roomObjectSupportsSurface(object)) {
+    const surfaceKind = object.surface
+      ? getSurfaceKind(object.surface)
+      : (object.type === "primitive" && object.shapeKind === "cylinder" ? "circle" : "rect");
     const surfaceBlock = createDetailBlock("Surface");
     const checklist = document.createElement("div");
     checklist.className = "checkList";
-    appendCheckbox(checklist, "Enabled", object.surface.enabled, (checked) => {
+    appendCheckbox(checklist, "Enabled", object.surface?.enabled, (checked) => {
       commitSurfaceEnabled(object.id, checked);
     }, locked);
     for (const flagName of getSurfaceFlagNames(object)) {
-      appendCheckbox(checklist, flagName, object.surface.flags?.[flagName], (checked) => {
+      appendCheckbox(checklist, flagName, object.surface?.flags?.[flagName], (checked) => {
         commitFlag(object.id, flagName, checked);
       }, locked);
     }
@@ -2020,7 +2125,7 @@ function renderObjectDetails(object) {
     surfaceGrid.className = "fieldGrid";
     appendSelectField(surfaceGrid, object, {
       label: "Shape",
-      value: getSurfaceKind(object.surface),
+      value: surfaceKind,
       options: [
         { value: "rect", label: "Rect" },
         { value: "circle", label: "Circle" },
@@ -2041,7 +2146,7 @@ function renderObjectDetails(object) {
       getValue: (target) => target.surface?.offsetZ ?? 0,
       onChange: (value) => commitSurfaceNumericField(object.id, "offsetZ", value),
     }, locked);
-    if (getSurfaceKind(object.surface) === "circle") {
+    if (surfaceKind === "circle") {
       appendNumericField(surfaceGrid, object, {
         key: "radius",
         label: "Surface R",
@@ -2173,10 +2278,11 @@ function buildObjectRow(object) {
   button.type = "button";
   button.className = "objectRow";
   button.dataset.objectId = object.id;
-  button.innerHTML = [
-    `<strong>${object.id}</strong>`,
-    `<span>${typeLabel} · ${object.surface?.enabled ? "walkable surface" : "object only"}${object.editorLocked ? " · locked" : ""}${object.visible === false ? " · hidden" : ""} · ${formatNumber(object.pos.x)}, ${formatNumber(object.pos.z)}</span>`,
-  ].join("");
+  const title = document.createElement("strong");
+  title.textContent = getObjectLabel(object);
+  const subtitle = document.createElement("span");
+  subtitle.textContent = `${typeLabel} · ${object.surface?.enabled ? "walkable surface" : "object only"}${object.editorLocked ? " · locked" : ""}${object.visible === false ? " · hidden" : ""} · ${formatNumber(object.pos.x)}, ${formatNumber(object.pos.z)}${object.name ? ` · id:${object.id}` : ""}`;
+  button.append(title, subtitle);
   button.addEventListener("click", () => {
     setSelectedObject(object.id, { focus: true });
   });

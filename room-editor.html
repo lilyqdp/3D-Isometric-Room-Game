@@ -291,7 +291,7 @@
   <body>
     <aside id="editorPanel">
       <h1>Room Editor</h1>
-      <p class="subtle">Separate room editor entrypoint. It uses the shared room layout source and supports selection, dragging, live rotation previews, editable walkable surface bounds, GLB-backed model objects, primitive shapes, object obstacles, undo/redo, and JSON import/export. Camera controls match game debug mode: WASD move and arrow keys rotate.</p>
+      <p class="subtle">Separate room editor entrypoint. It uses the shared room layout source and supports selection, dragging, renaming, rotation previews, editable walkable surface bounds, collision toggles, GLB-backed model objects, primitive shapes, model-dimension calibration, undo/redo, and JSON import/export. Camera controls match game debug mode: WASD move and arrow keys rotate.</p>
 
       <div class="toolbar">
         <a href="./">Back To Game</a>
@@ -319,7 +319,7 @@
         <input id="glbAssetInput" type="file" accept=".glb,.gltf,model/gltf-binary,model/gltf+json" hidden />
       </div>
 
-      <div id="sceneHint">Left-click any room object to select it. Drag on the scene to move it across the floor plane. Rotation previews update live while you drag the slider, and the undo entry is only committed when you release it. Shapes and GLB model objects can be added from the toolbar. Model objects can use either a served GLB path or a local GLB file preview from the selection panel.</div>
+      <div id="sceneHint">Left-click any room object to select it. Drag on the scene to move it across the floor plane. Rotation previews update live while you drag the slider, and the undo entry is only committed when you release it. Surface-capable objects can be made walkable, obstacle-capable objects can be given collisions, and GLB model objects can calibrate their dimensions from their loaded bounds.</div>
       <div id="editorStatus">Editor ready.</div>
 
       <section class="section">
@@ -385,7 +385,7 @@
       </section>
 
       <div id="editorNotice">
-        Surface-capable objects can now switch between rectangular and circular walkable surfaces, and model/shape surface bounds can be edited separately from the visible mesh. Local GLB files are still session-only previews; use the GLB path field for saved layouts.
+        Surface-capable objects can now switch between rectangular and circular walkable surfaces, and obstacle-capable objects can toggle collisions from the same shared layout data used by gameplay. Local GLB files are still session-only previews; use the GLB path field for saved layouts.
       </div>
     </aside>
 

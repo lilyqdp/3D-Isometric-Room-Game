@@ -70,35 +70,6 @@ export function setupPhysicsWorld({
   }
   addStaticBox(desk.pos.x, 1.02, desk.pos.z, desk.sizeX * 0.5, 0.06, desk.sizeZ * 0.5, 0, shellMat);
 
-  // Bed
-  if (bed) {
-    const bedW = (bed.width || 2.0) * 0.5;
-    const bedD = (bed.depth || 3.4) * 0.5;
-    addStaticBox(bed.pos.x, 0.4, bed.pos.z, bedW, 0.02, bedD, 0, shellMat);
-    addStaticBox(bed.pos.x, 0.2, bed.pos.z, bedW, 0.2, bedD, 0, shellMat);
-  }
-
-  // Wardrobe
-  if (wardrobe) {
-    const ww = (wardrobe.width || 1.7) * 0.5;
-    const wd = (wardrobe.depth || 0.55) * 0.5;
-    const wh = (wardrobe.height || 2.2) * 0.5;
-    addStaticBox(wardrobe.pos.x, wh, wardrobe.pos.z, ww, wh, wd, (wardrobe.rotQuarterTurns || 0) * Math.PI * 0.5, shellMat);
-  }
-
-  // Bookcase
-  if (bookcase) {
-    const bw = (bookcase.width || 1.1) * 0.5;
-    const bd = (bookcase.depth || 0.38) * 0.5;
-    const bh = (bookcase.height || 1.8) * 0.5;
-    addStaticBox(bookcase.pos.x, bh, bookcase.pos.z, bw, bh, bd, 0, shellMat);
-  }
-
-  // Bedside table
-  if (bedsideTable) {
-    addStaticBox(bedsideTable.pos.x, 0.32, bedsideTable.pos.z, 0.29, 0.32, 0.24, 0, shellMat);
-  }
-
   // Hamper
   addStaticBox(hamper.pos.x, hamper.rimY * 0.5, hamper.pos.z + hamper.outerHalfZ, hamper.outerHalfX, hamper.rimY * 0.5, 0.03);
   addStaticBox(hamper.pos.x, hamper.rimY * 0.5, hamper.pos.z - hamper.outerHalfZ, hamper.outerHalfX, hamper.rimY * 0.5, 0.03);

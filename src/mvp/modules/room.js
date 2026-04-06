@@ -58,6 +58,12 @@ function getRenderableObjectFootprint(object) {
     case "platform":
     case "windowSill":
       return getEffectiveRectSize(object.width, object.depth, object);
+    case "bed":
+    case "bedsideTable":
+    case "rug":
+    case "wardrobe":
+    case "bookcase":
+      return getEffectiveRectSize(object.width, object.depth, object);
     case "primitive":
       return getPrimitiveFootprint(object);
     case "model":
@@ -425,119 +431,166 @@ export function makeDesk(scene, desk) {
 export function makeBed(scene, bed) {
   const group = new THREE.Group();
   group.position.copy(bed.pos);
-  group.rotation.y = (bed.rotQuarterTurns || 0) * Math.PI * 0.5;
+  group.rotation.y = getObjectRotation(bed);
+  if (!isRoomObjectVisible(bed)) {
+    if (bed.surface?.enabled) addInvisibleSurfaceProxy(group, bed, Number(bed.surfaceY || 0.44) + 0.01);
+    tagRoomObject(group, bed);
+    scene.add(group);
+    return;
+  }
 
-  // Frame
-  const frameMat = new THREE.MeshStandardMaterial({ color: 0x7a5c3a, roughness: 0.82 });
-  const frame = new THREE.Mesh(new THREE.BoxGeometry(bed.width, 0.18, bed.depth), frameMat);
-  frame.position.set(0, 0.09, 0);
+  const width = Math.max(0.1, Number(bed.width) || 2.0);
+  const depth = Math.max(0.1, Number(bed.depth) || 3.4);
+  const height = Math.max(0.1, Number(bed.height) || 0.78);
+  const frameH = Math.max(0.05, height * 0.23);
+  const mattressH = Math.max(0.05, height * 0.28);
+  const blanketH = Math.max(0.025, height * 0.09);
+  const pillowH = Math.max(0.04, height * 0.12);
+  const headboardH = Math.max(0.12, height * 0.92);
+
+  const frame = new THREE.Mesh(
+    new THREE.BoxGeometry(width, frameH, depth),
+    makeTintedStandardMaterial(0x7a5c3a, { roughness: 0.82 }, bed)
+  );
+  frame.position.set(0, frameH * 0.5, 0);
   group.add(frame);
 
-  // Mattress
-  const mattressMat = new THREE.MeshStandardMaterial({ color: 0xf0e6d8, roughness: 0.9 });
-  const mattress = new THREE.Mesh(new THREE.BoxGeometry(bed.width - 0.1, 0.22, bed.depth - 0.1), mattressMat);
-  mattress.position.set(0, 0.29, 0);
+  const mattress = new THREE.Mesh(
+    new THREE.BoxGeometry(Math.max(0.08, width - 0.1), mattressH, Math.max(0.08, depth - 0.1)),
+    makeTintedStandardMaterial(0xf0e6d8, { roughness: 0.9 }, bed)
+  );
+  mattress.position.set(0, frameH + mattressH * 0.5, 0);
   group.add(mattress);
 
-  // Blanket (covers lower 2/3 of mattress)
-  const blanketMat = new THREE.MeshStandardMaterial({ color: 0x7a9cbf, roughness: 0.95 });
-  const blanket = new THREE.Mesh(new THREE.BoxGeometry(bed.width - 0.12, 0.07, bed.depth * 0.68), blanketMat);
-  blanket.position.set(0, 0.415, bed.depth * 0.16);
+  const blanket = new THREE.Mesh(
+    new THREE.BoxGeometry(Math.max(0.08, width - 0.12), blanketH, Math.max(0.08, depth * 0.68)),
+    makeTintedStandardMaterial(0x7a9cbf, { roughness: 0.95 }, bed)
+  );
+  blanket.position.set(0, frameH + mattressH + blanketH * 0.5, depth * 0.16);
   group.add(blanket);
 
-  // Pillow
-  const pillowMat = new THREE.MeshStandardMaterial({ color: 0xfaf0e6, roughness: 0.88 });
-  const pillow = new THREE.Mesh(new THREE.BoxGeometry(bed.width * 0.55, 0.1, 0.38), pillowMat);
-  pillow.position.set(0, 0.41, -(bed.depth * 0.5 - 0.28));
+  const pillow = new THREE.Mesh(
+    new THREE.BoxGeometry(Math.max(0.08, width * 0.55), pillowH, Math.max(0.08, depth * 0.11)),
+    makeTintedStandardMaterial(0xfaf0e6, { roughness: 0.88 }, bed)
+  );
+  pillow.position.set(0, frameH + mattressH + pillowH * 0.5, -(depth * 0.5 - Math.max(0.18, depth * 0.08)));
   group.add(pillow);
 
-  // Headboard
-  const headboardMat = new THREE.MeshStandardMaterial({ color: 0x6b4f30, roughness: 0.78 });
-  const headboard = new THREE.Mesh(new THREE.BoxGeometry(bed.width, 0.72, 0.1), headboardMat);
-  headboard.position.set(0, 0.54, -(bed.depth * 0.5 + 0.05));
+  const headboard = new THREE.Mesh(
+    new THREE.BoxGeometry(width, headboardH, Math.max(0.05, depth * 0.03)),
+    makeTintedStandardMaterial(0x6b4f30, { roughness: 0.78 }, bed)
+  );
+  headboard.position.set(0, headboardH * 0.5, -(depth * 0.5 + Math.max(0.04, depth * 0.015)));
   group.add(headboard);
 
+  if (bed.surface?.enabled) addInvisibleSurfaceProxy(group, bed, Number(bed.surfaceY || frameH + mattressH + blanketH) + 0.01);
   tagRoomObject(group, bed);
   scene.add(group);
 }
 export function makeBedsideTable(scene, table) {
   const group = new THREE.Group();
   group.position.copy(table.pos);
+  group.rotation.y = getObjectRotation(table);
+  if (!isRoomObjectVisible(table)) {
+    if (table.surface?.enabled) addInvisibleSurfaceProxy(group, table, Number(table.surfaceY || table.height || 0.63) + 0.01);
+    tagRoomObject(group, table);
+    scene.add(group);
+    return;
+  }
 
-  // Main body
-  const bodyMat = new THREE.MeshStandardMaterial({ color: 0x8a6240, roughness: 0.8 });
-  const body = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.58, 0.42), bodyMat);
-  body.position.set(0, 0.29, 0);
+  const width = Math.max(0.1, Number(table.width) || 0.58);
+  const depth = Math.max(0.1, Number(table.depth) || 0.48);
+  const height = Math.max(0.1, Number(table.height) || 0.63);
+  const topH = Math.max(0.03, height * 0.08);
+  const bodyH = Math.max(0.06, height - topH);
+
+  const body = new THREE.Mesh(
+    new THREE.BoxGeometry(width * 0.9, bodyH * 0.92, depth * 0.88),
+    makeTintedStandardMaterial(0x8a6240, { roughness: 0.8 }, table)
+  );
+  body.position.set(0, bodyH * 0.46, 0);
   group.add(body);
 
-  // Table top
-  const topMat = new THREE.MeshStandardMaterial({ color: 0x9e7250, roughness: 0.72 });
-  const top = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.05, 0.48), topMat);
-  top.position.set(0, 0.605, 0);
+  const top = new THREE.Mesh(
+    new THREE.BoxGeometry(width, topH, depth),
+    makeTintedStandardMaterial(0x9e7250, { roughness: 0.72 }, table)
+  );
+  top.position.set(0, bodyH + topH * 0.5, 0);
   group.add(top);
 
-  // Small drawer line
-  const drawerMat = new THREE.MeshStandardMaterial({ color: 0x7a5535, roughness: 0.85 });
-  const drawer = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.12, 0.02), drawerMat);
-  drawer.position.set(0, 0.32, 0.22);
+  const drawer = new THREE.Mesh(
+    new THREE.BoxGeometry(width * 0.66, Math.max(0.04, bodyH * 0.21), 0.02),
+    makeTintedStandardMaterial(0x7a5535, { roughness: 0.85 }, table)
+  );
+  drawer.position.set(0, bodyH * 0.52, depth * 0.46);
   group.add(drawer);
 
-  // Drawer handle
-  const handleMat = new THREE.MeshStandardMaterial({ color: 0xc8a870, roughness: 0.5, metalness: 0.3 });
-  const handle = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.025, 0.025), handleMat);
-  handle.position.set(0, 0.32, 0.235);
+  const handle = new THREE.Mesh(
+    new THREE.BoxGeometry(Math.max(0.04, width * 0.16), Math.max(0.02, height * 0.04), Math.max(0.02, depth * 0.05)),
+    makeTintedStandardMaterial(0xc8a870, { roughness: 0.5, metalness: 0.3 }, table)
+  );
+  handle.position.set(0, bodyH * 0.52, depth * 0.49);
   group.add(handle);
 
+  if (table.surface?.enabled) addInvisibleSurfaceProxy(group, table, Number(table.surfaceY || height) + 0.01);
   tagRoomObject(group, table);
   scene.add(group);
 }
 export function makeRug(scene, rug) {
   const group = new THREE.Group();
   group.position.copy(rug.pos);
-  group.position.y = 0.055;
+  group.position.y = Number(rug.surfaceY || rug.height || rug.pos?.y || 0.022) - Math.max(0.01, Number(rug.height) || 0.022) * 0.5;
+  group.rotation.y = getObjectRotation(rug);
 
   const w = rug.width || 2.2;
   const d = rug.depth || 3.2;
+  const h = Math.max(0.01, Number(rug.height) || 0.022);
+  if (!isRoomObjectVisible(rug)) {
+    if (rug.surface?.enabled) addInvisibleSurfaceProxy(group, rug, Number(rug.surfaceY || h) + 0.01);
+    tagRoomObject(group, rug);
+    scene.add(group);
+    return;
+  }
 
   // Base — deep navy
   const base = new THREE.Mesh(
-    new THREE.BoxGeometry(w, 0.018, d),
-    new THREE.MeshStandardMaterial({ color: 0x0b3d6b, roughness: 0.95 })
+    new THREE.BoxGeometry(w, h * 0.82, d),
+    makeTintedStandardMaterial(0x0b3d6b, { roughness: 0.95 }, rug)
   );
   group.add(base);
 
   // Middle band — medium blue
   const mid = new THREE.Mesh(
-    new THREE.BoxGeometry(w * 0.78, 0.019, d * 0.78),
-    new THREE.MeshStandardMaterial({ color: 0x3182bd, roughness: 0.93 })
+    new THREE.BoxGeometry(w * 0.78, h * 0.88, d * 0.78),
+    makeTintedStandardMaterial(0x3182bd, { roughness: 0.93 }, rug)
   );
   group.add(mid);
 
   // Inner band — steel blue
   const inner = new THREE.Mesh(
-    new THREE.BoxGeometry(w * 0.56, 0.02, d * 0.56),
-    new THREE.MeshStandardMaterial({ color: 0x6baed6, roughness: 0.92 })
+    new THREE.BoxGeometry(w * 0.56, h * 0.94, d * 0.56),
+    makeTintedStandardMaterial(0x6baed6, { roughness: 0.92 }, rug)
   );
   group.add(inner);
 
   // Center — light blue
   const center = new THREE.Mesh(
-    new THREE.BoxGeometry(w * 0.34, 0.021, d * 0.34),
-    new THREE.MeshStandardMaterial({ color: 0x9ecae1, roughness: 0.9 })
+    new THREE.BoxGeometry(w * 0.34, h, d * 0.34),
+    makeTintedStandardMaterial(0x9ecae1, { roughness: 0.9 }, rug)
   );
   group.add(center);
 
   // Cross stripes horizontal — white
-  const stripeMatW = new THREE.MeshStandardMaterial({ color: 0xeff3ff, roughness: 0.9 });
-  const stripeH = new THREE.Mesh(new THREE.BoxGeometry(w * 0.76, 0.022, d * 0.06), stripeMatW);
+  const stripeMatW = makeTintedStandardMaterial(0xeff3ff, { roughness: 0.9 }, rug);
+  const stripeH = new THREE.Mesh(new THREE.BoxGeometry(w * 0.76, h * 1.02, d * 0.06), stripeMatW);
   group.add(stripeH);
 
   // Cross stripes vertical — white
-  const stripeV = new THREE.Mesh(new THREE.BoxGeometry(w * 0.06, 0.022, d * 0.76), stripeMatW);
+  const stripeV = new THREE.Mesh(new THREE.BoxGeometry(w * 0.06, h * 1.02, d * 0.76), stripeMatW);
   group.add(stripeV);
 
   // Corner dots — dark navy accents
-  const dotMat = new THREE.MeshStandardMaterial({ color: 0x08519c, roughness: 0.88 });
+  const dotMat = makeTintedStandardMaterial(0x08519c, { roughness: 0.88 }, rug);
   const dotPositions = [
     [ w * 0.28,  d * 0.28],
     [-w * 0.28,  d * 0.28],
@@ -545,27 +598,34 @@ export function makeRug(scene, rug) {
     [-w * 0.28, -d * 0.28],
   ];
   for (const [dx, dz] of dotPositions) {
-    const dot = new THREE.Mesh(new THREE.BoxGeometry(w * 0.09, 0.023, d * 0.09), dotMat);
+    const dot = new THREE.Mesh(new THREE.BoxGeometry(w * 0.09, h * 1.05, d * 0.09), dotMat);
     dot.position.set(dx, 0, dz);
     group.add(dot);
   }
 
+  if (rug.surface?.enabled) addInvisibleSurfaceProxy(group, rug, Number(rug.surfaceY || h) + 0.01);
   tagRoomObject(group, rug);
   scene.add(group);
 }
 export function makeWardrobe(scene, wardrobe) {
   const group = new THREE.Group();
   group.position.copy(wardrobe.pos);
-  group.rotation.y = (wardrobe.rotQuarterTurns || 0) * Math.PI * 0.5;
+  group.rotation.y = getObjectRotation(wardrobe);
 
   const w = wardrobe.width || 1.7;
   const h = wardrobe.height || 2.2;
   const d = wardrobe.depth || 0.55;
+  if (!isRoomObjectVisible(wardrobe)) {
+    if (wardrobe.surface?.enabled) addInvisibleSurfaceProxy(group, wardrobe, Number(wardrobe.surfaceY || h) + 0.01);
+    tagRoomObject(group, wardrobe);
+    scene.add(group);
+    return;
+  }
 
-  const darkWood = new THREE.MeshStandardMaterial({ color: 0x5f5347, roughness: 0.82 });
-  const midWood  = new THREE.MeshStandardMaterial({ color: 0x7a6352, roughness: 0.78 });
-  const lightWood = new THREE.MeshStandardMaterial({ color: 0x9e8060, roughness: 0.72 });
-  const handleMat = new THREE.MeshStandardMaterial({ color: 0xc8a870, roughness: 0.4, metalness: 0.5 });
+  const darkWood = makeTintedStandardMaterial(0x5f5347, { roughness: 0.82 }, wardrobe);
+  const midWood = makeTintedStandardMaterial(0x7a6352, { roughness: 0.78 }, wardrobe);
+  const lightWood = makeTintedStandardMaterial(0x9e8060, { roughness: 0.72 }, wardrobe);
+  const handleMat = makeTintedStandardMaterial(0xc8a870, { roughness: 0.4, metalness: 0.5 }, wardrobe);
 
   // Main body
   const body = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), darkWood);
@@ -617,20 +677,27 @@ export function makeWardrobe(scene, wardrobe) {
   plinth.position.set(0, 0.05, 0);
   group.add(plinth);
 
+  if (wardrobe.surface?.enabled) addInvisibleSurfaceProxy(group, wardrobe, Number(wardrobe.surfaceY || h) + 0.01);
   tagRoomObject(group, wardrobe);
   scene.add(group);
 }
 export function makeBookcase(scene, bookcase) {
   const group = new THREE.Group();
   group.position.copy(bookcase.pos);
-  group.rotation.y = (bookcase.rotQuarterTurns || 0) * Math.PI * 0.5;
+  group.rotation.y = getObjectRotation(bookcase);
 
   const w = bookcase.width || 1.1;
   const h = bookcase.height || 1.8;
   const d = bookcase.depth || 0.38;
+  if (!isRoomObjectVisible(bookcase)) {
+    if (bookcase.surface?.enabled) addInvisibleSurfaceProxy(group, bookcase, Number(bookcase.surfaceY || h) + 0.01);
+    tagRoomObject(group, bookcase);
+    scene.add(group);
+    return;
+  }
 
-  const frameMat = new THREE.MeshStandardMaterial({ color: 0xc49a6c, roughness: 0.8 });
-  const shelfMat = new THREE.MeshStandardMaterial({ color: 0xd4aa7d, roughness: 0.75 });
+  const frameMat = makeTintedStandardMaterial(0xc49a6c, { roughness: 0.8 }, bookcase);
+  const shelfMat = makeTintedStandardMaterial(0xd4aa7d, { roughness: 0.75 }, bookcase);
 
   // Back panel
   const back = new THREE.Mesh(new THREE.BoxGeometry(w, h, 0.03), frameMat);
@@ -677,7 +744,7 @@ export function makeBookcase(scene, bookcase) {
     while (curX < w * 0.4) {
       const bw = 0.055 + (i % 3) * 0.018;
       const bh = 0.18 + (i % 4) * 0.04;
-      const bookMat = new THREE.MeshStandardMaterial({ color: bookColors[i % bookColors.length], roughness: 0.85 });
+      const bookMat = makeTintedStandardMaterial(bookColors[i % bookColors.length], { roughness: 0.85 }, bookcase);
       const book = new THREE.Mesh(new THREE.BoxGeometry(bw, bh, d * 0.72), bookMat);
       book.position.set(curX + bw * 0.5, by + bh * 0.5, 0);
       group.add(book);
@@ -686,6 +753,7 @@ export function makeBookcase(scene, bookcase) {
     }
   }
 
+  if (bookcase.surface?.enabled) addInvisibleSurfaceProxy(group, bookcase, Number(bookcase.surfaceY || h) + 0.01);
   tagRoomObject(group, bookcase);
   scene.add(group);
 }

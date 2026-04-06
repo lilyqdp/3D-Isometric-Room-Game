@@ -473,11 +473,28 @@ export function createCatPathfindingRuntime(ctx) {
       : null;
   }
 
+  function obstacleMatchesIgnoredSupportSurface(obs, supportSurfaceId = "") {
+    const resolvedSurfaceId = String(supportSurfaceId || "");
+    if (!obs || !resolvedSurfaceId || resolvedSurfaceId === "floor") return false;
+    const ignoreIds = normalizeJumpIgnoreSurfaceIds(obs.jumpIgnoreSurfaceIds);
+    return ignoreIds.includes(resolvedSurfaceId);
+  }
+
   function filterObstaclesForPathOptions(obstacles, pathOptions = null) {
     if (!Array.isArray(obstacles) || !obstacles.length || !pathOptions) return obstacles;
     const ignoreSurfaceId = String(pathOptions.ignorePushableSurfaceId || "");
-    if (!ignoreSurfaceId || ignoreSurfaceId === "floor") return obstacles;
-    const filtered = obstacles.filter((obs) => !obstacleMatchesIgnoredPushableSurface(obs, ignoreSurfaceId));
+    const supportSurfaceId = String(pathOptions.supportSurfaceId || "");
+    if (
+      (!ignoreSurfaceId || ignoreSurfaceId === "floor") &&
+      (!supportSurfaceId || supportSurfaceId === "floor")
+    ) {
+      return obstacles;
+    }
+    const filtered = obstacles.filter((obs) => {
+      if (obstacleMatchesIgnoredSupportSurface(obs, supportSurfaceId)) return false;
+      if (obstacleMatchesIgnoredPushableSurface(obs, ignoreSurfaceId)) return false;
+      return true;
+    });
     if (filtered.length === obstacles.length) return obstacles;
     attachObstacleMetadata(filtered, !!obstacles._includePickups, !!obstacles._includeClosePickups);
     filtered._filteredFromSignature = obstacles._dynamicSignature || "";
@@ -2337,6 +2354,7 @@ export function createCatPathfindingRuntime(ctx) {
       const modeKey = useDynamic ? "dynamic" : "static";
       const navSignature = getObstacleSignatureCached(obstacles, navClearance);
       if (pathOptions?.ignorePushableSurfaceId) profileMeta.ignorePushableSurfaceId = String(pathOptions.ignorePushableSurfaceId);
+      if (pathOptions?.supportSurfaceId) profileMeta.supportSurfaceId = String(pathOptions.supportSurfaceId);
       const navChanged = lastPlannedSignature[modeKey] !== navSignature;
       const now = getClockTime();
       const targetOnPlane = new THREE.Vector3(target.x, pathY, target.z);

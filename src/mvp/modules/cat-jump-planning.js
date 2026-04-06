@@ -593,6 +593,14 @@ export function createCatJumpPlanningRuntime(ctx) {
     return obstacles.filter((obs) => !shouldIgnoreObstacleForLink(obs, fromSurfaceId, toSurfaceId));
   }
 
+  function filterObstaclesForSurfaceTraversal(obstacles, surfaceId) {
+    const resolvedSurfaceId = surfaceId == null ? null : String(surfaceId);
+    if (!resolvedSurfaceId || resolvedSurfaceId === "floor") {
+      return Array.isArray(obstacles) ? obstacles : [];
+    }
+    return filterObstaclesForLink(obstacles, resolvedSurfaceId, resolvedSurfaceId);
+  }
+
   function getJumpObstaclesForLink(link, obstacles, options = null) {
     if (!link) return Array.isArray(obstacles) ? obstacles : [];
     let filtered = filterObstaclesForLink(obstacles, link.fromSurfaceId, link.toSurfaceId);
@@ -1373,13 +1381,14 @@ export function createCatJumpPlanningRuntime(ctx) {
     if (sourceSurfaceId === "floor" || sourceY <= floorY + 0.08) {
       return groundPathCost(from, to, dynamicObstacles, clearance);
     }
+    const surfaceObstacles = filterObstaclesForSurfaceTraversal(dynamicObstacles, sourceSurfaceId);
     const fromOnSurface = new THREE.Vector3(from.x, sourceY, from.z);
     const toOnSurface = new THREE.Vector3(to.x, sourceY, to.z);
-    if (hasClearTravelLine(fromOnSurface, toOnSurface, dynamicObstacles, clearance, sourceY)) {
+    if (hasClearTravelLine(fromOnSurface, toOnSurface, surfaceObstacles, clearance, sourceY)) {
       return fromOnSurface.distanceTo(toOnSurface);
     }
-    const p = computeCatPath(fromOnSurface, toOnSurface, dynamicObstacles, null, null, false);
-    if (!isPathTraversable(p, dynamicObstacles, clearance, sourceY)) return Infinity;
+    const p = computeCatPath(fromOnSurface, toOnSurface, surfaceObstacles, null, null, false);
+    if (!isPathTraversable(p, surfaceObstacles, clearance, sourceY)) return Infinity;
     return catPathDistance(p);
   }
 
@@ -1724,6 +1733,7 @@ export function createCatJumpPlanningRuntime(ctx) {
       candidateLinks = exactMatches;
     }
     const dynamicObstacles = buildCatObstacles(true, true);
+    const surfaceTraversalObstacles = filterObstaclesForSurfaceTraversal(dynamicObstacles, surfaceId);
     const excludedLinkIds = new Set(
       Array.isArray(options?.excludeLinkIds) ? options.excludeLinkIds.map((id) => String(id || "")) : []
     );
@@ -1750,12 +1760,12 @@ export function createCatJumpPlanningRuntime(ctx) {
         const stagePathCost = surfacePathCost(
           fromTopPoint,
           stageTop,
-          dynamicObstacles,
+          surfaceTraversalObstacles,
           topClearance,
           surfaceId
         );
         if (!Number.isFinite(stagePathCost)) continue;
-        if (!isJumpPointSafeAtY(stageTop, surfaceY, dynamicObstacles, topClearance)) continue;
+        if (!isJumpPointSafeAtY(stageTop, surfaceY, surfaceTraversalObstacles, topClearance)) continue;
 
         let score = stagePathCost * 1.2 + 0.2;
         if (desired) score += link.jumpFrom.distanceTo(desired) * 0.45;
