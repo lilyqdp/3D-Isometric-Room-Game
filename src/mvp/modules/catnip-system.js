@@ -31,6 +31,9 @@ export function createCatnipRuntime(ctx) {
   } = ctx;
   const tempFloorHit = new THREE.Vector3();
   const tempFrom = new THREE.Vector3();
+  const tempPlacementOrigin = new THREE.Vector3();
+  const tempPlacementNormal = new THREE.Vector3();
+  const placementRaycaster = new THREE.Raycaster();
   const CATNIP_SCALE = 0.5;
   const CATNIP_RADIUS = 0.22 * CATNIP_SCALE;
   const CATNIP_HEIGHT = 0.04 * CATNIP_SCALE;
@@ -211,6 +214,35 @@ export function createCatnipRuntime(ctx) {
     const surface = getNonFloorSurfaceById(surfaceId);
     if (!surface) return false;
     return getSurfacePlanarGap(surface, x, z, edgePad) <= 1e-6;
+  }
+
+  function isInvisibleSurfaceProxy(object) {
+    if (!object?.userData?.catSurface) return false;
+    const material = object.material;
+    return !!(material && material.transparent && Number(material.opacity) <= 1e-4);
+  }
+
+  function getCatnipVisualY(surfaceId, x, z, surfaceY) {
+    const resolvedSurfaceId = String(surfaceId || "floor");
+    const roomObjectId = resolvedSurfaceId !== "floor" ? resolvedSurfaceId : "";
+    tempPlacementOrigin.set(x, Math.max(surfaceY + 1.5, 3.5), z);
+    placementRaycaster.set(tempPlacementOrigin, new THREE.Vector3(0, -1, 0));
+    placementRaycaster.far = Math.max(2.5, tempPlacementOrigin.y - (surfaceY - 0.5));
+    const hits = placementRaycaster.intersectObjects(scene.children, true);
+    for (const hit of hits) {
+      if (!hit?.object || !hit?.point || !hit?.face) continue;
+      if (isDescendantOf(hit.object, cat.group)) continue;
+      if (isDescendantOf(hit.object, cup.group)) continue;
+      if (game.catnip?.mesh && isDescendantOf(hit.object, game.catnip.mesh)) continue;
+      if (isInvisibleSurfaceProxy(hit.object)) continue;
+      if (roomObjectId && String(hit.object.userData?.roomObjectId || "") !== roomObjectId) continue;
+      tempPlacementNormal.copy(hit.face.normal).transformDirection(hit.object.matrixWorld);
+      if (tempPlacementNormal.y < 0.45) continue;
+      if (hit.point.y < surfaceY - 0.08) continue;
+      if (!roomObjectId && hit.point.y > surfaceY + 0.18) continue;
+      return hit.point.y + CATNIP_HALF_HEIGHT + 0.003;
+    }
+    return surfaceY + CATNIP_HALF_HEIGHT;
   }
 
   function getCurrentCatSurfaceId() {
@@ -450,7 +482,7 @@ export function createCatnipRuntime(ctx) {
           surface: surfaceId,
           x: clamped.x,
           z: clamped.z,
-          y: clamped.surface.y - 0.02 + CATNIP_HALF_HEIGHT,
+          y: getCatnipVisualY(surfaceId, clamped.x, clamped.z, clamped.surface.y),
           surfaceY: clamped.surface.y,
         };
         return placement;
@@ -461,7 +493,7 @@ export function createCatnipRuntime(ctx) {
         surface: "floor",
         x: THREE.MathUtils.clamp(floorHit.x, ROOM.minX + 0.6, ROOM.maxX - 0.6),
         z: THREE.MathUtils.clamp(floorHit.z, ROOM.minZ + 0.6, ROOM.maxZ - 0.6),
-        y: 0.055 + CATNIP_HALF_HEIGHT,
+        y: getCatnipVisualY("floor", floorHit.x, floorHit.z, 0.055),
         surfaceY: 0.055,
       };
       return placement;
