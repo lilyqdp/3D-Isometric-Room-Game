@@ -1276,6 +1276,28 @@ export function createDebugOverlayRuntime(ctx) {
       const total = (Number(hits) || 0) + (Number(misses) || 0);
       return total > 0 ? `${formatNum((100 * (Number(hits) || 0)) / total, 1)}%` : "na";
     };
+    const summarizeReasonCounters = (prefix, label, limit = 3) => {
+      const entries = Object.entries(counters)
+        .filter(([key]) => key.startsWith(`${prefix}.`))
+        .map(([key, value]) => ({ reason: key.slice(prefix.length + 1), count: Number(value) || 0 }))
+        .filter((entry) => entry.count > 0)
+        .sort((a, b) => b.count - a.count)
+        .slice(0, limit);
+      if (!entries.length) return `${label}: none yet`;
+      return `${label}: ${entries.map((entry) => `${entry.reason}=${formatNum(entry.count, 0)}`).join(" | ")}`;
+    };
+    const summarizeLastMeta = (name, label, fields) => {
+      const meta = metrics[name]?.lastMeta;
+      if (!meta || typeof meta !== "object") return `${label}: no recent detail`;
+      const parts = [];
+      for (const field of fields) {
+        const value = meta[field];
+        if (value == null || value === "") continue;
+        if (typeof value === "number" && Number.isFinite(value)) parts.push(`${field}=${formatNum(value, 2)}`);
+        else parts.push(`${field}=${value}`);
+      }
+      return parts.length ? `${label}: ${parts.join(" | ")}` : `${label}: no recent detail`;
+    };
 
     lines.push("path lag profiler:");
     lines.push(summarizeMetric("computeCatPath", "compute path"));
@@ -1303,6 +1325,15 @@ export function createDebugOverlayRuntime(ctx) {
     lines.push(
       `ensure path actions: computed=${formatNum(counters.ensureCatPathComputed, 0)} skipped=${formatNum(counters.ensureCatPathSkipped, 0)} throttled=${formatNum(counters.ensureCatPathThrottled, 0)} | recast entry cache hits=${formatNum(counters.recastEntryCacheHits, 0)} rebuilds=${formatNum(counters.recastEntryRebuilds, 0)}`
     );
+    lines.push("last solve detail:");
+    lines.push(summarizeLastMeta("computeCatPath", "compute path", ["mode", "reason", "pathLen", "cached", "family"]));
+    lines.push(summarizeLastMeta("computeRecastPath", "recast solve", ["reason", "pathLen", "includePickups"]));
+    lines.push(summarizeLastMeta("buildRecastNavEntry", "navmesh entry", ["cache", "reason", "dynamicChanged", "includePickups"]));
+    lines.push(summarizeLastMeta("buildCatObstacles", "build obstacles", ["cached", "includePickups", "includeClosePickups", "obstacleCount"]));
+    lines.push(summarizeLastMeta("ensureCatPath", "ensure path", ["action", "pathLen", "supportSurfaceId", "ignorePushableSurfaceId"]));
+    lines.push("reason counts:");
+    lines.push(summarizeReasonCounters("recastReason", "recast reasons"));
+    lines.push(summarizeReasonCounters("reachReason", "reachability reasons"));
     const slowEvents = Array.isArray(profiler.events) ? profiler.events.slice(-8) : [];
     if (slowEvents.length) {
       lines.push("recent slow events:");
@@ -3032,6 +3063,10 @@ export function createDebugOverlayRuntime(ctx) {
     return !!(debugView.visible && debugView.advancedPanelVisible && isFlagOn("showFunctionTrace"));
   }
 
+  function shouldRecordPathProfiler() {
+    return !!(debugView.visible && debugView.advancedPanelVisible && isFlagOn("showPathProfiler"));
+  }
+
   return {
     enabled: DEBUG_VIEW.enabled,
     root: debugView.root,
@@ -3041,6 +3076,7 @@ export function createDebugOverlayRuntime(ctx) {
     onKeyDown,
     isDebugVisible,
     shouldRecordFunctionTrace,
+    shouldRecordPathProfiler,
     updatePerformanceSample,
   };
 }

@@ -276,24 +276,16 @@ export function createCatRecoveryRuntime(ctx) {
     const cageBoost = caged ? 1.9 : 1.0;
     cat.nav.pickupTrapT += sampleDt * Math.max(overlapPressure, intrusionPressure) * cageBoost;
     if (cat.nav.pickupTrapT < 0.1) return false;
-
-    let recovery = findNearestCatRecoveryPoint(cat.pos, true);
-    if (!recovery) recovery = findNearestCatRecoveryPoint(cat.pos, false);
-    if (!recovery || recovery.distanceToSquared(cat.pos) < 0.01) {
-      cat.nav.pickupTrapT = 0.12;
+    // Pickups should resolve by being shoved out of the cat's radius, not by
+    // teleporting the cat into a recovery position.
+    if (nudgeBlockingPickupAwayFromCat()) {
+      cat.nav.pickupTrapT = Math.max(0, cat.nav.pickupTrapT - 0.08);
+      cat.nav.stuckT = Math.max(0, cat.nav.stuckT - sampleDt * 0.6);
       return false;
     }
 
-    cat.pos.copy(recovery);
-    cat.group.position.set(cat.pos.x, 0, cat.pos.z);
-    cat.nav.goal.set(cat.pos.x, 0, cat.pos.z);
-    clearCatNavPath(true);
-    resetCatUnstuckTracking();
-    cat.nav.stuckT = 0;
-    cat.status = "Recovering";
-
-    if (goal) ensureCatPath(goal, true, true);
-    return true;
+    cat.nav.pickupTrapT = Math.min(cat.nav.pickupTrapT, 0.16);
+    return false;
   }
 
   function keepCatAwayFromCup(minDist = CUP_COLLISION.catAvoidRadius) {

@@ -31,6 +31,7 @@ export function createCatNavigationRuntime(ctx) {
     resetCatUnstuckTracking,
     getClockTime,
     recordFunctionTrace,
+    shouldRecordPathProfiler,
   } = ctx;
 
   const pathRuntime = createCatPathfindingRuntime({
@@ -53,6 +54,7 @@ export function createCatNavigationRuntime(ctx) {
     cup,
     pickupRadius,
     getClockTime,
+    shouldRecordPathProfiler,
   });
 
   function initPathfinding() {

@@ -306,11 +306,18 @@ export function createCatSteeringRuntime(ctx) {
     dynamicObstacles,
     clearance,
     ignoreDynamic = false,
-    queryY = 0
+    queryY = 0,
+    allowEndpointPushableGoal = true
   ) {
     if (!target) return target;
     const blockedStatic = isCatPointBlocked(target.x, target.z, staticObstacles, clearance, queryY);
     const blockedDynamic = !ignoreDynamic && isCatPointBlocked(target.x, target.z, dynamicObstacles, clearance, queryY);
+    const blockedOnlyByEndpointPushable =
+      allowEndpointPushableGoal &&
+      !blockedStatic &&
+      blockedDynamic &&
+      pointBlockedOnlyByPushablePickup(target.x, target.z, dynamicObstacles, clearance, queryY);
+    if (blockedOnlyByEndpointPushable) return target;
     if (!blockedStatic && !blockedDynamic) return target;
 
     let best = null;
@@ -334,6 +341,43 @@ export function createCatSteeringRuntime(ctx) {
       if (best) break;
     }
     return best || target;
+  }
+
+  function pointBlockedOnlyByPushablePickup(x, z, obstacles, clearance = 0, queryY = 0) {
+    if (!Array.isArray(obstacles) || !obstacles.length) return false;
+    let foundPushable = false;
+    for (const obs of obstacles) {
+      if (!obs) continue;
+      if (Number.isFinite(obs?.y) && Number.isFinite(obs?.h)) {
+        const halfH = Math.max(0.001, obs.h * 0.5);
+        const minY = obs.y - halfH - 0.08;
+        const maxY = obs.y + halfH + 0.08;
+        if (queryY < minY || queryY > maxY) continue;
+      }
+      const dx = x - obs.x;
+      const dz = z - obs.z;
+      const obstacleClearance = Math.max(0, clearance || 0) + Math.max(0, Number(obs.navPad) || 0);
+      let overlaps = false;
+      if (obs.kind === "circle") {
+        const rr = (obs.r || 0) + obstacleClearance;
+        overlaps = dx * dx + dz * dz <= rr * rr;
+      } else if (obs.kind === "obb") {
+        const c = Math.cos(obs.yaw || 0);
+        const s = Math.sin(obs.yaw || 0);
+        const lx = c * dx + s * dz;
+        const lz = -s * dx + c * dz;
+        overlaps = Math.abs(lx) <= (obs.hx + obstacleClearance) && Math.abs(lz) <= (obs.hz + obstacleClearance);
+      } else {
+        overlaps = Math.abs(dx) <= (obs.hx + obstacleClearance) && Math.abs(dz) <= (obs.hz + obstacleClearance);
+      }
+      if (!overlaps) continue;
+      if (obs?.pushable && (obs.pickupKey || String(obs.tag || "").startsWith("pickup-"))) {
+        foundPushable = true;
+        continue;
+      }
+      return false;
+    }
+    return foundPushable;
   }
 
   function chooseGroundLocomotion(rawYawDelta, dt, preferRun = false) {
@@ -1346,6 +1390,7 @@ export function createCatSteeringRuntime(ctx) {
     const repathState = { forcedCount: 0 };
     let direct = !!opts.direct;
     let ignoreDynamic = !!opts.ignoreDynamic;
+    const allowEndpointPushableGoal = opts.allowEndpointPushableGoal !== false;
     const supportSurfaceId =
       yLevel > 0.02 && opts.supportSurfaceId && opts.supportSurfaceId !== "floor"
         ? String(opts.supportSurfaceId)
@@ -1411,7 +1456,8 @@ export function createCatSteeringRuntime(ctx) {
             groundCollisionObstacles,
             staticClearance,
             !!ignoreDynamic,
-            0
+            0,
+            allowEndpointPushableGoal
           )
         : target;
       if (direct) {

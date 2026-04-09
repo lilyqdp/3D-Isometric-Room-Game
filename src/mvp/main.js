@@ -526,6 +526,7 @@ const navRuntime = createCatNavigationRuntime({
   resetCatUnstuckTracking,
   getClockTime: () => clockTime,
   recordFunctionTrace,
+  shouldRecordPathProfiler: () => !!debugRuntime?.shouldRecordPathProfiler?.(),
 });
 
 const cupRuntime = createCupRuntime({
@@ -573,6 +574,7 @@ const catnipRuntime = createCatnipRuntime({
   getSurfaceDefs,
   getSurfaceById,
   getClockTime: () => clockTime,
+  shouldRecordPathProfiler: () => !!debugRuntime?.shouldRecordPathProfiler?.(),
 });
 
 debugRuntime = createDebugOverlayRuntime({
@@ -1167,6 +1169,7 @@ function isDraggingPickup(pickup) {
 }
 
 function ensurePathProfilerMetric(name) {
+  if (!debugRuntime?.shouldRecordPathProfiler?.()) return { profiler: null, metric: null };
   if (!cat.nav || typeof cat.nav !== "object") cat.nav = {};
   if (!cat.nav.pathProfiler || typeof cat.nav.pathProfiler !== "object") {
     cat.nav.pathProfiler = {
@@ -1199,6 +1202,7 @@ function ensurePathProfilerMetric(name) {
 function finishPointerProfilerMetric(name, startedAt, meta = null, slowMs = 4) {
   const elapsed = Math.max(0, performance.now() - startedAt);
   const { profiler, metric } = ensurePathProfilerMetric(name);
+  if (!profiler || !metric) return elapsed;
   metric.calls += 1;
   metric.totalMs += elapsed;
   metric.lastMs = elapsed;

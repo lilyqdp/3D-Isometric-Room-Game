@@ -21,6 +21,7 @@ export function createCatPathfindingRuntime(ctx) {
     cup,
     pickupRadius,
     getClockTime,
+    shouldRecordPathProfiler = () => false,
   } = ctx;
 
   const tempQ = new THREE.Quaternion();
@@ -128,7 +129,12 @@ export function createCatPathfindingRuntime(ctx) {
   const PATH_PROFILER_SAMPLE_LIMIT = 180;
   const PATH_PROFILER_EVENT_LIMIT = 24;
 
+  function isPathProfilerEnabled() {
+    return !!shouldRecordPathProfiler();
+  }
+
   function ensurePathProfiler() {
+    if (!isPathProfilerEnabled()) return null;
     if (!cat.nav || typeof cat.nav !== "object") cat.nav = {};
     if (!cat.nav.pathProfiler || typeof cat.nav.pathProfiler !== "object") {
       cat.nav.pathProfiler = {
@@ -148,6 +154,7 @@ export function createCatPathfindingRuntime(ctx) {
 
   function ensurePathProfilerMetric(name) {
     const profiler = ensurePathProfiler();
+    if (!profiler) return null;
     if (!profiler.metrics[name] || typeof profiler.metrics[name] !== "object") {
       profiler.metrics[name] = {
         calls: 0,
@@ -166,8 +173,18 @@ export function createCatPathfindingRuntime(ctx) {
 
   function bumpPathProfilerCounter(name, delta = 1) {
     const profiler = ensurePathProfiler();
+    if (!profiler) return 0;
     profiler.counters[name] = (Number(profiler.counters[name]) || 0) + delta;
     return profiler.counters[name];
+  }
+
+  function bumpPathProfilerReason(prefix, reason, delta = 1) {
+    const key = String(reason || "unknown")
+      .trim()
+      .replace(/[^a-z0-9]+/gi, "-")
+      .replace(/^-+|-+$/g, "")
+      .toLowerCase() || "unknown";
+    return bumpPathProfilerCounter(`${prefix}.${key}`, delta);
   }
 
   function pushPathProfilerSample(metric, value) {
@@ -180,6 +197,7 @@ export function createCatPathfindingRuntime(ctx) {
 
   function recordPathProfilerEvent(kind, ms, meta = null) {
     const profiler = ensurePathProfiler();
+    if (!profiler) return null;
     const event = {
       kind: String(kind || "path"),
       ms: Number.isFinite(ms) ? ms : NaN,
@@ -197,6 +215,7 @@ export function createCatPathfindingRuntime(ctx) {
   function finishPathProfilerMetric(name, startedAt, meta = null, slowMs = 6) {
     const elapsed = Math.max(0, performance.now() - startedAt);
     const metric = ensurePathProfilerMetric(name);
+    if (!metric) return elapsed;
     metric.calls += 1;
     metric.totalMs += elapsed;
     metric.lastMs = elapsed;
@@ -961,6 +980,25 @@ export function createCatPathfindingRuntime(ctx) {
     return Math.abs(dx) <= (obs.hx + obstacleClearance) && Math.abs(dz) <= (obs.hz + obstacleClearance);
   }
 
+  function filterEndpointPushableGoalObstacles(point, obstacles, clearance, queryY = 0, stage = "plan") {
+    if (!point || !Array.isArray(obstacles) || !obstacles.length) return obstacles;
+    const endpointPushables = [];
+    for (const obs of obstacles) {
+      if (!obstacleBlocksPoint(obs, point.x, point.z, clearance, queryY, stage)) continue;
+      if (obs?.pushable && (obs.pickupKey || String(obs.tag || "").startsWith("pickup-"))) {
+        endpointPushables.push(obs);
+        continue;
+      }
+      return obstacles;
+    }
+    if (!endpointPushables.length) return obstacles;
+    const filtered = obstacles.filter((obs) => !endpointPushables.includes(obs));
+    if (filtered.length === obstacles.length) return obstacles;
+    attachObstacleMetadata(filtered, !!obstacles._includePickups, !!obstacles._includeClosePickups);
+    filtered._filteredFromSignature = obstacles._dynamicSignature || "";
+    return filtered;
+  }
+
   function findFirstBlockingObstacleOnLine(a, b, obstacles, clearance, queryY = 0, stage = "plan") {
     const dx = b.x - a.x;
     const dz = b.z - a.z;
@@ -1457,11 +1495,14 @@ export function createCatPathfindingRuntime(ctx) {
         profileMeta.reason = "no-waypoints";
         return [];
       }
-      if (path[0].distanceToSquared(start) > 0.01 * 0.01) path.unshift(start.clone());
-      else path[0].copy(start);
+      // Keep the raw recast path on valid nav points. The caller is responsible for
+      // stitching exact snapped endpoints back in, and doing that here can make an
+      // otherwise valid recast solve fail post-validation and spill into fallback A*.
+      if (path[0].distanceToSquared(startOnNav) > 0.01 * 0.01) path.unshift(new THREE.Vector3(startOnNav.x, startOnNav.y, startOnNav.z));
+      else path[0].set(startOnNav.x, startOnNav.y, startOnNav.z);
       const last = path.length - 1;
-      if (path[last].distanceToSquared(goal) > 0.01 * 0.01) path.push(goal.clone());
-      else path[last].copy(goal);
+      if (path[last].distanceToSquared(goalOnNav) > 0.01 * 0.01) path.push(new THREE.Vector3(goalOnNav.x, goalOnNav.y, goalOnNav.z));
+      else path[last].set(goalOnNav.x, goalOnNav.y, goalOnNav.z);
 
       const smoothed = smoothCatPath(path, obstacles, clearance, planY);
       let finalPath = [];
@@ -1472,6 +1513,7 @@ export function createCatPathfindingRuntime(ctx) {
       if (!profileMeta.ok) profileMeta.reason = "post-smooth-blocked";
       return finalPath;
     } finally {
+      bumpPathProfilerReason("recastReason", profileMeta.ok ? "ok" : (profileMeta.reason || "unknown"));
       finishPathProfilerMetric("computeRecastPath", startedAt, profileMeta, 5.5);
     }
   }
@@ -2249,11 +2291,17 @@ export function createCatPathfindingRuntime(ctx) {
               ? !!options.allowFallback
               : null
           );
+      const allowEndpointPushableGoal = typeof options === "object" && options
+        ? options.allowEndpointPushableGoal !== false
+        : true;
       const startOnPlane = new THREE.Vector3(start.x, 0, start.z);
       const goalOnPlane = new THREE.Vector3(goal.x, 0, goal.z);
       const q = (v, quantum = 0.08) => Math.round((Number.isFinite(v) ? v : 0) / quantum);
-      const signature = getObstacleSignatureCached(obstacles, navClearance);
-      const cacheKey = `${signature}|${allowFallback == null ? "default" : (allowFallback ? 1 : 0)}|${q(startOnPlane.x)}:${q(startOnPlane.z)}:${q(goalOnPlane.x)}:${q(goalOnPlane.z)}`;
+      const pathObstacles = allowEndpointPushableGoal
+        ? filterEndpointPushableGoalObstacles(goalOnPlane, obstacles, navClearance, 0, "plan")
+        : obstacles;
+      const signature = getObstacleSignatureCached(pathObstacles, navClearance);
+      const cacheKey = `${signature}|${allowFallback == null ? "default" : (allowFallback ? 1 : 0)}|ep:${allowEndpointPushableGoal ? 1 : 0}|${q(startOnPlane.x)}:${q(startOnPlane.z)}:${q(goalOnPlane.x)}:${q(goalOnPlane.z)}`;
       const now = getClockTime();
       const cached = reachabilityCache.get(cacheKey);
       if (cached && now - cached.at <= REACHABILITY_CACHE_TTL) {
@@ -2273,7 +2321,7 @@ export function createCatPathfindingRuntime(ctx) {
         if (reason) profileMeta.reason = reason;
         return !!ok;
       };
-      const freeGoal = findNearestWalkablePoint(goalOnPlane, obstacles, navClearance, 0);
+      const freeGoal = findNearestWalkablePoint(goalOnPlane, pathObstacles, navClearance, 0);
       const maxGoalSnap = Math.max(0.16, CAT_NAV.step * 1.25, navClearance * 1.9);
       if (freeGoal.distanceToSquared(goalOnPlane) > maxGoalSnap * maxGoalSnap) {
         return commit(false, "goal-snap-too-far");
@@ -2281,27 +2329,28 @@ export function createCatPathfindingRuntime(ctx) {
       if (startOnPlane.distanceToSquared(freeGoal) < 0.1 * 0.1) {
         return commit(true, "already-near-goal");
       }
-      if (hasClearTravelLine(startOnPlane, freeGoal, obstacles, navClearance, 0)) {
+      if (hasClearTravelLine(startOnPlane, freeGoal, pathObstacles, navClearance, 0)) {
         return commit(true, "direct-line");
       }
-      const path = computeCatPath(startOnPlane, freeGoal, obstacles, 0, allowFallback, false);
-      if (isPathTraversable(path, obstacles, navClearance, 0)) {
+      const path = computeCatPath(startOnPlane, freeGoal, pathObstacles, 0, allowFallback, false);
+      if (isPathTraversable(path, pathObstacles, navClearance, 0)) {
         return commit(true, "path-traversable");
       }
 
-      const blocker = findFirstBlockingObstacleOnLine(startOnPlane, freeGoal, obstacles, navClearance, 0);
+      const blocker = findFirstBlockingObstacleOnLine(startOnPlane, freeGoal, pathObstacles, navClearance, 0);
       if (!blocker) {
         return commit(false, "no-blocker-found");
       }
       const candidates = buildGroundDetourCandidates(blocker, navClearance, 0);
       for (const via of candidates) {
-        if (isCatPointBlocked(via.x, via.z, obstacles, navClearance, 0)) continue;
-        if (!hasGroundPathNoFallback(startOnPlane, via, obstacles, navClearance)) continue;
-        if (!hasGroundPathNoFallback(via, freeGoal, obstacles, navClearance)) continue;
+        if (isCatPointBlocked(via.x, via.z, pathObstacles, navClearance, 0)) continue;
+        if (!hasGroundPathNoFallback(startOnPlane, via, pathObstacles, navClearance)) continue;
+        if (!hasGroundPathNoFallback(via, freeGoal, pathObstacles, navClearance)) continue;
         return commit(true, "two-leg-detour");
       }
       return commit(false, "detour-failed");
     } finally {
+      bumpPathProfilerReason("reachReason", profileMeta.ok ? (profileMeta.reason || "ok") : (profileMeta.reason || "unknown"));
       finishPathProfilerMetric("canReachGroundTarget", startedAt, profileMeta, 4.5);
     }
   }
@@ -2323,12 +2372,16 @@ export function createCatPathfindingRuntime(ctx) {
       const pathOptions = getActiveCatPathOptions();
       const obstacles = filterObstaclesForPathOptions(builtObstacles, pathOptions);
       const modeKey = useDynamic ? "dynamic" : "static";
-      const navSignature = getObstacleSignatureCached(obstacles, navClearance);
+      const targetOnPlane = new THREE.Vector3(target.x, pathY, target.z);
+      const allowEndpointPushableGoal = pathY <= 0.02;
+      const pathObstacles = allowEndpointPushableGoal
+        ? filterEndpointPushableGoalObstacles(targetOnPlane, obstacles, navClearance, pathY, "plan")
+        : obstacles;
+      const navSignature = getObstacleSignatureCached(pathObstacles, navClearance);
       if (pathOptions?.ignorePushableSurfaceId) profileMeta.ignorePushableSurfaceId = String(pathOptions.ignorePushableSurfaceId);
       if (pathOptions?.supportSurfaceId) profileMeta.supportSurfaceId = String(pathOptions.supportSurfaceId);
       const navChanged = lastPlannedSignature[modeKey] !== navSignature;
       const now = getClockTime();
-      const targetOnPlane = new THREE.Vector3(target.x, pathY, target.z);
       const goalDelta = cat.nav.goal.distanceToSquared(targetOnPlane);
       const goalUnchanged = goalDelta < 0.05 * 0.05;
       const allowNavRefreshNow = now >= (cat.nav.repathAt || 0);
@@ -2349,7 +2402,7 @@ export function createCatPathfindingRuntime(ctx) {
       activeNavMeshMode.includePickups = !!useDynamic;
       activeNavMeshMode.includeClosePickups = true;
       const startOnPlane = new THREE.Vector3(cat.pos.x, pathY, cat.pos.z);
-      cat.nav.path = computeCatPath(startOnPlane, targetOnPlane, obstacles, pathY, allowFallback, true);
+      cat.nav.path = computeCatPath(startOnPlane, targetOnPlane, pathObstacles, pathY, allowFallback, true);
       cat.nav.index = cat.nav.path.length > 1 ? 1 : 0;
       cat.nav.goal.copy(targetOnPlane);
       cat.nav.repathAt = now + CAT_NAV.repathInterval;

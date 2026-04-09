@@ -297,6 +297,7 @@ export function createPickupsRuntime(ctx) {
       spawnSurfaceId,
       baseMass: mass,
       pulseSeed: Math.random() * 6.28,
+      catShovePulseAt: 0,
       inMotion: false,
       motion: null, // "drop" | "bounce" | "drag"
       targetBin: null,
@@ -694,23 +695,39 @@ export function createPickupsRuntime(ctx) {
             Number.isFinite(cat.nav?.lastSpeed) ? cat.nav.lastSpeed : 0,
             Number.isFinite(cat.nav?.commandedSpeed) ? cat.nav.commandedSpeed : 0
           );
-          const catMoving = !!cat.jump || catSpeed > 0.06;
-          if (catMoving) {
-            const push = THREE.MathUtils.clamp(shoveContact.penetration + 0.01, 0.01, 0.06);
+          const contactPressure = THREE.MathUtils.clamp(shoveContact.penetration / 0.08, 0, 1.8);
+          const catEngaged = !!cat.jump || catSpeed > 0.03 || shoveContact.penetration > 0.012;
+          if (catEngaged) {
+            const push = THREE.MathUtils.clamp(
+              shoveContact.penetration + 0.012 + contactPressure * 0.018,
+              0.012,
+              0.085
+            );
             b.wakeUp();
             b.position.x += nxCat * push;
             b.position.z += nzCat * push;
 
             const outwardSpeed = b.velocity.x * nxCat + b.velocity.z * nzCat;
             const targetOutward = THREE.MathUtils.clamp(
-              (p.type === "trash" ? 0.35 : 0.28) + catSpeed * 0.42,
-              0.22,
-              p.type === "trash" ? 1.15 : 0.9
+              (p.type === "trash" ? 0.42 : 0.34) + catSpeed * 0.46 + contactPressure * 0.22,
+              0.26,
+              p.type === "trash" ? 1.2 : 0.96
             );
             if (outwardSpeed < targetOutward) {
               const add = targetOutward - outwardSpeed;
               b.velocity.x += nxCat * add;
               b.velocity.z += nzCat * add;
+            }
+
+            if (clockTime >= (Number(p.catShovePulseAt) || 0)) {
+              const pulse = THREE.MathUtils.clamp(
+                (p.type === "trash" ? 0.54 : 0.44) + contactPressure * 0.38 + catSpeed * 0.28,
+                0.34,
+                p.type === "trash" ? 1.28 : 1.0
+              );
+              b.velocity.x += nxCat * pulse;
+              b.velocity.z += nzCat * pulse;
+              p.catShovePulseAt = clockTime + 0.125;
             }
 
             const tangent = p.type === "trash" ? 0.14 : 0.1;

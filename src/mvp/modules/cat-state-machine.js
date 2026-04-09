@@ -2080,6 +2080,46 @@ export function updateCatStateMachineRuntime(ctx, dt) {
       return handled;
     };
 
+    const refreshJumpUpLink = (force = false) => {
+      const nextSurfaceId = normalizeSurfaceId(route.surfaceId || route.finalSurfaceId);
+      if (!nextSurfaceId || nextSurfaceId === FLOOR_SURFACE_ID) return false;
+      if (!force && clockTime < (cat.nav.jumpUpPlanAt || 0)) return true;
+
+      const supportSurfaceId = normalizeSurfaceId(
+        getCurrentCatSurfaceId() || route.approachSurfaceId || FLOOR_SURFACE_ID
+      );
+      const desiredTopPoint =
+        (route.target?.clone ? route.target.clone() : null) ||
+        (route.finalTarget?.clone ? route.finalTarget.clone() : null);
+      const jumpAnchor =
+        typeof bestSurfaceJumpAnchor === "function"
+          ? bestSurfaceJumpAnchor(
+              nextSurfaceId,
+              cat.pos,
+              desiredTopPoint,
+              supportSurfaceId
+            )
+          : null;
+      const jumpTargets =
+        jumpAnchor && typeof computeSurfaceJumpTargets === "function"
+          ? computeSurfaceJumpTargets(
+              nextSurfaceId,
+              jumpAnchor,
+              desiredTopPoint,
+              supportSurfaceId
+            )
+          : null;
+      const ok = !!jumpAnchor && !!jumpTargets?.top;
+      cat.nav.jumpUpPlanAt = clockTime + (force ? 0.08 : 0.14);
+      if (!ok) return false;
+
+      route.jumpAnchor.copy(jumpAnchor);
+      route.landing.copy(jumpTargets.top);
+      route.approachSurfaceId = supportSurfaceId;
+      syncLegacyScalarsFromRoute(route);
+      return true;
+    };
+
     const initialRecovery = recoverRouteIfNeeded();
     if (initialRecovery != null) {
       if (!initialRecovery) return false;
@@ -2190,10 +2230,24 @@ export function updateCatStateMachineRuntime(ctx, dt) {
 
     switch (segment.kind) {
       case "jump-up-approach": {
-        const jumpAnchor = route[segment.pointKey] || route.jumpAnchor;
         const supportSurfaceId = String(
           segment.supportSurfaceId || getCurrentCatSurfaceId() || route.surfaceId || FLOOR_SURFACE_ID
         );
+        const shouldRefreshJumpLink = clockTime >= (cat.nav.jumpUpPlanAt || 0);
+        if (shouldRefreshJumpLink && !refreshJumpUpLink(false)) {
+          const recovered = tryRecoverTowardFinalTarget({
+            kind: "no-jumpup-link",
+            count: 1,
+            target: route.finalTarget,
+            useDynamic: true,
+          });
+          if (!recovered) return false;
+          cat.status = "Re-routing";
+          animateCatPose(stepDt, false);
+          return true;
+        }
+
+        const jumpAnchor = route[segment.pointKey] || route.jumpAnchor;
         const usingElevatedApproach = catHasTrackedNonFloorSurface() && supportSurfaceId !== FLOOR_SURFACE_ID;
         const reachedJumpAnchor = usingElevatedApproach
           ? moveCatToward(jumpAnchor, stepDt, 0.9, Math.max(0.02, cat.group.position.y), {
@@ -2201,7 +2255,9 @@ export function updateCatStateMachineRuntime(ctx, dt) {
               ignoreDynamic: false,
               supportSurfaceId,
             })
-          : moveCatTowardGroundWithBypass(jumpAnchor, stepDt, GROUND_MOVE_SPEED);
+          : moveCatTowardGroundWithBypass(jumpAnchor, stepDt, GROUND_MOVE_SPEED, {
+              allowEndpointPushableGoal: false,
+            });
         const nearJumpAnchor =
           (jumpAnchor.x - cat.pos.x) ** 2 + (jumpAnchor.z - cat.pos.z) ** 2 < 0.14 * 0.14;
         const readyToJump = reachedJumpAnchor || nearJumpAnchor;
@@ -2212,6 +2268,18 @@ export function updateCatStateMachineRuntime(ctx, dt) {
           if (handled != null) return handled;
         }
         if (readyToJump) {
+          if (!refreshJumpUpLink(true)) {
+            const recovered = tryRecoverTowardFinalTarget({
+              kind: "jumpup-link-blocked",
+              count: 1,
+              target: route.finalTarget,
+              useDynamic: true,
+            });
+            if (!recovered) return false;
+            cat.status = "Re-routing";
+            animateCatPose(stepDt, false);
+            return true;
+          }
           route.directJump = false;
           route.approachSurfaceId = String(supportSurfaceId || route.approachSurfaceId || FLOOR_SURFACE_ID);
           advanceRouteSegment(route, "jump-up-started");
@@ -3014,7 +3082,13 @@ export function updateCatStateMachineRuntime(ctx, dt) {
         const shouldProbeBypass =
           cat.nav.jumpNoClip || cat.nav.stuckT > 0.1 || (cat.nav.segmentBlockedFrames || 0) > 1;
         if (shouldProbeBypass) {
-          const hasDynamicPath = canReachGroundTargetMemo(cat.pos, cat.jumpAnchor, true, null, "desk-anchor");
+          const hasDynamicPath = canReachGroundTargetMemo(
+            cat.pos,
+            cat.jumpAnchor,
+            true,
+            { allowFallback: true, allowEndpointPushableGoal: false },
+            "desk-anchor"
+          );
           if (!hasDynamicPath) {
             if (!replanDeskJumpOrFallback()) return;
           } else if (cat.nav.jumpNoClip) {
@@ -3023,7 +3097,9 @@ export function updateCatStateMachineRuntime(ctx, dt) {
         }
         cat.nav.jumpBypassCheckAt = clockTime + (shouldProbeBypass ? CAT_NAV.jumpBypassCheckInterval : 0.4);
       }
-      const reachedDesk = moveCatTowardGroundWithBypass(cat.jumpAnchor, stepDt, 0.92);
+      const reachedDesk = moveCatTowardGroundWithBypass(cat.jumpAnchor, stepDt, 0.92, {
+        allowEndpointPushableGoal: false,
+      });
       cat.status = "Approaching jump point";
       if (!reachedDesk) {
         const navReason = cat.nav?.debugStep?.reason;

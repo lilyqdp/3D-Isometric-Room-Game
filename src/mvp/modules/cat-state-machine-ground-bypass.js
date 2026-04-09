@@ -17,7 +17,7 @@ export function createCatStateMachineGroundBypassRuntime(ctx) {
   const BYPASS_EXTEND_WINDOW = 0.18;
   const BYPASS_CACHE_TTL_DYNAMIC = 0.12;
   const BYPASS_CACHE_TTL_STATIC = 0.22;
-  const REACHABILITY_OPTIONS = Object.freeze({ allowFallback: true });
+  const REACHABILITY_OPTIONS = Object.freeze({ allowFallback: true, allowEndpointPushableGoal: true });
 
   function clearGroundBypassMode() {
     cat.nav.dynamicBypassActive = false;
@@ -44,6 +44,8 @@ export function createCatStateMachineGroundBypassRuntime(ctx) {
       cat.nav.dynamicBypassReachability = {
         dynamic: null,
         static: null,
+        dynamicStrict: null,
+        staticStrict: null,
       };
     }
     return cat.nav.dynamicBypassReachability;
@@ -74,22 +76,29 @@ export function createCatStateMachineGroundBypassRuntime(ctx) {
     return !!ok;
   }
 
-  function canReachGroundTargetCached(start, target, includeDynamic, clockTime) {
-    const kind = includeDynamic ? "dynamic" : "static";
+  function canReachGroundTargetCached(start, target, includeDynamic, clockTime, reachabilityOptions = REACHABILITY_OPTIONS) {
+    const strictEndpoint = reachabilityOptions?.allowEndpointPushableGoal === false;
+    const kind = includeDynamic
+      ? (strictEndpoint ? "dynamicStrict" : "dynamic")
+      : (strictEndpoint ? "staticStrict" : "static");
     const cached = readCachedGroundReachability(kind, start, target, clockTime);
     if (cached != null) return cached;
     const ok = canReachGroundTarget(
       start,
       target,
       includeDynamic ? buildCatObstacles(true, true) : buildCatObstacles(false),
-      REACHABILITY_OPTIONS
+      reachabilityOptions
     );
     return writeCachedGroundReachability(kind, start, target, clockTime, ok);
   }
 
-  function moveCatTowardGroundWithBypass(target, stepDt, speed) {
+  function moveCatTowardGroundWithBypass(target, stepDt, speed, opts = null) {
     if (!target) return false;
     const clockTime = getClockTime();
+    const allowEndpointPushableGoal = opts?.allowEndpointPushableGoal !== false;
+    const reachabilityOptions = allowEndpointPushableGoal
+      ? REACHABILITY_OPTIONS
+      : { ...REACHABILITY_OPTIONS, allowEndpointPushableGoal: false };
 
     if (
       cat.jump ||
@@ -98,7 +107,7 @@ export function createCatStateMachineGroundBypassRuntime(ctx) {
       cat.state === "landStop"
     ) {
       clearGroundBypassMode();
-      return moveCatToward(target, stepDt, speed, 0);
+      return moveCatToward(target, stepDt, speed, 0, { allowEndpointPushableGoal });
     }
 
     if (!Number.isFinite(cat.nav.dynamicBypassCheckAt)) cat.nav.dynamicBypassCheckAt = 0;
@@ -114,9 +123,9 @@ export function createCatStateMachineGroundBypassRuntime(ctx) {
     }
 
     if (clockTime >= cat.nav.dynamicBypassCheckAt) {
-      const dynamicPathExists = canReachGroundTargetCached(cat.pos, target, true, clockTime);
+      const dynamicPathExists = canReachGroundTargetCached(cat.pos, target, true, clockTime, reachabilityOptions);
       if (!dynamicPathExists) {
-        const staticPathExists = canReachGroundTargetCached(cat.pos, target, false, clockTime);
+        const staticPathExists = canReachGroundTargetCached(cat.pos, target, false, clockTime, reachabilityOptions);
         if (staticPathExists) {
           const stuckPressure = (cat.nav.stuckT || 0) >= BYPASS_STUCK_MIN || (cat.nav.noSteerFrames || 0) >= 3;
           if (stuckPressure) {
@@ -146,7 +155,7 @@ export function createCatStateMachineGroundBypassRuntime(ctx) {
     }
 
     if (cat.nav.dynamicBypassActive && clockTime >= (cat.nav.dynamicBypassUntil || 0)) {
-      const dynamicPathExists = canReachGroundTargetCached(cat.pos, target, true, clockTime);
+      const dynamicPathExists = canReachGroundTargetCached(cat.pos, target, true, clockTime, reachabilityOptions);
       if (dynamicPathExists && cat.nav.stuckT < BYPASS_STUCK_MIN && (cat.nav.noSteerFrames || 0) < 2) {
         clearGroundBypassMode();
       } else {
@@ -156,6 +165,7 @@ export function createCatStateMachineGroundBypassRuntime(ctx) {
 
     const reached = moveCatToward(target, stepDt, speed, 0, {
       ignoreDynamic: !!cat.nav.dynamicBypassActive,
+      allowEndpointPushableGoal,
     });
 
     if (cat.nav.dynamicBypassActive && clockTime >= (cat.nav.dynamicBypassNudgeAt || 0)) {

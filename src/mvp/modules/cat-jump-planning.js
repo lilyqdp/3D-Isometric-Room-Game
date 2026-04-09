@@ -1310,10 +1310,7 @@ export function createCatJumpPlanningRuntime(ctx) {
     }
 
     const dynamicObstacles = buildCatObstacles(true, true);
-    const path = (
-      bfsSurfacePath(sourceId, targetId, dynamicObstacles, avoidSurfaceIds, false) ||
-      bfsSurfacePath(sourceId, targetId, dynamicObstacles, avoidSurfaceIds, true)
-    );
+    const path = bfsSurfacePath(sourceId, targetId, dynamicObstacles, avoidSurfaceIds, false);
     traceFunction(
       "findSurfacePath",
       `from=${sourceId} to=${targetId} ok=${path ? 1 : 0} len=${Array.isArray(path) ? path.length : 0}`
@@ -1417,14 +1414,9 @@ export function createCatJumpPlanningRuntime(ctx) {
     const dynamicObstacles = buildCatObstacles(true, true);
     const anchorClearance = CAT_NAV.clearance * 0.9;
     const avoidNextSurfaceIds = normalizeAvoidSurfaceIds(avoidSurfaceIds);
-    let allowPushableBlockedLinks = false;
-    let dynamicSurfaceJumpCounts = minDynamicSurfaceJumpsToTarget(surfaceId, dynamicObstacles, false);
-    let sourceDynamicMinJumps = dynamicSurfaceJumpCounts.get(resolvedFromSurfaceId);
-    if (!Number.isFinite(sourceDynamicMinJumps)) {
-      dynamicSurfaceJumpCounts = minDynamicSurfaceJumpsToTarget(surfaceId, dynamicObstacles, true);
-      sourceDynamicMinJumps = dynamicSurfaceJumpCounts.get(resolvedFromSurfaceId);
-      allowPushableBlockedLinks = Number.isFinite(sourceDynamicMinJumps);
-    }
+    const allowPushableBlockedLinks = false;
+    const dynamicSurfaceJumpCounts = minDynamicSurfaceJumpsToTarget(surfaceId, dynamicObstacles, false);
+    const sourceDynamicMinJumps = dynamicSurfaceJumpCounts.get(resolvedFromSurfaceId);
 
     const candidates = [];
     const outgoingUpLinks = built.linksByFromSurface.get(resolvedFromSurfaceId) || [];
@@ -1780,7 +1772,6 @@ export function createCatJumpPlanningRuntime(ctx) {
       }
       return localBest;
     };
-    let allowPushableBlockedLinks = false;
     const surfaceY = toSurface.y;
     const topClearance = CAT_COLLISION.catBodyRadius * 1.08;
     const desired = desiredGroundPoint ? cloneXZ(desiredGroundPoint) : null;
@@ -1790,10 +1781,6 @@ export function createCatJumpPlanningRuntime(ctx) {
     let best = computeBestLink(strictPreferredLinks, false);
     if (!best && strictPreferredLinks !== candidateLinks) {
       best = computeBestLink(candidateLinks, false);
-    }
-    if (!best) {
-      allowPushableBlockedLinks = true;
-      best = computeBestLink(candidateLinks, true);
     }
     if (!best) {
       traceFunction(

@@ -28,6 +28,7 @@ export function createCatnipRuntime(ctx) {
     getSurfaceDefs,
     getSurfaceById,
     getClockTime,
+    shouldRecordPathProfiler = () => false,
   } = ctx;
   const tempFloorHit = new THREE.Vector3();
   const tempFrom = new THREE.Vector3();
@@ -47,7 +48,12 @@ export function createCatnipRuntime(ctx) {
   const PATH_PROFILER_SAMPLE_LIMIT = 180;
   const PATH_PROFILER_EVENT_LIMIT = 24;
 
+  function isPathProfilerEnabled() {
+    return !!shouldRecordPathProfiler();
+  }
+
   function ensurePathProfiler() {
+    if (!isPathProfilerEnabled()) return null;
     if (!cat.nav || typeof cat.nav !== "object") cat.nav = {};
     if (!cat.nav.pathProfiler || typeof cat.nav.pathProfiler !== "object") {
       cat.nav.pathProfiler = {
@@ -67,6 +73,7 @@ export function createCatnipRuntime(ctx) {
 
   function ensurePathProfilerMetric(name) {
     const profiler = ensurePathProfiler();
+    if (!profiler) return null;
     if (!profiler.metrics[name] || typeof profiler.metrics[name] !== "object") {
       profiler.metrics[name] = {
         calls: 0,
@@ -93,6 +100,7 @@ export function createCatnipRuntime(ctx) {
 
   function recordPathProfilerEvent(kind, ms, meta = null) {
     const profiler = ensurePathProfiler();
+    if (!profiler) return null;
     const event = {
       kind: String(kind || "path"),
       ms: Number.isFinite(ms) ? ms : NaN,
@@ -110,6 +118,7 @@ export function createCatnipRuntime(ctx) {
   function finishPathProfilerMetric(name, startedAt, meta = null, slowMs = 6) {
     const elapsed = Math.max(0, performance.now() - startedAt);
     const metric = ensurePathProfilerMetric(name);
+    if (!metric) return elapsed;
     metric.calls += 1;
     metric.totalMs += elapsed;
     metric.lastMs = elapsed;
