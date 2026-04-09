@@ -343,34 +343,11 @@ export function createCatSteeringRuntime(ctx) {
     return best || target;
   }
 
-  function pointBlockedOnlyByPushablePickup(x, z, obstacles, clearance = 0, queryY = 0) {
+  function pointBlockedOnlyByPushablePickup(x, z, obstacles, clearance = 0, queryY = 0, runtimeOptions = null) {
     if (!Array.isArray(obstacles) || !obstacles.length) return false;
     let foundPushable = false;
     for (const obs of obstacles) {
-      if (!obs) continue;
-      if (Number.isFinite(obs?.y) && Number.isFinite(obs?.h)) {
-        const halfH = Math.max(0.001, obs.h * 0.5);
-        const minY = obs.y - halfH - 0.08;
-        const maxY = obs.y + halfH + 0.08;
-        if (queryY < minY || queryY > maxY) continue;
-      }
-      const dx = x - obs.x;
-      const dz = z - obs.z;
-      const obstacleClearance = Math.max(0, clearance || 0) + Math.max(0, Number(obs.navPad) || 0);
-      let overlaps = false;
-      if (obs.kind === "circle") {
-        const rr = (obs.r || 0) + obstacleClearance;
-        overlaps = dx * dx + dz * dz <= rr * rr;
-      } else if (obs.kind === "obb") {
-        const c = Math.cos(obs.yaw || 0);
-        const s = Math.sin(obs.yaw || 0);
-        const lx = c * dx + s * dz;
-        const lz = -s * dx + c * dz;
-        overlaps = Math.abs(lx) <= (obs.hx + obstacleClearance) && Math.abs(lz) <= (obs.hz + obstacleClearance);
-      } else {
-        overlaps = Math.abs(dx) <= (obs.hx + obstacleClearance) && Math.abs(dz) <= (obs.hz + obstacleClearance);
-      }
-      if (!overlaps) continue;
+      if (!obstacleBlocksPoint(obs, x, z, clearance, queryY, runtimeOptions)) continue;
       if (obs?.pushable && (obs.pickupKey || String(obs.tag || "").startsWith("pickup-"))) {
         foundPushable = true;
         continue;
@@ -378,6 +355,24 @@ export function createCatSteeringRuntime(ctx) {
       return false;
     }
     return foundPushable;
+  }
+
+  function pointBlockedExceptEndpointPushableGoal(
+    x,
+    z,
+    target,
+    obstacles,
+    clearance = 0,
+    queryY = 0,
+    runtimeOptions = null
+  ) {
+    if (!obstacleBlocksAny(obstacles, x, z, clearance, queryY, runtimeOptions)) return false;
+    if (!runtimeOptions?.allowEndpointPushableGoal || !target) return true;
+    const endpointRadius = Math.max(0.16, Math.max(0.01, clearance) * 1.35);
+    const dx = x - target.x;
+    const dz = z - target.z;
+    if (dx * dx + dz * dz > endpointRadius * endpointRadius) return true;
+    return !pointBlockedOnlyByPushablePickup(x, z, obstacles, clearance, queryY, runtimeOptions);
   }
 
   function chooseGroundLocomotion(rawYawDelta, dt, preferRun = false) {
@@ -891,16 +886,16 @@ export function createCatSteeringRuntime(ctx) {
       ) {
         return;
       }
-      if (obstacleBlocksAny(staticObstacles, tx, tz, staticClearance, queryY, runtimeOptions)) return;
-      if (!ignoreDynamic && obstacleBlocksAny(dynamicObstacles, tx, tz, dynamicClearance, queryY, runtimeOptions)) return;
+      if (pointBlockedExceptEndpointPushableGoal(tx, tz, target, staticObstacles, staticClearance, queryY, runtimeOptions)) return;
+      if (!ignoreDynamic && pointBlockedExceptEndpointPushableGoal(tx, tz, target, dynamicObstacles, dynamicClearance, queryY, runtimeOptions)) return;
 
       const progress = (toGoalX * sx + toGoalZ * sz) / goalLen;
       if (!allowBacktrack && progress < -0.08) return;
 
       const lx = cat.pos.x + sx * lookAhead;
       const lz = cat.pos.z + sz * lookAhead;
-      const dynamicAhead = !ignoreDynamic && obstacleBlocksAny(dynamicObstacles, lx, lz, dynamicClearance, queryY, runtimeOptions);
-      const staticAhead = obstacleBlocksAny(staticObstacles, lx, lz, staticClearance, queryY, runtimeOptions);
+      const dynamicAhead = !ignoreDynamic && pointBlockedExceptEndpointPushableGoal(lx, lz, target, dynamicObstacles, dynamicClearance, queryY, runtimeOptions);
+      const staticAhead = pointBlockedExceptEndpointPushableGoal(lx, lz, target, staticObstacles, staticClearance, queryY, runtimeOptions);
       const softPointPenalty = !ignoreDynamic ? sampleSoftishObstaclePenalty(tx, tz, dynamicObstacles, dynamicClearance, runtimeOptions) : 0;
       const softAheadPenalty = !ignoreDynamic ? sampleSoftishObstaclePenalty(lx, lz, dynamicObstacles, dynamicClearance, runtimeOptions) : 0;
       if (staticAhead) {
@@ -908,7 +903,7 @@ export function createCatSteeringRuntime(ctx) {
         const nearLookAhead = Math.max(step * 1.15, 0.16);
         const nx = cat.pos.x + sx * nearLookAhead;
         const nz = cat.pos.z + sz * nearLookAhead;
-        if (obstacleBlocksAny(staticObstacles, nx, nz, staticClearance, queryY, runtimeOptions)) return;
+        if (pointBlockedExceptEndpointPushableGoal(nx, nz, target, staticObstacles, staticClearance, queryY, runtimeOptions)) return;
       }
 
       const remainingD2 = (target.x - tx) * (target.x - tx) + (target.z - tz) * (target.z - tz);
@@ -1096,8 +1091,8 @@ export function createCatSteeringRuntime(ctx) {
         ) {
           continue;
         }
-        if (obstacleBlocksAny(staticObstacles, x, z, clearance, queryY, runtimeOptions)) continue;
-        if (obstacleBlocksAny(dynamicObstacles, x, z, clearance, queryY, runtimeOptions)) continue;
+        if (pointBlockedExceptEndpointPushableGoal(x, z, target, staticObstacles, clearance, queryY, runtimeOptions)) continue;
+        if (pointBlockedExceptEndpointPushableGoal(x, z, target, dynamicObstacles, clearance, queryY, runtimeOptions)) continue;
         const dGoal = Math.hypot(target.x - x, target.z - z);
         const dTurn = Math.abs(angleDelta(yaw, baseYaw));
         const score = r * 0.9 + dGoal * 0.35 + dTurn * 0.04;
@@ -1123,9 +1118,7 @@ export function createCatSteeringRuntime(ctx) {
       const t = i / samples;
       const x = a.x + dx * t;
       const z = a.z + dz * t;
-      for (const obs of obstacles) {
-        if (obstacleBlocksPoint(obs, x, z, clearance, queryY, runtimeOptions)) return false;
-      }
+      if (pointBlockedExceptEndpointPushableGoal(x, z, b, obstacles, clearance, queryY, runtimeOptions)) return false;
     }
     return true;
   }
@@ -1395,6 +1388,9 @@ export function createCatSteeringRuntime(ctx) {
       yLevel > 0.02 && opts.supportSurfaceId && opts.supportSurfaceId !== "floor"
         ? String(opts.supportSurfaceId)
         : "";
+    const groundRuntimeOptions = {
+      allowEndpointPushableGoal,
+    };
     let chase = target;
     const speedRef = getSpeedRef(speed);
     const preferRun =
@@ -1462,8 +1458,23 @@ export function createCatSteeringRuntime(ctx) {
         : target;
       if (direct) {
         const staticObstacles = groundStaticObstacles;
-        const targetBlocked = isCatPointBlocked(targetForPath.x, targetForPath.z, staticObstacles, staticClearance, 0, "runtime");
-        const lineBlocked = !hasClearTravelLine(cat.pos, targetForPath, staticObstacles, staticClearance, 0, "runtime");
+        const targetBlocked = pointBlockedExceptEndpointPushableGoal(
+          targetForPath.x,
+          targetForPath.z,
+          targetForPath,
+          staticObstacles,
+          staticClearance,
+          0,
+          groundRuntimeOptions
+        );
+        const lineBlocked = !hasRuntimeClearTravelLine(
+          cat.pos,
+          targetForPath,
+          staticObstacles,
+          staticClearance,
+          0,
+          groundRuntimeOptions
+        );
         if (targetBlocked || lineBlocked) {
           if (targetBlocked) {
             directRejectTargetObstacle =
@@ -2018,13 +2029,11 @@ export function createCatSteeringRuntime(ctx) {
       const collisionObstacles = getElevatedCollisionObstacles();
       const elevatedRuntimeOptions = {
         avoidSoftRuntime: true,
+        allowEndpointPushableGoal,
         supportSurfaceId: supportSurfaceId || "",
         queryY,
       };
-      const elevatedMovementRuntimeOptions = {
-        ...elevatedRuntimeOptions,
-        allowPushablePass: true,
-      };
+      const elevatedMovementRuntimeOptions = elevatedRuntimeOptions;
       const collisionClearance = ignoreDynamic ? staticClearance : dynamicClearance;
       const targetForPath = findNearestSupportedElevatedTarget(
         target,
@@ -2042,7 +2051,15 @@ export function createCatSteeringRuntime(ctx) {
       }
       if (direct) {
         if (
-          obstacleBlocksAny(collisionObstacles, targetForPath.x, targetForPath.z, collisionClearance, queryY, elevatedRuntimeOptions) ||
+          pointBlockedExceptEndpointPushableGoal(
+            targetForPath.x,
+            targetForPath.z,
+            targetForPath,
+            collisionObstacles,
+            collisionClearance,
+            queryY,
+            elevatedRuntimeOptions
+          ) ||
           !hasRuntimeClearTravelLine(cat.pos, targetForPath, collisionObstacles, collisionClearance, queryY, elevatedRuntimeOptions)
         ) {
           direct = false;
@@ -2066,25 +2083,6 @@ export function createCatSteeringRuntime(ctx) {
 
         const useDynamicPlan = !ignoreDynamic;
         withSurfacePathOptions(() => tryEnsurePath(repathState, tempTo, force, useDynamicPlan, queryY));
-        if (
-          cat.nav.path.length <= 1 &&
-          !ignoreDynamic &&
-          supportSurfaceId &&
-          hasPushableObstacleOnRuntimeSurface(collisionObstacles, elevatedRuntimeOptions)
-        ) {
-          const pushFallbackWorked = withTemporaryPathOptions(
-            { supportSurfaceId, ignorePushableSurfaceId: supportSurfaceId, mode: "push-through-surface" },
-            () => tryEnsurePath(repathState, tempTo, true, true, queryY)
-          );
-          if (pushFallbackWorked && cat.nav.path.length > 1) {
-            cat.nav.debugStep.pushThroughSurfaceId = supportSurfaceId;
-            recordNavEvent("surface-pushthrough-path", {
-              surfaceId: supportSurfaceId,
-              targetX: tempTo.x,
-              targetZ: tempTo.z,
-            });
-          }
-        }
         if (cat.nav.path.length > 1) {
           let segmentObstacles = getElevatedCollisionObstacles();
           const segmentClearance = ignoreDynamic ? staticClearance : dynamicClearance;
@@ -2292,8 +2290,24 @@ export function createCatSteeringRuntime(ctx) {
       const staticClearance = getCatPathClearance();
       const staticObstacles = getGroundStaticObstacles();
       const dynamicObstacles = getGroundCollisionObstacles();
-      const posBlockedStatic = isCatPointBlocked(cat.pos.x, cat.pos.z, staticObstacles, staticClearance * 0.98, 0, "collision");
-      const posBlockedDynamic = !ignoreDynamic && isCatPointBlocked(cat.pos.x, cat.pos.z, dynamicObstacles, staticClearance * 0.98, 0, "collision");
+      const posBlockedStatic = pointBlockedExceptEndpointPushableGoal(
+        cat.pos.x,
+        cat.pos.z,
+        tempTo,
+        staticObstacles,
+        staticClearance * 0.98,
+        0,
+        groundRuntimeOptions
+      );
+      const posBlockedDynamic = !ignoreDynamic && pointBlockedExceptEndpointPushableGoal(
+        cat.pos.x,
+        cat.pos.z,
+        tempTo,
+        dynamicObstacles,
+        staticClearance * 0.98,
+        0,
+        groundRuntimeOptions
+      );
       cat.nav.debugStep.posBlockedStatic = posBlockedStatic;
       cat.nav.debugStep.posBlockedDynamic = posBlockedDynamic;
       cat.nav.debugStep.posStaticObstacle = "";
@@ -2316,7 +2330,7 @@ export function createCatSteeringRuntime(ctx) {
         cat.nav.debugStep.posStaticObstacle = posStaticBlock?.obstacleLabel || "";
         cat.nav.debugStep.posDynamicObstacle = posDynamicBlock?.obstacleLabel || "";
         if (isRunClip(locomotionClip)) triggerRunCooldown(now, 1.1);
-        const rescued = findNearestNavigablePoint(cat.pos, chase, staticObstacles, dynamicObstacles, staticClearance);
+        const rescued = findNearestNavigablePoint(cat.pos, chase, staticObstacles, dynamicObstacles, staticClearance, 0, "", groundRuntimeOptions);
         if (rescued) {
           cat.pos.copy(rescued);
           cat.group.position.set(cat.pos.x, yLevel, cat.pos.z);
@@ -2336,12 +2350,12 @@ export function createCatSteeringRuntime(ctx) {
       cat.nav.debugStep.overlapStatic = sampleObstacleOverlapScore(cat.pos.x, cat.pos.z, staticObstacles, staticClearance);
       const steerTarget = chase;
       let steerStepBase = step;
-      let steer = chooseGroundSteer(steerTarget, steerStepBase, staticObstacles, dynamicObstacles, ignoreDynamic);
+      let steer = chooseGroundSteer(steerTarget, steerStepBase, staticObstacles, dynamicObstacles, ignoreDynamic, 0, "", groundRuntimeOptions);
       if (!steer && step > 0.015) {
         const stepScales = [0.75, 0.55, 0.38, 0.25];
         for (let i = 0; i < stepScales.length && !steer; i++) {
           const testStep = Math.max(0.015, step * stepScales[i]);
-          steer = chooseGroundSteer(steerTarget, testStep, staticObstacles, dynamicObstacles, ignoreDynamic);
+          steer = chooseGroundSteer(steerTarget, testStep, staticObstacles, dynamicObstacles, ignoreDynamic, 0, "", groundRuntimeOptions);
           if (steer) steerStepBase = testStep;
         }
       }
@@ -2384,13 +2398,21 @@ export function createCatSteeringRuntime(ctx) {
         cat.nav.debugStep.softTargetObstacle = softTarget?.obstacleLabel || "";
         cat.nav.debugStep.softPosScore = softPos?.score || 0;
         cat.nav.debugStep.softTargetScore = softTarget?.score || 0;
-        const escape = chooseGroundEscapeStep(steerTarget, step, staticObstacles, dynamicObstacles, staticClearance);
+        const escape = chooseGroundEscapeStep(steerTarget, step, staticObstacles, dynamicObstacles, staticClearance, 0, "", groundRuntimeOptions);
         if (escape) {
           cat.nav.debugStep.reason = "escapeStep";
           tempFrom.copy(cat.pos);
           cat.pos.x += escape.sx * escape.step;
           cat.pos.z += escape.sz * escape.step;
-          if (isCatPointBlocked(cat.pos.x, cat.pos.z, staticObstacles, staticClearance * 0.98, 0, "collision")) {
+          if (pointBlockedExceptEndpointPushableGoal(
+            cat.pos.x,
+            cat.pos.z,
+            tempTo,
+            staticObstacles,
+            staticClearance * 0.98,
+            0,
+            groundRuntimeOptions
+          )) {
             cat.pos.copy(tempFrom);
             bumpDebugCounter("rollback");
             recordNavEvent("escape-rollback");
@@ -2434,7 +2456,7 @@ export function createCatSteeringRuntime(ctx) {
           }
         }
         if (cat.nav.stuckT > 0.14 || cat.nav.noSteerFrames > 1) {
-          const rescued = findNearestNavigablePoint(cat.pos, steerTarget, staticObstacles, dynamicObstacles, staticClearance);
+          const rescued = findNearestNavigablePoint(cat.pos, steerTarget, staticObstacles, dynamicObstacles, staticClearance, 0, "", groundRuntimeOptions);
           if (rescued) {
             cat.pos.copy(rescued);
             cat.group.position.set(cat.pos.x, yLevel, cat.pos.z);
@@ -2467,7 +2489,15 @@ export function createCatSteeringRuntime(ctx) {
 
       const collisionObstacles = ignoreDynamic ? staticObstacles : dynamicObstacles;
       const collisionClearance = getCatPathClearance();
-      if (isCatPointBlocked(cat.pos.x, cat.pos.z, collisionObstacles, collisionClearance * 0.98, 0, "collision")) {
+      if (pointBlockedExceptEndpointPushableGoal(
+        cat.pos.x,
+        cat.pos.z,
+        tempTo,
+        collisionObstacles,
+        collisionClearance * 0.98,
+        0,
+        groundRuntimeOptions
+      )) {
         if (isRunClip(locomotionClip)) triggerRunCooldown(now, 1.15);
         cat.nav.debugStep.reason = "rollback-blocked";
         cat.pos.copy(tempFrom);
@@ -2586,10 +2616,7 @@ export function createCatSteeringRuntime(ctx) {
       supportSurfaceId: supportSurfaceId || "",
       queryY,
     };
-    const elevatedMovementRuntimeOptions = {
-      ...elevatedRuntimeOptions,
-      allowPushablePass: true,
-    };
+    const elevatedMovementRuntimeOptions = elevatedRuntimeOptions;
     const collisionObstacles = dynamicObstacles;
     const supportMargin = CAT_COLLISION.catBodyRadius + 0.005;
 
@@ -2634,7 +2661,15 @@ export function createCatSteeringRuntime(ctx) {
       cat.pos.z = supportedNow.z;
     }
 
-    const posBlocked = isCatPointBlocked(cat.pos.x, cat.pos.z, collisionObstacles, staticClearance * 0.98, queryY, "collision");
+    const posBlocked = pointBlockedExceptEndpointPushableGoal(
+      cat.pos.x,
+      cat.pos.z,
+      tempTo,
+      collisionObstacles,
+      staticClearance * 0.98,
+      queryY,
+      elevatedMovementRuntimeOptions
+    );
     if (posBlocked) {
       const rescued = findNearestNavigablePoint(
         cat.pos,
@@ -2778,7 +2813,15 @@ export function createCatSteeringRuntime(ctx) {
         tempFrom.copy(cat.pos);
         cat.pos.x += escape.sx * escape.step;
         cat.pos.z += escape.sz * escape.step;
-        if (isCatPointBlocked(cat.pos.x, cat.pos.z, collisionObstacles, staticClearance * 0.98, queryY, "collision")) {
+        if (pointBlockedExceptEndpointPushableGoal(
+          cat.pos.x,
+          cat.pos.z,
+          tempTo,
+          collisionObstacles,
+          staticClearance * 0.98,
+          queryY,
+          elevatedMovementRuntimeOptions
+        )) {
           cat.pos.copy(tempFrom);
           bumpDebugCounter("rollback");
           recordNavEvent("escape-rollback");
@@ -2857,7 +2900,15 @@ export function createCatSteeringRuntime(ctx) {
       cat.pos.z = supported.z;
     }
 
-    if (isCatPointBlocked(cat.pos.x, cat.pos.z, collisionObstacles, staticClearance * 0.98, queryY, "collision")) {
+    if (pointBlockedExceptEndpointPushableGoal(
+      cat.pos.x,
+      cat.pos.z,
+      tempTo,
+      collisionObstacles,
+      staticClearance * 0.98,
+      queryY,
+      elevatedMovementRuntimeOptions
+    )) {
       cat.nav.debugStep.reason = "rollback-blocked";
       cat.pos.copy(tempFrom);
       cat.group.position.set(cat.pos.x, yLevel, cat.pos.z);

@@ -2373,7 +2373,7 @@ export function createCatPathfindingRuntime(ctx) {
       const obstacles = filterObstaclesForPathOptions(builtObstacles, pathOptions);
       const modeKey = useDynamic ? "dynamic" : "static";
       const targetOnPlane = new THREE.Vector3(target.x, pathY, target.z);
-      const allowEndpointPushableGoal = pathY <= 0.02;
+      const allowEndpointPushableGoal = true;
       const pathObstacles = allowEndpointPushableGoal
         ? filterEndpointPushableGoalObstacles(targetOnPlane, obstacles, navClearance, pathY, "plan")
         : obstacles;

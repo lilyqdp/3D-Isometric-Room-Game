@@ -254,9 +254,9 @@ const CAT_NAV = {
   step: 0.26,
   margin: 0.4,
   clearance: 0.2,
-  // Hybrid planning: prefer Recast/Detour, but allow the sampled A* planner to
-  // recover valid around-obstacle routes when Recast projection/query misses.
-  useFallbackPlanner: true,
+  // Normal path solves should stay on the Recast/Detour stack. The sampled A*
+  // fallback is now reserved for explicit rescue probes.
+  useFallbackPlanner: false,
   useDetourCrowd: true,
   detourSpeedScale: 0.8,
   detourArriveSnapRadius: 0.1,

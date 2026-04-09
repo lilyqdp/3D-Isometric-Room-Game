@@ -1340,7 +1340,10 @@ export function createCatJumpPlanningRuntime(ctx) {
     if (hasClearTravelLine(from, to, dynamicObstacles, clearance, floorY)) {
       return from.distanceTo(to);
     }
-    const p = computeCatPath(from, to, dynamicObstacles, null, null, false);
+    // Surface-transition planning is an explicit rescue case: if Recast misses an
+    // around-obstacle route to an otherwise valid jump anchor, allow the sampled
+    // fallback so the route planner does not reject the whole transition.
+    const p = computeCatPath(from, to, dynamicObstacles, null, true, false);
     if (!isPathTraversable(p, dynamicObstacles, clearance, floorY)) return Infinity;
     return catPathDistance(p);
   }
@@ -1384,7 +1387,9 @@ export function createCatJumpPlanningRuntime(ctx) {
     if (hasClearTravelLine(fromOnSurface, toOnSurface, surfaceObstacles, clearance, sourceY)) {
       return fromOnSurface.distanceTo(toOnSurface);
     }
-    const p = computeCatPath(fromOnSurface, toOnSurface, surfaceObstacles, null, null, false);
+    // Apply the same rescue policy on elevated supports so jump-anchor staging uses
+    // the best available path estimate instead of collapsing to "no anchor".
+    const p = computeCatPath(fromOnSurface, toOnSurface, surfaceObstacles, null, true, false);
     if (!isPathTraversable(p, surfaceObstacles, clearance, sourceY)) return Infinity;
     return catPathDistance(p);
   }
