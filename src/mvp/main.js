@@ -254,9 +254,9 @@ const CAT_NAV = {
   step: 0.26,
   margin: 0.4,
   clearance: 0.2,
-  // Hybrid planning: prefer Recast/Detour, but allow the sampled A* planner to
-  // recover valid around-obstacle routes when Recast projection/query misses.
-  useFallbackPlanner: true,
+  // Normal path solves stay on the Recast/Detour stack. If Recast cannot produce
+  // a valid route, the planner now returns no path instead of falling back to A*.
+  useFallbackPlanner: false,
   useDetourCrowd: true,
   detourSpeedScale: 0.8,
   detourArriveSnapRadius: 0.1,
@@ -497,7 +497,7 @@ function recordFunctionTrace(name, details = "") {
     return;
   }
   trace.push(entry);
-  if (trace.length > 220) trace.splice(0, trace.length - 220);
+  if (trace.length > 520) trace.splice(0, trace.length - 520);
 }
 
 const navRuntime = createCatNavigationRuntime({

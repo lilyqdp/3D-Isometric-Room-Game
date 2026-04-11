@@ -61,28 +61,28 @@
       "id": "desk",
       "type": "desk",
       "pos": {
-        "x": 0.501,
+        "x": -2.394,
         "y": 0,
-        "z": -4.725
+        "z": -2.606
       },
-      "sizeX": 1.95,
-      "sizeZ": 1.55,
-      "topY": 0.95,
+      "sizeX": 3.1,
+      "sizeZ": 1.8,
+      "topY": 1.08,
       "rotQuarterTurns": 0,
       "approach": {
-        "x": 2.101,
+        "x": -0.794,
         "y": 0,
-        "z": -3.925
+        "z": -1.806
       },
       "perch": {
-        "x": 1.001,
+        "x": -1.894,
         "y": 0,
-        "z": -4.425
+        "z": -2.306
       },
       "cup": {
-        "x": 1.921,
+        "x": -0.974,
         "y": 0,
-        "z": -4.345
+        "z": -2.226
       },
       "editorLocked": false,
       "tint": "",
@@ -161,10 +161,10 @@
       },
       "name": "",
       "obstacle": {
-        "enabled": true,
-        "mode": "hard",
-        "navPad": 0.02,
-        "steerPad": 0.02,
+        "enabled": false,
+        "mode": "soft",
+        "navPad": 0.03,
+        "steerPad": 0.01,
         "collisionPad": 0,
         "jumpIgnoreSurfaceIds": []
       },
@@ -174,9 +174,9 @@
       "id": "chair",
       "type": "chair",
       "pos": {
-        "x": 0.579,
+        "x": 0.448,
         "y": 0,
-        "z": -3.61
+        "z": -1.652
       },
       "sizeX": 0.92,
       "sizeZ": 0.86,
@@ -188,7 +188,7 @@
       "legInsetZ": 0.28,
       "backHeight": 0.82,
       "backThickness": 0.08,
-      "rotQuarterTurns": 2,
+      "rotQuarterTurns": 0,
       "editorLocked": false,
       "tint": "",
       "specialFlags": {},
@@ -281,16 +281,123 @@
         "collisionPad": 0,
         "jumpIgnoreSurfaceIds": []
       },
-      "visible": true,
-      "rotYDeg": 180
+      "visible": true
+    },
+    {
+      "id": "shelf",
+      "type": "shelf",
+      "pos": {
+        "x": -3.423,
+        "y": 0,
+        "z": -4.9
+      },
+      "width": 2.35,
+      "depth": 0.92,
+      "postHalf": 0.045,
+      "surfaceY": 1.22,
+      "boardThickness": 0.09,
+      "rotQuarterTurns": 0,
+      "editorLocked": false,
+      "tint": "",
+      "specialFlags": {},
+      "surface": {
+        "enabled": true,
+        "flags": {
+          "randomPatrol": false,
+          "manualPatrol": true,
+          "allowCatSpawn": false,
+          "allowTrashSpawn": false,
+          "allowLaundrySpawn": false,
+          "allowCatnip": true
+        },
+        "special": {
+          "type": "shelf"
+        },
+        "supportOffsets": [
+          {
+            "dx": -1.1300000000000001,
+            "dz": -0.41500000000000004,
+            "hx": 0.065,
+            "hz": 0.065,
+            "topY": 1.13,
+            "mode": "soft",
+            "navPad": 0.02,
+            "steerPad": 0.01,
+            "collisionPad": 0
+          },
+          {
+            "dx": 1.1300000000000001,
+            "dz": -0.41500000000000004,
+            "hx": 0.065,
+            "hz": 0.065,
+            "topY": 1.13,
+            "mode": "soft",
+            "navPad": 0.02,
+            "steerPad": 0.01,
+            "collisionPad": 0
+          },
+          {
+            "dx": -1.1300000000000001,
+            "dz": 0.41500000000000004,
+            "hx": 0.065,
+            "hz": 0.065,
+            "topY": 1.13,
+            "mode": "soft",
+            "navPad": 0.02,
+            "steerPad": 0.01,
+            "collisionPad": 0
+          },
+          {
+            "dx": 1.1300000000000001,
+            "dz": 0.41500000000000004,
+            "hx": 0.065,
+            "hz": 0.065,
+            "topY": 1.13,
+            "mode": "soft",
+            "navPad": 0.02,
+            "steerPad": 0.01,
+            "collisionPad": 0
+          }
+        ],
+        "blockerOffsets": [
+          {
+            "kind": "box",
+            "dx": 0,
+            "dz": -0.44,
+            "hx": 1.195,
+            "hz": 0.04,
+            "y": 0.6649999999999999,
+            "h": 1.1400000000000001,
+            "navPad": 0.02
+          }
+        ],
+        "shape": "rect",
+        "width": null,
+        "depth": null,
+        "radius": null,
+        "offsetX": 0,
+        "offsetZ": 0,
+        "supports": [],
+        "blockers": []
+      },
+      "name": "",
+      "obstacle": {
+        "enabled": false,
+        "mode": "soft",
+        "navPad": 0.03,
+        "steerPad": 0.01,
+        "collisionPad": 0,
+        "jumpIgnoreSurfaceIds": []
+      },
+      "visible": true
     },
     {
       "id": "hoverShelf",
       "type": "platform",
       "pos": {
-        "x": -2.052,
+        "x": 0.103,
         "y": 0,
-        "z": -4.85
+        "z": -3.053
       },
       "width": 1.25,
       "depth": 0.9,
@@ -339,9 +446,9 @@
       "id": "lowerPlatform",
       "type": "platform",
       "pos": {
-        "x": -0.503,
+        "x": 0.101,
         "y": 0,
-        "z": -4.95
+        "z": -3.951
       },
       "width": 0.95,
       "depth": 0.72,
@@ -390,9 +497,9 @@
       "id": "upperPlatform",
       "type": "platform",
       "pos": {
-        "x": 0.948,
+        "x": 0.1,
         "y": 0,
-        "z": -4.888
+        "z": -4.7
       },
       "width": 0.95,
       "depth": 0.72,
@@ -441,9 +548,9 @@
       "id": "windowSill",
       "type": "windowSill",
       "pos": {
-        "x": 3.11,
+        "x": -0.694,
         "y": 0,
-        "z": -4.916
+        "z": -5.007
       },
       "width": 2.1,
       "depth": 0.6,
@@ -455,9 +562,9 @@
       "openingCenterY": 2,
       "openDuration": 20,
       "sitPoint": {
-        "x": 3.11,
+        "x": -0.694,
         "y": 0,
-        "z": -4.916
+        "z": -5.007
       },
       "outsideYaw": 3.141592653589793,
       "rotQuarterTurns": 0,
@@ -508,9 +615,9 @@
       "id": "hamper",
       "type": "hamper",
       "pos": {
-        "x": 2.717,
+        "x": -5.8,
         "y": 0,
-        "z": 0.862
+        "z": 2.4
       },
       "outerHalfX": 0.34,
       "outerHalfZ": 0.34,
@@ -553,9 +660,9 @@
       "name": "",
       "obstacle": {
         "enabled": true,
-        "mode": "hard",
-        "navPad": 0.02,
-        "steerPad": 0.02,
+        "mode": "soft",
+        "navPad": 0.03,
+        "steerPad": 0.01,
         "collisionPad": 0,
         "jumpIgnoreSurfaceIds": []
       },
@@ -565,9 +672,9 @@
       "id": "trashCan",
       "type": "trashCan",
       "pos": {
-        "x": -1.219,
+        "x": 2.6,
         "y": 0,
-        "z": -4.717
+        "z": 2.4
       },
       "outerRadius": 0.52,
       "radius": 0.5,
@@ -608,74 +715,21 @@
       "name": "",
       "obstacle": {
         "enabled": true,
-        "mode": "hard",
-        "navPad": 0.02,
-        "steerPad": 0.02,
+        "mode": "soft",
+        "navPad": 0.03,
+        "steerPad": 0.01,
         "collisionPad": 0,
         "jumpIgnoreSurfaceIds": []
       },
       "visible": true
     },
     {
-      "id": "fishtank",
-      "type": "fishtank",
-      "pos": {
-        "x": -1.591,
-        "y": 0,
-        "z": -3.054
-      },
-      "width": 1.3,
-      "depth": 0.85,
-      "height": 1.4,
-      "surfaceY": 0.65,
-      "editorLocked": false,
-      "tint": "",
-      "surface": {
-        "enabled": false,
-        "shape": "rect",
-        "width": null,
-        "depth": null,
-        "radius": null,
-        "offsetX": 0,
-        "offsetZ": 0,
-        "flags": {
-          "randomPatrol": false,
-          "manualPatrol": true,
-          "allowCatSpawn": false,
-          "allowTrashSpawn": false,
-          "allowLaundrySpawn": false,
-          "allowCatnip": true
-        },
-        "special": {
-          "type": "fishtank"
-        },
-        "supportOffsets": [],
-        "blockerOffsets": [],
-        "supports": [],
-        "blockers": []
-      },
-      "name": "",
-      "obstacle": {
-        "enabled": true,
-        "mode": "hard",
-        "navPad": 0.02,
-        "steerPad": 0.02,
-        "collisionPad": 0,
-        "jumpIgnoreSurfaceIds": []
-      },
-      "visible": true,
-      "rotQuarterTurns": 3,
-      "rotYDeg": 270,
-      "specialFlags": {}
-    },
-    
-    {
       "id": "bed",
       "type": "bed",
       "pos": {
-        "x": 3.054,
+        "x": 3.013,
         "y": 0,
-        "z": -3.4
+        "z": -3.508
       },
       "visible": true,
       "specialFlags": {},
@@ -713,9 +767,9 @@
       "surfaceY": 0.44,
       "obstacle": {
         "enabled": true,
-        "mode": "hard",
-        "navPad": 0.02,
-        "steerPad": 0.02,
+        "mode": "soft",
+        "navPad": 0.03,
+        "steerPad": 0.01,
         "collisionPad": 0,
         "jumpIgnoreSurfaceIds": [
           "bed"
@@ -726,9 +780,9 @@
       "id": "bedsideTable",
       "type": "bedsideTable",
       "pos": {
-        "x": 4.571,
+        "x": 3.001,
         "y": 0,
-        "z": -4.749
+        "z": -1.598
       },
       "visible": true,
       "specialFlags": {},
@@ -766,9 +820,9 @@
       "surfaceY": 0.63,
       "obstacle": {
         "enabled": true,
-        "mode": "hard",
-        "navPad": 0.02,
-        "steerPad": 0.02,
+        "mode": "soft",
+        "navPad": 0.03,
+        "steerPad": 0.01,
         "collisionPad": 0,
         "jumpIgnoreSurfaceIds": []
       }
@@ -777,9 +831,9 @@
       "id": "rug",
       "type": "rug",
       "pos": {
-        "x": 0.446,
+        "x": -1.498,
         "y": 0.035,
-        "z": -1.188
+        "z": 0.496
       },
       "visible": true,
       "specialFlags": {},
@@ -822,16 +876,15 @@
         "steerPad": 0.01,
         "collisionPad": 0,
         "jumpIgnoreSurfaceIds": []
-      },
-      "rotYDeg": 0
+      }
     },
     {
       "id": "wardrobe",
       "type": "wardrobe",
       "pos": {
-        "x": -1.609,
+        "x": -6,
         "y": 0,
-        "z": 0.342
+        "z": -2
       },
       "visible": true,
       "specialFlags": {},
@@ -869,9 +922,9 @@
       "surfaceY": 2.2,
       "obstacle": {
         "enabled": true,
-        "mode": "hard",
-        "navPad": 0.02,
-        "steerPad": 0.02,
+        "mode": "soft",
+        "navPad": 0.03,
+        "steerPad": 0.01,
         "collisionPad": 0,
         "jumpIgnoreSurfaceIds": []
       }
@@ -880,9 +933,9 @@
       "id": "bookcase",
       "type": "bookcase",
       "pos": {
-        "x": -1.356,
+        "x": -5.496,
         "y": 0,
-        "z": -1.231
+        "z": -5.197
       },
       "visible": true,
       "specialFlags": {},
@@ -913,33 +966,20 @@
       "width": 1.1,
       "height": 1.8,
       "depth": 0.38,
-      "rotQuarterTurns": 1,
+      "rotQuarterTurns": 0,
       "editorLocked": false,
       "tint": "",
       "name": "",
       "surfaceY": 1.8,
       "obstacle": {
         "enabled": true,
-        "mode": "hard",
-        "navPad": 0.02,
-        "steerPad": 0.02,
+        "mode": "soft",
+        "navPad": 0.03,
+        "steerPad": 0.01,
         "collisionPad": 0,
         "jumpIgnoreSurfaceIds": []
       },
-      "rotYDeg": 90
-    },
-    {
-      "id": "beanbag",
-      "type": "beanbag",
-      "pos": { "x": -5.0, "y": 0, "z": 1.5 },
-      "radius": 0.52,
-      "rotQuarterTurns": 0,
-      "rotYDeg": 0,
-      "visible": true,
-      "editorLocked": false,
-      "tint": "",
-      "specialFlags": {},
-      "surface": { "enabled": false }
+      "rotYDeg": 0
     }
   ]
 }

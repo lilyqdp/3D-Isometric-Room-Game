@@ -1,6 +1,16 @@
 import { init as initRecast, NavMeshQuery, Crowd } from "@recast-navigation/core";
 import { NavMeshHelper, threeToSoloNavMesh, threeToTileCache } from "@recast-navigation/three";
 import { createCatPathSignatureRuntime } from "./cat-path-signature.js";
+import {
+  getSurfaceAabb,
+  getSurfaceCenter,
+  getSurfaceHalfExtents,
+  getSurfaceKind,
+  getSurfacePlanarGap,
+  getSurfaceRadius,
+  getSurfaceYaw,
+  isPointInsideSurfaceXZ,
+} from "./surface-shapes.js";
 
 export function createCatPathfindingRuntime(ctx) {
   const {
@@ -21,6 +31,7 @@ export function createCatPathfindingRuntime(ctx) {
     cup,
     pickupRadius,
     getClockTime,
+    recordFunctionTrace = null,
     shouldRecordPathProfiler = () => false,
   } = ctx;
 
@@ -60,6 +71,12 @@ export function createCatPathfindingRuntime(ctx) {
   const pathSolveCache = new Map();
   const reachabilityCache = new Map();
   const nearestWalkableCache = new Map();
+
+  function traceFunction(name, details = "") {
+    if (typeof recordFunctionTrace === "function") {
+      recordFunctionTrace(name, details);
+    }
+  }
   const PATH_CACHE_QUANTUM = 0.1;
   const PATH_CACHE_TTL = 0.65;
   const PATH_CACHE_LIMIT = 72;
@@ -90,19 +107,8 @@ export function createCatPathfindingRuntime(ctx) {
     expectedLayersPerTile: 6,
     maxObstacles: 512,
   };
-  const floorMesh = new THREE.Mesh(
-    new THREE.BoxGeometry(
-      ROOM.maxX - ROOM.minX - CAT_NAV.margin * 2,
-      0.1,
-      ROOM.maxZ - ROOM.minZ - CAT_NAV.margin * 2
-    )
-  );
-  floorMesh.position.set(
-    (ROOM.minX + ROOM.maxX) * 0.5,
-    -0.05,
-    (ROOM.minZ + ROOM.maxZ) * 0.5
-  );
-  floorMesh.updateMatrixWorld(true);
+  const WALKABLE_SURFACE_THICKNESS = 0.08;
+  const WALKABLE_SURFACE_LIFT = 0.01;
   const activeNavMeshMode = {
     includePickups: false,
     includeClosePickups: true,
@@ -118,7 +124,7 @@ export function createCatPathfindingRuntime(ctx) {
   const TRIANGLE_NAV_CACHE_TTL = 0.85;
   const TRIANGLE_NAV_CACHE_LIMIT = 12;
   const CORRIDOR_GOAL_QUANTUM = 0.42;
-  const DYNAMIC_OBSTACLE_SAMPLE_INTERVAL = 0.1;
+  const DYNAMIC_OBSTACLE_SAMPLE_INTERVAL = 0.035;
   const dynamicObstacleSnapshot = {
     at: -1e9,
     includePickups: false,
@@ -229,10 +235,25 @@ export function createCatPathfindingRuntime(ctx) {
     return elapsed;
   }
 
+  function ensureLastSolverDebug() {
+    if (!cat.nav || typeof cat.nav !== "object") cat.nav = {};
+    if (!cat.nav.lastSolverDebug || typeof cat.nav.lastSolverDebug !== "object") {
+      cat.nav.lastSolverDebug = {};
+    }
+    return cat.nav.lastSolverDebug;
+  }
+
+  function updateLastSolverDebug(partial = null) {
+    const debug = ensureLastSolverDebug();
+    Object.assign(debug, partial && typeof partial === "object" ? partial : {});
+    debug.t = getClockTime();
+    return debug;
+  }
+
   const OBSTACLE_BEHAVIOR_DEFAULTS = {
-    hard: { navPad: 0.02, steerPad: 0.02, collisionPad: 0.0, blocksRuntime: true, blocksPath: true, pushable: false },
+    hard: { navPad: 0.02, steerPad: 0.005, collisionPad: 0.0, blocksRuntime: true, blocksPath: true, pushable: false },
     soft: { navPad: 0.05, steerPad: 0.01, collisionPad: 0.0, blocksRuntime: false, blocksPath: true, pushable: false },
-    pushable: { navPad: 0.05, steerPad: 0.0, collisionPad: 0.0, blocksRuntime: false, blocksPath: true, pushable: true },
+    pushable: { navPad: 0.05, steerPad: 0.0, collisionPad: 0.0, blocksRuntime: true, blocksPath: true, pushable: true },
   };
 
   function resolveObstacleMode(mode, fallback = "hard") {
@@ -270,7 +291,7 @@ export function createCatPathfindingRuntime(ctx) {
   function obstacleAffectsDetourCrowd(obs) {
     if (!obs) return false;
     if (obs.tag === "cup" && (cat.state === "toCup" || cat.state === "swipe")) return false;
-    return String(obs.mode || "hard") === "hard";
+    return obs.blocksPath !== false;
   }
 
   function buildSpecialRoomObstacles() {
@@ -343,31 +364,31 @@ export function createCatPathfindingRuntime(ctx) {
     return `${signature}|${allowFallbackPlanner ? 1 : 0}|${q(pathY)}|${q(goal?.x)}:${q(goal?.z)}`;
   }
 
-  function getCachedFamilyPath(familyKey, startOnPlane, goalOnPlane, obstacles, navClearance, queryY, now) {
+  function getCachedFamilyPath(familyKey, startOnPlane, goalOnPlane, obstacles, navClearance, queryY, now, pathOptions = null) {
     const cached = pathFamilyCache.get(familyKey);
     if (!cached || now - cached.at > PATH_FAMILY_TTL) return null;
     const cachedPath = Array.isArray(cached.path) ? cached.path.map((p) => p.clone()) : null;
     if (!cachedPath || cachedPath.length < 2) return null;
     const nextPoint = cachedPath[1] || cachedPath[0];
-    if (!hasClearTravelLine(startOnPlane, nextPoint, obstacles, navClearance, queryY)) return null;
+    if (!hasClearTravelLine(startOnPlane, nextPoint, obstacles, navClearance, queryY, "plan", pathOptions)) return null;
     const prevPoint = cachedPath[cachedPath.length - 2] || cachedPath[cachedPath.length - 1];
-    if (!hasClearTravelLine(prevPoint, goalOnPlane, obstacles, navClearance, queryY)) return null;
+    if (!hasClearTravelLine(prevPoint, goalOnPlane, obstacles, navClearance, queryY, "plan", pathOptions)) return null;
     cachedPath[0] = startOnPlane.clone();
     cachedPath[cachedPath.length - 1] = goalOnPlane.clone();
     return { mode: cached.mode || "family", path: cachedPath };
   }
 
-  function getReusableCorridorPath(reuseKey, startOnPlane, freeStart, goalOnPlane, freeGoal, obstacles, navClearance, queryY, now) {
+  function getReusableCorridorPath(reuseKey, startOnPlane, freeStart, goalOnPlane, freeGoal, obstacles, navClearance, queryY, now, pathOptions = null) {
     for (const cached of pathFamilyCache.values()) {
       if (!cached || cached.reuseKey !== reuseKey || now - cached.at > PATH_FAMILY_TTL) continue;
       const cachedPath = Array.isArray(cached.path) ? cached.path : null;
       if (!cachedPath || cachedPath.length < 3) continue;
       const tailAnchor = cachedPath[cachedPath.length - 2] || cachedPath[cachedPath.length - 1];
-      if (!hasClearTravelLine(tailAnchor, freeGoal, obstacles, navClearance, queryY)) continue;
+      if (!hasClearTravelLine(tailAnchor, freeGoal, obstacles, navClearance, queryY, "plan", pathOptions)) continue;
       for (let i = 1; i < cachedPath.length - 1; i++) {
         const joinPoint = cachedPath[i];
         if (!joinPoint) continue;
-        if (!hasClearTravelLine(freeStart, joinPoint, obstacles, navClearance, queryY)) continue;
+        if (!hasClearTravelLine(freeStart, joinPoint, obstacles, navClearance, queryY, "plan", pathOptions)) continue;
         const corePath = [freeStart.clone()];
         for (let j = i; j < cachedPath.length - 1; j++) {
           corePath.push(cachedPath[j].clone());
@@ -381,7 +402,8 @@ export function createCatPathfindingRuntime(ctx) {
           freeGoal,
           obstacles,
           navClearance,
-          queryY
+          queryY,
+          pathOptions
         );
         if (!Array.isArray(path) || path.length < 2) continue;
         return { mode: cached.mode || "corridor", path };
@@ -429,6 +451,19 @@ export function createCatPathfindingRuntime(ctx) {
     return pickup._navObstacleKey;
   }
 
+  function getPickupPlanarYaw(pickup) {
+    if (!pickup?.body?.quaternion) return 0;
+    tempQ.set(pickup.body.quaternion.x, pickup.body.quaternion.y, pickup.body.quaternion.z, pickup.body.quaternion.w);
+    tempForward.set(0, 0, 1).applyQuaternion(tempQ);
+    tempForward.y = 0;
+    if (tempForward.lengthSq() > 1e-6) {
+      tempForward.normalize();
+      return Math.atan2(tempForward.x, tempForward.z);
+    }
+    tempEuler.setFromQuaternion(tempQ, "YXZ");
+    return tempEuler.y;
+  }
+
   function getDynamicObstacleSampleSignature(includePickups = false, includeClosePickups = false) {
     const now = getClockTime();
     const sameMode =
@@ -460,8 +495,9 @@ export function createCatPathfindingRuntime(ctx) {
           const cdz = pz - cat.pos.z;
           if (cdx * cdx + cdz * cdz < 0.22 * 0.22) continue;
         }
+        const yaw = getPickupPlanarYaw(p);
         parts.push(
-          `pk:${ensurePickupObstacleKey(p, i)}:${p.type || "pickup"}:${qv(px, 0.04)}:${qv(py, 0.04)}:${qv(pz, 0.04)}`
+          `pk:${ensurePickupObstacleKey(p, i)}:${p.type || "pickup"}:${qv(px, 0.04)}:${qv(py, 0.04)}:${qv(pz, 0.04)}:${qv(yaw, Math.PI / 24)}`
         );
       }
     }
@@ -478,51 +514,174 @@ export function createCatPathfindingRuntime(ctx) {
     return parts.join("|");
   }
 
-  function getWalkableElevatedSurfaces() {
-    const defs = typeof getSurfaceDefs === "function" ? getSurfaceDefs({ includeFloor: false }) : [];
+  function getWalkableSurfaces(options = {}) {
+    const includeFloor = options.includeFloor !== false;
+    const defs = typeof getSurfaceDefs === "function" ? getSurfaceDefs({ includeFloor }) : [];
     if (!Array.isArray(defs)) return [];
     const out = [];
     const seen = new Set();
     for (const def of defs) {
       if (!def) continue;
-      const minX = Number(def.minX);
-      const maxX = Number(def.maxX);
-      const minZ = Number(def.minZ);
-      const maxZ = Number(def.maxZ);
+      const aabb = getSurfaceAabb(def);
+      const minX = Number(aabb.minX);
+      const maxX = Number(aabb.maxX);
+      const minZ = Number(aabb.minZ);
+      const maxZ = Number(aabb.maxZ);
       const y = Number(def.y);
       if (![minX, maxX, minZ, maxZ, y].every(Number.isFinite)) continue;
-      if (maxX - minX <= 0.05 || maxZ - minZ <= 0.05) continue;
       const id = String(def.id || def.name || `surface-${out.length}`);
       if (seen.has(id)) continue;
+      let resolvedMinX = minX;
+      let resolvedMaxX = maxX;
+      let resolvedMinZ = minZ;
+      let resolvedMaxZ = maxZ;
+      let center = getSurfaceCenter(def);
+      let halfExtents = getSurfaceHalfExtents(def);
+      let radius = getSurfaceRadius(def);
+      let shape = getSurfaceKind(def);
+      let yaw = getSurfaceYaw(def);
+      if (id === "floor") {
+        resolvedMinX += CAT_NAV.margin;
+        resolvedMaxX -= CAT_NAV.margin;
+        resolvedMinZ += CAT_NAV.margin;
+        resolvedMaxZ -= CAT_NAV.margin;
+        center = {
+          x: (resolvedMinX + resolvedMaxX) * 0.5,
+          z: (resolvedMinZ + resolvedMaxZ) * 0.5,
+        };
+        halfExtents = {
+          hx: Math.max(0.02, (resolvedMaxX - resolvedMinX) * 0.5),
+          hz: Math.max(0.02, (resolvedMaxZ - resolvedMinZ) * 0.5),
+        };
+        radius = Math.max(0.02, Math.min(halfExtents.hx, halfExtents.hz));
+        shape = "rect";
+        yaw = 0;
+      }
+      if (resolvedMaxX - resolvedMinX <= 0.05 || resolvedMaxZ - resolvedMinZ <= 0.05) continue;
       seen.add(id);
-      out.push({ id, minX, maxX, minZ, maxZ, y });
+      out.push({
+        id,
+        y,
+        shape,
+        center,
+        halfExtents,
+        radius,
+        yaw,
+        minX: resolvedMinX,
+        maxX: resolvedMaxX,
+        minZ: resolvedMinZ,
+        maxZ: resolvedMaxZ,
+      });
     }
     return out;
   }
 
+  function getWalkableElevatedSurfaces() {
+    return getWalkableSurfaces({ includeFloor: false });
+  }
 
-  function resolveObstacleSurfaceIdForPoint(x, y, z) {
-    const surfaces = getWalkableElevatedSurfaces();
+  function getWalkableSurfaceById(id) {
+    const resolvedId = String(id || "floor");
+    return getWalkableSurfaces().find((surface) => String(surface?.id || "") === resolvedId) || null;
+  }
+
+  function resolvePathSupportSurfaceId(pathOptions = null) {
+    const supportSurfaceId =
+      pathOptions && typeof pathOptions === "object"
+        ? String(pathOptions.supportSurfaceId || "")
+        : "";
+    return supportSurfaceId && supportSurfaceId !== "floor" ? supportSurfaceId : "";
+  }
+
+  function resolvePathClearanceOverride(pathOptions = null) {
+    if (!pathOptions || typeof pathOptions !== "object") return null;
+    const override = Number(pathOptions.clearanceOverride);
+    return Number.isFinite(override) ? Math.max(0.01, override) : null;
+  }
+
+
+  function getObstacleIdentity(obs) {
+    if (!obs) return "";
+    const pickupKey = String(obs.pickupKey || "").trim();
+    if (pickupKey) return pickupKey;
+    const explicitId = String(obs.obstacleId || obs.id || "").trim();
+    if (explicitId) return explicitId;
+    const surfaceId = String(obs.surfaceId || "").trim();
+    const tag = String(obs.tag || "").trim();
+    const x = Number.isFinite(obs.x) ? obs.x.toFixed(3) : "0.000";
+    const z = Number.isFinite(obs.z) ? obs.z.toFixed(3) : "0.000";
+    if (surfaceId && tag) return `${surfaceId}:${tag}:${x}:${z}`;
+    if (tag) return `${tag}:${x}:${z}`;
+    return `${String(obs.kind || "obs")}:${x}:${z}`;
+  }
+
+  function resolveIgnoredObstacleIds(pathOptions = null) {
+    if (!pathOptions || typeof pathOptions !== "object") return [];
+    return (Array.isArray(pathOptions.ignoreObstacleIds) ? pathOptions.ignoreObstacleIds : [])
+      .map((value) => String(value || "").trim())
+      .filter(Boolean)
+      .sort();
+  }
+
+  function getPathOptionsCacheKey(pathOptions = null) {
+    const supportSurfaceId = resolvePathSupportSurfaceId(pathOptions);
+    const clearanceOverride = resolvePathClearanceOverride(pathOptions);
+    const ignoredObstacleIds = resolveIgnoredObstacleIds(pathOptions);
+    const parts = [supportSurfaceId ? `surface:${supportSurfaceId}` : "surface:all"];
+    if (Number.isFinite(clearanceOverride)) {
+      parts.push(`clr:${Math.round(clearanceOverride * 1000)}`);
+    }
+    if (ignoredObstacleIds.length) {
+      parts.push(`ign:${ignoredObstacleIds.join(",")}`);
+    }
+    const ignorePushableSurfaceId = pathOptions && typeof pathOptions === "object"
+      ? String(pathOptions.ignorePushableSurfaceId || "")
+      : "";
+    if (ignorePushableSurfaceId) {
+      parts.push(`ignsurf:${ignorePushableSurfaceId}`);
+    }
+    return parts.join("|");
+  }
+
+  function pointRespectsPathSupportSurface(x, z, clearance = null, pathOptions = null) {
+    const supportSurfaceId = resolvePathSupportSurfaceId(pathOptions);
+    if (!supportSurfaceId) return true;
+    const supportSurface = getWalkableSurfaceById(supportSurfaceId);
+    if (!supportSurface) return false;
+    const navClearance = resolvePathClearance(clearance);
+    const supportPad = Math.max(0.005, Math.min(0.02, navClearance * 0.2));
+    return isPointInsideSurfaceXZ(supportSurface, x, z, supportPad);
+  }
+
+  function resolveObstacleSurfaceForPoint(x, y, z) {
+    const surfaces = getWalkableSurfaces();
     let best = null;
-    let bestDy = Infinity;
+    let bestScore = Infinity;
     for (const surface of surfaces) {
       if (!surface) continue;
       if (x < surface.minX - 0.08 || x > surface.maxX + 0.08 || z < surface.minZ - 0.08 || z > surface.maxZ + 0.08) continue;
       const dy = Math.abs((Number.isFinite(y) ? y : 0) - surface.y);
       if (dy > 0.34) continue;
-      if (dy < bestDy) {
-        bestDy = dy;
-        best = surface.id;
+      const inside = isPointInsideSurfaceXZ(surface, x, z, 0.02);
+      const gap = inside ? 0 : getSurfacePlanarGap(surface, x, z, 0.02);
+      const score = dy * 4 + gap;
+      if (score < bestScore) {
+        bestScore = score;
+        best = surface;
       }
     }
-    return best || "floor";
+    return best || getWalkableSurfaceById("floor");
+  }
+
+  function resolveObstacleSurfaceIdForPoint(x, y, z) {
+    return String(resolveObstacleSurfaceForPoint(x, y, z)?.id || "floor");
   }
 
   function obstacleMatchesIgnoredPushableSurface(obs, ignoreSurfaceId = "") {
     const resolvedIgnoreId = String(ignoreSurfaceId || "");
-    if (!obs?.pushable || !resolvedIgnoreId || resolvedIgnoreId === "floor") return false;
+    if (!obs?.pushable || !resolvedIgnoreId) return false;
     if (String(obs.surfaceId || "") === resolvedIgnoreId) return true;
-    const surface = getWalkableElevatedSurfaces().find((s) => String(s?.id || "") === resolvedIgnoreId);
+    const surface = getWalkableSurfaceById(resolvedIgnoreId);
     if (!surface) return false;
     const reach = Math.max(
       0.08,
@@ -544,32 +703,47 @@ export function createCatPathfindingRuntime(ctx) {
       : null;
   }
 
-  function obstacleMatchesIgnoredSupportSurface(obs, supportSurfaceId = "") {
-    const resolvedSurfaceId = String(supportSurfaceId || "");
-    if (!obs || !resolvedSurfaceId || resolvedSurfaceId === "floor") return false;
-    const ignoreIds = normalizeJumpIgnoreSurfaceIds(obs.jumpIgnoreSurfaceIds);
-    return ignoreIds.includes(resolvedSurfaceId);
+  function filterObstaclesForPathOptions(obstacles, pathOptions = null) {
+    const source = Array.isArray(obstacles) ? obstacles : [];
+    const resolvedPathOptions = pathOptions && typeof pathOptions === "object" ? pathOptions : null;
+    if (!resolvedPathOptions) return obstacles;
+    const ignoreSurfaceId = String(pathOptions.ignorePushableSurfaceId || "");
+    const ignoredObstacleIds = new Set(resolveIgnoredObstacleIds(resolvedPathOptions));
+    let filtered = source;
+    if (ignoredObstacleIds.size > 0) {
+      filtered = filtered.filter((obs) => !ignoredObstacleIds.has(getObstacleIdentity(obs)));
+    }
+    if (ignoreSurfaceId) {
+      filtered = filtered.filter((obs) => !obstacleMatchesIgnoredPushableSurface(obs, ignoreSurfaceId));
+    }
+    if (filtered.length === source.length) return obstacles;
+    attachObstacleMetadata(filtered, !!source._includePickups, !!source._includeClosePickups);
+    filtered._filteredFromSignature = source._dynamicSignature || "";
+    return filtered;
   }
 
-  function filterObstaclesForPathOptions(obstacles, pathOptions = null) {
-    if (!Array.isArray(obstacles) || !obstacles.length || !pathOptions) return obstacles;
-    const ignoreSurfaceId = String(pathOptions.ignorePushableSurfaceId || "");
-    const supportSurfaceId = String(pathOptions.supportSurfaceId || "");
-    if (
-      (!ignoreSurfaceId || ignoreSurfaceId === "floor") &&
-      (!supportSurfaceId || supportSurfaceId === "floor")
-    ) {
+  function obstacleIgnoredForSameSurfaceStartRescue(obs, supportSurfaceId = "") {
+    const resolvedSurfaceId = String(supportSurfaceId || "");
+    if (!obs || !resolvedSurfaceId || resolvedSurfaceId === "floor") return false;
+    const ignoreIds = Array.isArray(obs.jumpIgnoreSurfaceIds)
+      ? obs.jumpIgnoreSurfaceIds.map((v) => String(v))
+      : obs.jumpIgnoreSurfaceIds != null
+        ? [String(obs.jumpIgnoreSurfaceIds)]
+        : [];
+    if (ignoreIds.includes(resolvedSurfaceId)) return true;
+    if (String(obs.surfaceId || "") !== resolvedSurfaceId) return false;
+    return obs.tag === "surfaceSupport" || obs.tag === "surfaceBlocker";
+  }
+
+  function filterObstaclesForSameSurfaceStartRescue(obstacles, supportSurfaceId = "") {
+    const resolvedSurfaceId = String(supportSurfaceId || "");
+    if (!Array.isArray(obstacles) || !obstacles.length || !resolvedSurfaceId || resolvedSurfaceId === "floor") {
       return obstacles;
     }
-    const filtered = obstacles.filter((obs) => {
-      if (obstacleMatchesIgnoredSupportSurface(obs, supportSurfaceId)) return false;
-      if (obstacleMatchesIgnoredPushableSurface(obs, ignoreSurfaceId)) return false;
-      return true;
-    });
+    const filtered = obstacles.filter((obs) => !obstacleIgnoredForSameSurfaceStartRescue(obs, resolvedSurfaceId));
     if (filtered.length === obstacles.length) return obstacles;
     attachObstacleMetadata(filtered, !!obstacles._includePickups, !!obstacles._includeClosePickups);
     filtered._filteredFromSignature = obstacles._dynamicSignature || "";
-    filtered._pathOptions = { ...pathOptions };
     return filtered;
   }
 
@@ -706,27 +880,14 @@ export function createCatPathfindingRuntime(ctx) {
         const height = p.type === "laundry" ? Math.max(0.2, halfY * 2 + 0.1) : Math.max(0.18, halfY * 2 + 0.1);
         const rawCenterY = p.body?.position?.y ?? p.mesh.position.y;
         const supportY = rawCenterY - halfY;
-        const surfaceId = resolveObstacleSurfaceIdForPoint(px, supportY, pz);
-        const supportSurface = surfaceId !== "floor" && typeof getSurfaceById === "function"
-          ? getSurfaceById(surfaceId)
-          : null;
+        const supportSurface =
+          resolveObstacleSurfaceForPoint(px, supportY, pz) ||
+          (typeof getSurfaceById === "function" ? getSurfaceById("floor") : null);
+        const surfaceId = String(supportSurface?.id || "floor");
         const centerY = Number.isFinite(Number(supportSurface?.y))
           ? Number(supportSurface.y) + halfY
           : rawCenterY;
-        let yaw = 0;
-        if (p.body?.quaternion) {
-          tempQ.set(p.body.quaternion.x, p.body.quaternion.y, p.body.quaternion.z, p.body.quaternion.w);
-          // Derive planar yaw from forward axis projection to avoid roll/pitch artifacts.
-          tempForward.set(0, 0, 1).applyQuaternion(tempQ);
-          tempForward.y = 0;
-          if (tempForward.lengthSq() > 1e-6) {
-            tempForward.normalize();
-            yaw = Math.atan2(tempForward.x, tempForward.z);
-          } else {
-            tempEuler.setFromQuaternion(tempQ, "YXZ");
-            yaw = tempEuler.y;
-          }
-        }
+        const yaw = getPickupPlanarYaw(p);
         const pickupMode = p.type === "trash" ? "pushable" : "pushable";
         obstacles.push(makeObstacle({
           kind: "obb",
@@ -820,6 +981,18 @@ export function createCatPathfindingRuntime(ctx) {
     return staticSourceObstaclesCache;
   }
 
+  function buildRecastSourceObstacleSet(obstacles) {
+    if (!Array.isArray(obstacles) || !obstacles.length) return buildStaticSourceObstacles();
+    const source = [];
+    for (const obs of obstacles) {
+      if (!obs) continue;
+      if (obs.pickupKey || String(obs.tag || "").startsWith("pickup-")) continue;
+      if (obs.blocksPath === false) continue;
+      source.push(obs);
+    }
+    return source.length ? source : buildStaticSourceObstacles();
+  }
+
   function obstacleOverlapsQueryY(obs, queryY, tolerance = null) {
     if (!Number.isFinite(queryY)) return true;
     if (!Number.isFinite(obs.y) || !Number.isFinite(obs.h)) return true;
@@ -832,8 +1005,9 @@ export function createCatPathfindingRuntime(ctx) {
     return queryY >= minY && queryY <= maxY;
   }
 
-  function isCatPointBlocked(x, z, obstacles, clearance = null, queryY = 0, stage = "plan") {
+  function isCatPointBlocked(x, z, obstacles, clearance = null, queryY = 0, stage = "plan", pathOptions = null) {
     const navClearance = resolvePathClearance(clearance);
+    if (!pointRespectsPathSupportSurface(x, z, navClearance, pathOptions)) return true;
     const y = Number.isFinite(queryY) ? queryY : 0;
     const boundaryMargin = y <= 0.08 ? CAT_NAV.margin : 0.02;
     if (
@@ -880,29 +1054,27 @@ export function createCatPathfindingRuntime(ctx) {
   }
 
   function shouldAllowFallbackPlanner(allowFallback = null) {
-    if (typeof allowFallback === "boolean") return allowFallback;
-    return !!CAT_NAV.useFallbackPlanner;
+    return false;
   }
 
-  function hasClearTravelLine(a, b, obstacles, clearance = null, queryY = 0, stage = "plan") {
+  function hasClearTravelLine(a, b, obstacles, clearance = null, queryY = 0, stage = "plan", pathOptions = null) {
     const navClearance = resolvePathClearance(clearance);
     const dx = b.x - a.x;
     const dz = b.z - a.z;
     const dist = Math.hypot(dx, dz);
     if (dist < 0.001) return true;
-    // Use denser checks when clearance is larger so blockers are not skipped between probes.
     const probeStride = Math.min(0.14, Math.max(0.08, navClearance * 0.55));
     const samples = Math.max(2, Math.ceil(dist / probeStride));
     for (let i = 1; i <= samples; i++) {
       const t = i / samples;
       const x = a.x + dx * t;
       const z = a.z + dz * t;
-      if (isCatPointBlocked(x, z, obstacles, navClearance, queryY, stage)) return false;
+      if (isCatPointBlocked(x, z, obstacles, navClearance, queryY, stage, pathOptions)) return false;
     }
     return true;
   }
 
-  function smoothCatPath(path, obstacles, clearance = null, queryY = 0) {
+  function smoothCatPath(path, obstacles, clearance = null, queryY = 0, pathOptions = null) {
     const navClearance = resolvePathClearance(clearance);
     if (path.length <= 2) return path;
     const out = [path[0]];
@@ -910,7 +1082,7 @@ export function createCatPathfindingRuntime(ctx) {
     while (i < path.length - 1) {
       let j = path.length - 1;
       while (j > i + 1) {
-        if (hasClearTravelLine(path[i], path[j], obstacles, navClearance, queryY)) break;
+        if (hasClearTravelLine(path[i], path[j], obstacles, navClearance, queryY, "plan", pathOptions)) break;
         j--;
       }
       out.push(path[j]);
@@ -919,7 +1091,7 @@ export function createCatPathfindingRuntime(ctx) {
     return out;
   }
 
-  function materializePathWithEndpoints(corePath, startOnPlane, freeStart, goalOnPlane, freeGoal, obstacles, clearance, queryY = 0) {
+  function materializePathWithEndpoints(corePath, startOnPlane, freeStart, goalOnPlane, freeGoal, obstacles, clearance, queryY = 0, pathOptions = null) {
     if (!Array.isArray(corePath) || corePath.length < 2) return [];
     const navClearance = resolvePathClearance(clearance);
     const path = [startOnPlane.clone()];
@@ -931,7 +1103,7 @@ export function createCatPathfindingRuntime(ctx) {
     let coreStartIndex = 1;
     if (startSnapDist2 > startSnapEps2) {
       const nextCore = corePath.length > 1 ? corePath[1] : freeGoal;
-      if (!hasClearTravelLine(startOnPlane, nextCore, obstacles, navClearance, queryY)) {
+      if (!hasClearTravelLine(startOnPlane, nextCore, obstacles, navClearance, queryY, "plan", pathOptions)) {
         path.push(freeStart.clone());
       }
     }
@@ -943,7 +1115,7 @@ export function createCatPathfindingRuntime(ctx) {
     const prevToGoal = path[path.length - 1];
     if (
       goalSnapDist2 <= goalSnapEps2 ||
-      hasClearTravelLine(prevToGoal, goalOnPlane, obstacles, navClearance, queryY)
+      hasClearTravelLine(prevToGoal, goalOnPlane, obstacles, navClearance, queryY, "plan", pathOptions)
     ) {
       path.push(goalOnPlane.clone());
     } else {
@@ -980,6 +1152,329 @@ export function createCatPathfindingRuntime(ctx) {
     return Math.abs(dx) <= (obs.hx + obstacleClearance) && Math.abs(dz) <= (obs.hz + obstacleClearance);
   }
 
+  function collectPointBlockingObstacles(x, z, obstacles, clearance, queryY = 0, stage = "plan") {
+    if (!Array.isArray(obstacles) || !obstacles.length) return [];
+    const out = [];
+    for (const obs of obstacles) {
+      if (!obs) continue;
+      if (obstacleBlocksPoint(obs, x, z, clearance, queryY, stage)) out.push(obs);
+    }
+    return out;
+  }
+
+  function obstacleAllowsStartOverlapEscape(obs) {
+    if (!obs) return false;
+    if (obs.pickupKey || obs.pushable) return true;
+    if (String(obs.tag || "").startsWith("pickup-")) return true;
+    if (String(obs.mode || "") === "soft") return true;
+    return obs.blocksRuntime === false && obs.blocksPath !== false;
+  }
+
+  function buildStartOverlapEscapeObstacles(point, obstacles, clearance, queryY = 0) {
+    if (!Array.isArray(obstacles) || !obstacles.length || !point) return null;
+    const blockers = collectPointBlockingObstacles(point.x, point.z, obstacles, clearance, queryY, "plan");
+    if (!blockers.length) return null;
+    const ignoredBlockers = blockers.filter((obs) => obstacleAllowsStartOverlapEscape(obs));
+    if (!ignoredBlockers.length) return null;
+    const skipped = new Set(ignoredBlockers);
+    const filtered = obstacles.filter((obs) => !skipped.has(obs));
+    if (filtered.length === obstacles.length) return null;
+    attachObstacleMetadata(filtered, !!obstacles._includePickups, !!obstacles._includeClosePickups);
+    filtered._filteredFromSignature = obstacles._dynamicSignature || "";
+    return {
+      obstacles: filtered,
+      blockerLabels: ignoredBlockers.map((obs) => String(obs.pickupKey || obs.tag || obs.kind || "unknown")),
+    };
+  }
+
+  function buildStartRuntimeAlignedObstacles(point, obstacles, clearance, queryY = 0) {
+    if (!Array.isArray(obstacles) || !obstacles.length || !point) return null;
+    const blockers = collectPointBlockingObstacles(point.x, point.z, obstacles, clearance, queryY, "plan");
+    if (!blockers.length) return null;
+    const ignoredBlockers = blockers.filter((obs) =>
+      obstacleAllowsStartOverlapEscape(obs) &&
+      !obstacleBlocksPoint(obs, point.x, point.z, clearance, queryY, "runtime")
+    );
+    if (!ignoredBlockers.length) return null;
+    const skipped = new Set(ignoredBlockers);
+    const filtered = obstacles.filter((obs) => !skipped.has(obs));
+    if (filtered.length === obstacles.length) return null;
+    attachObstacleMetadata(filtered, !!obstacles._includePickups, !!obstacles._includeClosePickups);
+    filtered._filteredFromSignature = obstacles._dynamicSignature || "";
+    return {
+      obstacles: filtered,
+      blockerLabels: ignoredBlockers.map((obs) => String(obs.pickupKey || obs.tag || obs.kind || "unknown")),
+    };
+  }
+
+  function summarizePathBlockingObstacle(obs, extra = null) {
+    if (!obs) return null;
+    const label =
+      obs.pickupKey ||
+      obs.tag ||
+      (obs.kind === "circle" ? "circle" : obs.kind === "obb" ? "obb" : "box");
+    return {
+      obstacleLabel: String(label || "unknown"),
+      obstacleKind: String(obs.kind || "unknown"),
+      obstacleMode: String(obs.mode || "unknown"),
+      obstacleSurfaceId: obs.surfaceId != null ? String(obs.surfaceId) : "",
+      obstacleX: Number.isFinite(obs.x) ? obs.x : 0,
+      obstacleZ: Number.isFinite(obs.z) ? obs.z : 0,
+      obstaclePickup: !!obs.pickupKey,
+      ...(extra && typeof extra === "object" ? extra : {}),
+    };
+  }
+
+  function summarizeRecastSourceObstacle(obs) {
+    if (!obs) return null;
+    return {
+      label: String(obs.pickupKey || obs.tag || (obs.kind === "circle" ? "circle" : obs.kind === "obb" ? "obb" : "box") || "unknown"),
+      kind: String(obs.kind || "unknown"),
+      mode: String(obs.mode || "unknown"),
+      x: Number.isFinite(obs.x) ? obs.x : NaN,
+      z: Number.isFinite(obs.z) ? obs.z : NaN,
+      pickup: !!obs.pickupKey,
+    };
+  }
+
+  function summarizeRecastDynamicSpec(spec) {
+    if (!spec) return null;
+    return {
+      label: String(spec.key || "unknown"),
+      kind: String(spec.kind || "unknown"),
+      mode: String(spec.mode || "unknown"),
+      x: Number.isFinite(spec.x) ? spec.x : NaN,
+      z: Number.isFinite(spec.z) ? spec.z : NaN,
+      pickup: String(spec.key || "") !== "cup",
+    };
+  }
+
+  function doesBlockingDetailMatchRef(detail, ref) {
+    if (!detail || !ref) return false;
+    const labelA = String(detail.obstacleLabel || "");
+    const labelB = String(ref.label || "");
+    if (labelA && labelB && labelA !== labelB) return false;
+    const dist = Math.hypot((Number(ref.x) || 0) - (Number(detail.obstacleX) || 0), (Number(ref.z) || 0) - (Number(detail.obstacleZ) || 0));
+    return dist <= 0.18;
+  }
+
+  function findMatchingSolveInputRef(detail, refs) {
+    if (!detail || !Array.isArray(refs) || !refs.length) return null;
+    for (const ref of refs) {
+      if (doesBlockingDetailMatchRef(detail, ref)) return ref;
+    }
+    return null;
+  }
+
+  function formatSolveInputPresence(detail, entry, prefix = "solve") {
+    const head = prefix ? `${prefix}=` : "";
+    const srcRefs = Array.isArray(entry?.debugSourceObstacleRefs) ? entry.debugSourceObstacleRefs : [];
+    const dynRefs = Array.isArray(entry?.debugDynamicSpecRefs) ? entry.debugDynamicSpecRefs : [];
+    const srcMatch = findMatchingSolveInputRef(detail, srcRefs);
+    const dynMatch = findMatchingSolveInputRef(detail, dynRefs);
+    const includePickups = entry?.debugIncludePickups ? 1 : 0;
+    return `${head}p${includePickups}/src${srcRefs.length}:${srcMatch ? "yes" : "no"}/dyn${dynRefs.length}:${dynMatch ? "yes" : "no"}`;
+  }
+
+
+  function computeObstacleHitMetrics(obs, x, z, clearance, stage = "plan") {
+    if (!obs) return null;
+    const dx = x - obs.x;
+    const dz = z - obs.z;
+    const stagePad = getObstaclePad(obs, stage);
+    const inflatedPad = Math.max(0, clearance) + stagePad;
+    if (obs.kind === "circle") {
+      const rawR = Math.max(0, obs.r || 0);
+      const dist2 = dx * dx + dz * dz;
+      return {
+        rawInside: dist2 <= rawR * rawR,
+        inflatedInside: dist2 <= (rawR + inflatedPad) * (rawR + inflatedPad),
+        centerX: Number.isFinite(obs.x) ? obs.x : NaN,
+        centerZ: Number.isFinite(obs.z) ? obs.z : NaN,
+        rawA: rawR,
+        rawB: rawR,
+        inflatedPad,
+        localX: dx,
+        localZ: dz,
+      };
+    }
+    let lx = dx;
+    let lz = dz;
+    if (obs.kind === "obb") {
+      const c = Math.cos(obs.yaw || 0);
+      const s = Math.sin(obs.yaw || 0);
+      lx = c * dx + s * dz;
+      lz = -s * dx + c * dz;
+    }
+    const rawA = Math.max(0, obs.hx || 0);
+    const rawB = Math.max(0, obs.hz || 0);
+    return {
+      rawInside: Math.abs(lx) <= rawA && Math.abs(lz) <= rawB,
+      inflatedInside: Math.abs(lx) <= rawA + inflatedPad && Math.abs(lz) <= rawB + inflatedPad,
+      centerX: Number.isFinite(obs.x) ? obs.x : NaN,
+      centerZ: Number.isFinite(obs.z) ? obs.z : NaN,
+      rawA,
+      rawB,
+      inflatedPad,
+      localX: lx,
+      localZ: lz,
+    };
+  }
+
+  function findPointBlockingDetail(x, z, obstacles, clearance, queryY = 0, stage = "plan", pathOptions = null) {
+    if (!pointRespectsPathSupportSurface(x, z, clearance, pathOptions)) {
+      return {
+        obstacleLabel: "support-surface",
+        obstacleKind: "surface-boundary",
+        obstacleMode: "support",
+        obstacleSurfaceId: resolvePathSupportSurfaceId(pathOptions),
+        obstacleX: x,
+        obstacleZ: z,
+        obstaclePickup: false,
+      };
+    }
+    if (!Array.isArray(obstacles) || !obstacles.length) return null;
+    for (const obs of obstacles) {
+      if (!obstacleBlocksPoint(obs, x, z, clearance, queryY, stage)) continue;
+      return summarizePathBlockingObstacle(obs, computeObstacleHitMetrics(obs, x, z, clearance, stage));
+    }
+    return null;
+  }
+
+  function analyzeTraversabilityFailure(path, obstacles, clearance = null, queryY = 0, stage = "plan", pathOptions = null) {
+    const navClearance = resolvePathClearance(clearance);
+    if (!Array.isArray(path) || path.length < 2) return null;
+    for (let segIndex = 1; segIndex < path.length; segIndex++) {
+      const a = path[segIndex - 1];
+      const b = path[segIndex];
+      const dx = b.x - a.x;
+      const dz = b.z - a.z;
+      const dist = Math.hypot(dx, dz);
+      if (dist < 0.001) continue;
+      const probeStride = Math.min(0.14, Math.max(0.08, navClearance * 0.55));
+      const samples = Math.max(2, Math.ceil(dist / probeStride));
+      for (let i = 1; i <= samples; i++) {
+        const t = i / samples;
+        const x = a.x + dx * t;
+        const z = a.z + dz * t;
+        const detail = findPointBlockingDetail(x, z, obstacles, navClearance, queryY, stage, pathOptions);
+        if (!detail) continue;
+        return {
+          segmentIndex: segIndex,
+          sampleIndex: i,
+          sampleCount: samples,
+          sampleT: t,
+          sampleX: x,
+          sampleZ: z,
+          fromX: a.x,
+          fromZ: a.z,
+          toX: b.x,
+          toZ: b.z,
+          ...detail,
+        };
+      }
+    }
+    return null;
+  }
+
+  function formatTraversabilityFailure(detail, prefix = "") {
+    if (!detail || typeof detail !== "object") return "";
+    const head = prefix ? `${prefix}=` : "";
+    const label = detail.obstacleLabel || detail.obstacleKind || "unknown";
+    const kind = detail.obstacleKind || "unknown";
+    const mode = detail.obstacleMode || "unknown";
+    const seg = Number.isFinite(detail.segmentIndex) ? detail.segmentIndex : -1;
+    const posX = Number.isFinite(detail.sampleX) ? detail.sampleX.toFixed(2) : "na";
+    const posZ = Number.isFinite(detail.sampleZ) ? detail.sampleZ.toFixed(2) : "na";
+    const rawInside = detail.rawInside === true ? 1 : 0;
+    const inflInside = detail.inflatedInside === true ? 1 : 0;
+    const localX = Number.isFinite(detail.localX) ? detail.localX.toFixed(2) : "na";
+    const localZ = Number.isFinite(detail.localZ) ? detail.localZ.toFixed(2) : "na";
+    const rawA = Number.isFinite(detail.rawA) ? detail.rawA.toFixed(2) : "na";
+    const rawB = Number.isFinite(detail.rawB) ? detail.rawB.toFixed(2) : "na";
+    const pad = Number.isFinite(detail.inflatedPad) ? detail.inflatedPad.toFixed(2) : "na";
+    return `${head}${label}/${kind}/${mode}@seg${seg}:${posX},${posZ}[r${rawInside}/i${inflInside} l=${localX},${localZ} e=${rawA},${rawB} p=${pad}]`;
+  }
+
+  function formatProjectionDetail(detail, prefix = "") {
+    if (!detail || typeof detail !== "object") return "";
+    const head = prefix ? `${prefix}=` : "";
+    const fromX = Number.isFinite(detail.fromX) ? detail.fromX.toFixed(2) : "na";
+    const fromZ = Number.isFinite(detail.fromZ) ? detail.fromZ.toFixed(2) : "na";
+    const finalToX = Number.isFinite(detail.toX) ? detail.toX.toFixed(2) : "na";
+    const toZ = Number.isFinite(detail.toZ) ? detail.toZ.toFixed(2) : "na";
+    const dist = Number.isFinite(detail.snapDistance) ? detail.snapDistance.toFixed(3) : "na";
+    const status = detail.joinClear ? "clear" : "blocked";
+    const block = detail.blockDetail ? ` ${formatTraversabilityFailure(detail.blockDetail)}` : "";
+    return `${head}${status}@${fromX},${fromZ}->${finalToX},${toZ} d=${dist}${block}`;
+  }
+
+  function formatPointBlockDetail(detail, prefix = "") {
+    const head = prefix ? `${prefix}=` : "";
+    if (!detail || typeof detail !== "object") return `${head}none`;
+    const label = detail.obstacleLabel || detail.obstacleKind || "unknown";
+    const kind = detail.obstacleKind || "unknown";
+    const mode = detail.obstacleMode || "unknown";
+    const x = Number.isFinite(detail.obstacleX) ? detail.obstacleX.toFixed(2) : "na";
+    const z = Number.isFinite(detail.obstacleZ) ? detail.obstacleZ.toFixed(2) : "na";
+    return `${head}${label}/${kind}/${mode}@${x},${z}`;
+  }
+
+  function formatVec2Inline(point) {
+    if (!point) return "na,na";
+    const x = Number.isFinite(point.x) ? point.x.toFixed(2) : "na";
+    const z = Number.isFinite(point.z) ? point.z.toFixed(2) : "na";
+    return `${x},${z}`;
+  }
+
+  function formatPathPreview(path, prefix = "") {
+    const head = prefix ? `${prefix}=` : "";
+    if (!Array.isArray(path) || !path.length) return `${head}none`;
+    const pts = path.slice(0, 4).map((p) => formatVec2Inline(p)).join(">");
+    const suffix = path.length > 4 ? ">..." : "";
+    return `${head}n${path.length}:${pts}${suffix}`;
+  }
+
+  function formatFirstSegment(path, prefix = "") {
+    const head = prefix ? `${prefix}=` : "";
+    if (!Array.isArray(path) || path.length < 2) return `${head}none`;
+    return `${head}${formatVec2Inline(path[0])}->${formatVec2Inline(path[1])}`;
+  }
+
+  function probeNavPoint(entry, point, planY, isGroundPlan = false) {
+    if (!entry?.navQuery || !point || !Number.isFinite(point.x) || !Number.isFinite(point.z)) return null;
+    const halfExtents = { x: 0.06, y: isGroundPlan ? 0.24 : 0.32, z: 0.06 };
+    const fallbackHalfExtents = { x: 0.18, y: isGroundPlan ? 0.48 : 0.72, z: 0.18 };
+    const sample = entry.navQuery.findClosestPoint(
+      { x: point.x, y: planY, z: point.z },
+      { halfExtents }
+    );
+    const use = sample?.success ? sample : entry.navQuery.findClosestPoint(
+      { x: point.x, y: planY, z: point.z },
+      { halfExtents: fallbackHalfExtents }
+    );
+    if (!use?.success || !use.point) return { status: "none", distance: NaN, x: NaN, z: NaN };
+    const dx = (use.point.x || 0) - point.x;
+    const dz = (use.point.z || 0) - point.z;
+    const dist = Math.hypot(dx, dz);
+    return {
+      status: dist <= 0.03 ? "walk" : "snap",
+      distance: dist,
+      x: use.point.x,
+      z: use.point.z,
+    };
+  }
+
+  function formatNavProbe(detail, prefix = "") {
+    const head = prefix ? `${prefix}=` : "";
+    if (!detail || typeof detail !== "object") return `${head}none`;
+    const status = detail.status || "none";
+    const x = Number.isFinite(detail.x) ? detail.x.toFixed(2) : "na";
+    const z = Number.isFinite(detail.z) ? detail.z.toFixed(2) : "na";
+    const dist = Number.isFinite(detail.distance) ? detail.distance.toFixed(3) : "na";
+    return `${head}${status}@${x},${z} d=${dist}`;
+  }
+
   function filterEndpointPushableGoalObstacles(point, obstacles, clearance, queryY = 0, stage = "plan") {
     if (!point || !Array.isArray(obstacles) || !obstacles.length) return obstacles;
     const endpointPushables = [];
@@ -997,6 +1492,91 @@ export function createCatPathfindingRuntime(ctx) {
     attachObstacleMetadata(filtered, !!obstacles._includePickups, !!obstacles._includeClosePickups);
     filtered._filteredFromSignature = obstacles._dynamicSignature || "";
     return filtered;
+  }
+
+
+  function resolveNearestPlanarPathTarget(target, obstacles, clearance = null, queryY = 0, pathOptions = null, origin = null) {
+    if (!target || !Number.isFinite(target.x) || !Number.isFinite(target.z)) return target;
+    const navClearance = resolvePathClearance(clearance);
+    const planY = Number.isFinite(queryY)
+      ? queryY
+      : (Number.isFinite(target?.y) ? target.y : 0);
+    const includePickups = !!obstacles?._includePickups;
+    const entry = buildRecastNavEntry(obstacles, includePickups, navClearance, pathOptions);
+    const isGroundPlan = planY <= 0.08;
+    const queryHalfExtents = { x: 2.5, y: isGroundPlan ? 0.24 : 0.32, z: 2.5 };
+    const relaxedHalfExtents = { x: 2.5, y: isGroundPlan ? 0.48 : 0.72, z: 2.5 };
+    const maxSnapDy = isGroundPlan ? 0.22 : 0.3;
+    const acceptPoint = (p) => p && Number.isFinite(p.y) && Math.abs(p.y - planY) <= maxSnapDy;
+    const sampleClosest = (x, z, halfExtents) =>
+      entry?.navQuery?.findClosestPoint(
+        { x, y: planY, z },
+        { halfExtents }
+      );
+    const resolveClosestNavPoint = (point) => {
+      if (!entry?.navQuery || !point || !Number.isFinite(point.x) || !Number.isFinite(point.z)) return null;
+      const base = sampleClosest(point.x, point.z, queryHalfExtents);
+      if (base?.success && acceptPoint(base.point)) return base.point;
+      const relaxed = sampleClosest(point.x, point.z, relaxedHalfExtents);
+      if (relaxed?.success && acceptPoint(relaxed.point)) return relaxed.point;
+      const searchRadii = [0.08, 0.16, 0.26];
+      for (const radius of searchRadii) {
+        for (let i = 0; i < 8; i++) {
+          const ang = (i / 8) * Math.PI * 2;
+          const sx = point.x + Math.cos(ang) * radius;
+          const sz = point.z + Math.sin(ang) * radius;
+          const ringBase = sampleClosest(sx, sz, queryHalfExtents);
+          if (ringBase?.success && acceptPoint(ringBase.point)) return ringBase.point;
+          const ringRelaxed = sampleClosest(sx, sz, relaxedHalfExtents);
+          if (ringRelaxed?.success && acceptPoint(ringRelaxed.point)) return ringRelaxed.point;
+        }
+      }
+      return null;
+    };
+    const validateCandidate = (x, z) => {
+      if (isCatPointBlocked(x, z, obstacles, navClearance, planY, "plan", pathOptions)) return null;
+      const point = new THREE.Vector3(x, planY, z);
+      const onNav = resolveClosestNavPoint(point);
+      if (!onNav) return null;
+      if (isCatPointBlocked(onNav.x, onNav.z, obstacles, navClearance, planY, "plan", pathOptions)) return null;
+      const navPoint = new THREE.Vector3(onNav.x, Number.isFinite(onNav.y) ? onNav.y : planY, onNav.z);
+      if (!hasClearTravelLine(navPoint, point, obstacles, navClearance, planY, "plan", pathOptions)) return null;
+      const joinDistance = Math.hypot(navPoint.x - point.x, navPoint.z - point.z);
+      const originDistance = origin && Number.isFinite(origin.x) && Number.isFinite(origin.z)
+        ? Math.hypot(x - origin.x, z - origin.z)
+        : 0;
+      return { point, navPoint, joinDistance, originDistance };
+    };
+
+    const direct = validateCandidate(target.x, target.z);
+    if (direct) return target;
+
+    let best = null;
+    let bestScore = Infinity;
+    const baseYaw = origin && Number.isFinite(origin.x) && Number.isFinite(origin.z)
+      ? Math.atan2(target.x - origin.x, target.z - origin.z)
+      : 0;
+    const radii = [0.04, 0.08, 0.12, 0.18, 0.26, 0.36, 0.48, 0.62, 0.78, 0.96, 1.16];
+    for (const radius of radii) {
+      const steps = Math.max(16, Math.ceil((Math.PI * 2 * Math.max(radius, 0.06)) / 0.08));
+      for (let i = 0; i < steps; i++) {
+        const yaw = baseYaw + (i / steps) * Math.PI * 2;
+        const x = target.x + Math.sin(yaw) * radius;
+        const z = target.z + Math.cos(yaw) * radius;
+        const candidate = validateCandidate(x, z);
+        if (!candidate) continue;
+        const score =
+          radius * 1.0 +
+          candidate.joinDistance * 0.6 +
+          candidate.originDistance * 0.03;
+        if (score < bestScore) {
+          bestScore = score;
+          best = candidate.point;
+        }
+      }
+      if (best) break;
+    }
+    return best || target;
   }
 
   function findFirstBlockingObstacleOnLine(a, b, obstacles, clearance, queryY = 0, stage = "plan") {
@@ -1023,12 +1603,12 @@ export function createCatPathfindingRuntime(ctx) {
   function buildGroundDetourCandidates(hit, clearance, queryY = 0) {
     if (!hit?.obs) return [];
     const obs = hit.obs;
-    const pad = clearance + 0.12;
+    const pad = clearance + (obs.pushable ? 0.2 : 0.12);
     const out = [];
     const pushCandidate = (x, z) => {
       if (!Number.isFinite(x) || !Number.isFinite(z)) return;
       if (isCatPointBlocked(x, z, [obs], clearance * 0.96, queryY)) return;
-      out.push(new THREE.Vector3(x, 0, z));
+      out.push(new THREE.Vector3(x, queryY, z));
     };
 
     if (obs.kind === "circle") {
@@ -1064,8 +1644,194 @@ export function createCatPathfindingRuntime(ctx) {
 
   function hasGroundPathNoFallback(start, goal, obstacles, clearance) {
     if (hasClearTravelLine(start, goal, obstacles, clearance, 0)) return true;
-    const path = computeCatPath(start, goal, obstacles, 0, false, false);
+    const path = computeCatPath(start, goal, obstacles, 0, false, false, { clearanceOverride: clearance });
     return isPathTraversable(path, obstacles, clearance, 0);
+  }
+
+  function joinPathSegments(first, second) {
+    const out = [];
+    const append = (segment) => {
+      if (!Array.isArray(segment) || !segment.length) return;
+      for (const point of segment) {
+        const last = out[out.length - 1];
+        if (last && last.distanceToSquared(point) <= 1e-6) continue;
+        out.push(point.clone());
+      }
+    };
+    append(first);
+    append(second);
+    return out;
+  }
+
+  function joinPathSegmentList(segments) {
+    const out = [];
+    for (const segment of segments) {
+      if (!Array.isArray(segment) || !segment.length) continue;
+      for (const point of segment) {
+        const last = out[out.length - 1];
+        if (last && last.distanceToSquared(point) <= 1e-6) continue;
+        out.push(point.clone());
+      }
+    }
+    return out;
+  }
+
+  function buildNoFallbackLegPath(startOnPlane, goalOnPlane, obstacles, clearance, queryY = 0, options = null, pathOptions = null) {
+    const freeStart = findNearestWalkablePoint(startOnPlane, obstacles, clearance, queryY, pathOptions);
+    const freeGoal = findNearestWalkablePoint(goalOnPlane, obstacles, clearance, queryY, pathOptions);
+    if (!freeStart || !freeGoal) return [];
+    const opts = options && typeof options === "object" ? options : null;
+    const maxGoalSnap = Number.isFinite(opts?.maxGoalSnap)
+      ? Math.max(0.1, Number(opts.maxGoalSnap))
+      : Math.max(0.16, CAT_NAV.step * 1.25, clearance * 1.9);
+    if (freeGoal.distanceToSquared(goalOnPlane) > maxGoalSnap * maxGoalSnap) return [];
+    if (freeStart.distanceToSquared(freeGoal) < 0.1 * 0.1) {
+      const snappedPath = materializePathWithEndpoints(
+        [freeStart.clone(), freeGoal.clone()],
+        startOnPlane,
+        freeStart,
+        goalOnPlane,
+        freeGoal,
+        obstacles,
+        clearance,
+        queryY,
+        pathOptions
+      );
+      return isPathTraversable(snappedPath, obstacles, clearance, queryY, "plan", pathOptions)
+        ? snappedPath
+        : [];
+    }
+    if (hasClearTravelLine(freeStart, freeGoal, obstacles, clearance, queryY, "plan", pathOptions)) {
+      return materializePathWithEndpoints(
+        [freeStart.clone(), freeGoal.clone()],
+        startOnPlane,
+        freeStart,
+        goalOnPlane,
+        freeGoal,
+        obstacles,
+        clearance,
+        queryY,
+        pathOptions
+      );
+    }
+    const recastPath = computeRecastPath(freeStart, freeGoal, obstacles, clearance, queryY, pathOptions);
+    if (!Array.isArray(recastPath) || recastPath.length < 2) return [];
+    const corePath = recastPath.map((p) => p.clone());
+    corePath[0].copy(freeStart);
+    corePath[corePath.length - 1].copy(freeGoal);
+    return materializePathWithEndpoints(
+      corePath,
+      startOnPlane,
+      freeStart,
+      goalOnPlane,
+      freeGoal,
+      obstacles,
+      clearance,
+      queryY,
+      pathOptions
+    );
+  }
+
+  function buildNoFallbackObstacleDetourPath(startOnPlane, goalOnPlane, obstacles, clearance, queryY = 0, debugMeta = null, pathOptions = null) {
+    const quantizeKey = (point) => `${Math.round((point?.x || 0) / 0.08)}:${Math.round((point?.z || 0) / 0.08)}:${Math.round((queryY || 0) / 0.06)}`;
+    const maxDetourDepth = 5;
+    const maxNodeExpansions = 44;
+    const maxCandidatesPerExpansion = 12;
+    const legCache = new Map();
+    let candidateCount = 0;
+    let legMisses = 0;
+    let bestDepth = 0;
+    const buildLegCached = (from, to) => {
+      const key = `${quantizeKey(from)}>${quantizeKey(to)}`;
+      if (legCache.has(key)) {
+        return legCache.get(key).map((p) => p.clone());
+      }
+      const built = buildNoFallbackLegPath(from, to, obstacles, clearance, queryY, {
+        maxGoalSnap: Math.max(0.44, CAT_NAV.step * 2.1, clearance * 2.8),
+      }, pathOptions);
+      legCache.set(key, Array.isArray(built) ? built.map((p) => p.clone()) : []);
+      return built;
+    };
+
+    const open = [{
+      point: startOnPlane.clone(),
+      segments: [],
+      cost: 0,
+      depth: 0,
+      visited: new Set([quantizeKey(startOnPlane)]),
+    }];
+    let bestPath = [];
+    let bestScore = Infinity;
+    let expansions = 0;
+
+    while (open.length && expansions < maxNodeExpansions) {
+      open.sort((a, b) => {
+        const scoreA = a.cost + a.point.distanceTo(goalOnPlane);
+        const scoreB = b.cost + b.point.distanceTo(goalOnPlane);
+        return scoreA - scoreB;
+      });
+      const current = open.shift();
+      if (!current) break;
+      expansions += 1;
+
+      const finalLeg = buildLegCached(current.point, goalOnPlane);
+      if (finalLeg.length >= 2) {
+        const fullPath = joinPathSegmentList([...current.segments, finalLeg]);
+        if (isPathTraversable(fullPath, obstacles, clearance, queryY, "plan", pathOptions)) {
+          const score = current.cost + catPathDistance(finalLeg);
+          if (score < bestScore) {
+            bestScore = score;
+            bestPath = fullPath;
+            bestDepth = current.depth;
+          }
+        }
+        continue;
+      }
+
+      if (current.depth >= maxDetourDepth) continue;
+      const blocker = findFirstBlockingObstacleOnLine(current.point, goalOnPlane, obstacles, clearance, queryY);
+      if (!blocker) continue;
+      const candidates = buildGroundDetourCandidates(blocker, clearance, queryY)
+        .filter((via) => !isCatPointBlocked(via.x, via.z, obstacles, clearance, queryY, "plan", pathOptions))
+        .sort((a, b) => {
+          const scoreA = current.point.distanceTo(a) + a.distanceTo(goalOnPlane);
+          const scoreB = current.point.distanceTo(b) + b.distanceTo(goalOnPlane);
+          return scoreA - scoreB;
+        })
+        .slice(0, maxCandidatesPerExpansion);
+      candidateCount += candidates.length;
+
+      for (const via of candidates) {
+        const viaKey = quantizeKey(via);
+        if (current.visited.has(viaKey)) continue;
+        const leg = buildLegCached(current.point, via);
+        if (leg.length < 2) {
+          legMisses += 1;
+          continue;
+        }
+        const nextCost = current.cost + catPathDistance(leg);
+        if (nextCost >= bestScore) continue;
+        const nextVisited = new Set(current.visited);
+        nextVisited.add(viaKey);
+        open.push({
+          point: via.clone(),
+          segments: [...current.segments, leg.map((p) => p.clone())],
+          cost: nextCost,
+          depth: current.depth + 1,
+          visited: nextVisited,
+        });
+      }
+    }
+
+    if (debugMeta && typeof debugMeta === "object") {
+      debugMeta.detourExpansions = expansions;
+      debugMeta.detourCandidates = candidateCount;
+      debugMeta.detourLegMisses = legMisses;
+      debugMeta.detourBestDepth = bestDepth;
+      debugMeta.detourFound = bestPath.length >= 2;
+    }
+
+    return bestPath;
   }
 
   function catPathDistance(path) {
@@ -1094,33 +1860,53 @@ export function createCatPathfindingRuntime(ctx) {
     return recastState.initPromise;
   }
 
-  function buildRecastSourceMeshes(obstacles) {
-    const meshes = [floorMesh];
-
-    // Extra walkable surfaces above floor.
-    for (const surface of getWalkableElevatedSurfaces()) {
-      const sx = Math.max(0.05, surface.maxX - surface.minX);
-      const sz = Math.max(0.05, surface.maxZ - surface.minZ);
-      const topMesh = new THREE.Mesh(new THREE.BoxGeometry(sx, 0.06, sz));
-      topMesh.position.set((surface.minX + surface.maxX) * 0.5, surface.y + 0.01, (surface.minZ + surface.maxZ) * 0.5);
+  function buildRecastSourceMeshes(obstacles, clearance = null, pathOptions = null) {
+    const meshes = [];
+    const supportSurfaceId = resolvePathSupportSurfaceId(pathOptions);
+    const walkableSurfaces = supportSurfaceId
+      ? getWalkableSurfaces().filter((surface) => String(surface?.id || "") === supportSurfaceId)
+      : getWalkableSurfaces();
+    for (const surface of walkableSurfaces) {
+      let geometry = null;
+      if (surface.shape === "circle") {
+        const radius = Math.max(0.05, Number(surface.radius) || 0.05);
+        geometry = new THREE.CylinderGeometry(radius, radius, WALKABLE_SURFACE_THICKNESS, 24);
+      } else {
+        const hx = Math.max(0.05, Number(surface.halfExtents?.hx) || 0.05);
+        const hz = Math.max(0.05, Number(surface.halfExtents?.hz) || 0.05);
+        geometry = new THREE.BoxGeometry(hx * 2, WALKABLE_SURFACE_THICKNESS, hz * 2);
+      }
+      const topMesh = new THREE.Mesh(geometry);
+      topMesh.position.set(
+        surface.center.x,
+        surface.y - WALKABLE_SURFACE_THICKNESS * 0.5 + WALKABLE_SURFACE_LIFT,
+        surface.center.z
+      );
+      if (surface.shape === "obb") {
+        topMesh.rotation.y = Number(surface.yaw) || 0;
+      }
       topMesh.updateMatrixWorld(true);
       meshes.push(topMesh);
     }
+    const recastClearance = Math.max(0, resolvePathClearance(clearance));
     for (const obs of obstacles) {
       let mesh = null;
       const inflated = inflateObstacleForStage(obs, "plan");
-      const obsHeight = Math.max(0.06, Number.isFinite(inflated.h) ? inflated.h : 1.6);
-      const obsY = Number.isFinite(inflated.y) ? inflated.y : obsHeight * 0.5;
-      if (inflated.kind === "circle") {
-        mesh = new THREE.Mesh(new THREE.CylinderGeometry(inflated.r, inflated.r, obsHeight, 16));
-        mesh.position.set(inflated.x, obsY, inflated.z);
-      } else if (inflated.kind === "obb") {
-        mesh = new THREE.Mesh(new THREE.BoxGeometry(inflated.hx * 2, obsHeight, inflated.hz * 2));
-        mesh.position.set(inflated.x, obsY, inflated.z);
-        mesh.rotation.y = inflated.yaw || 0;
+      const recastObstacle = inflated.kind === "circle"
+        ? { ...inflated, r: Math.max(0, Number(inflated.r) || 0) + recastClearance }
+        : { ...inflated, hx: Math.max(0, Number(inflated.hx) || 0) + recastClearance, hz: Math.max(0, Number(inflated.hz) || 0) + recastClearance };
+      const obsHeight = Math.max(0.06, Number.isFinite(recastObstacle.h) ? recastObstacle.h : 1.6);
+      const obsY = Number.isFinite(recastObstacle.y) ? recastObstacle.y : obsHeight * 0.5;
+      if (recastObstacle.kind === "circle") {
+        mesh = new THREE.Mesh(new THREE.CylinderGeometry(recastObstacle.r, recastObstacle.r, obsHeight, 16));
+        mesh.position.set(recastObstacle.x, obsY, recastObstacle.z);
+      } else if (recastObstacle.kind === "obb") {
+        mesh = new THREE.Mesh(new THREE.BoxGeometry(recastObstacle.hx * 2, obsHeight, recastObstacle.hz * 2));
+        mesh.position.set(recastObstacle.x, obsY, recastObstacle.z);
+        mesh.rotation.y = recastObstacle.yaw || 0;
       } else {
-        mesh = new THREE.Mesh(new THREE.BoxGeometry(inflated.hx * 2, obsHeight, inflated.hz * 2));
-        mesh.position.set(inflated.x, obsY, inflated.z);
+        mesh = new THREE.Mesh(new THREE.BoxGeometry(recastObstacle.hx * 2, obsHeight, recastObstacle.hz * 2));
+        mesh.position.set(recastObstacle.x, obsY, recastObstacle.z);
       }
       mesh.updateMatrixWorld(true);
       meshes.push(mesh);
@@ -1129,26 +1915,14 @@ export function createCatPathfindingRuntime(ctx) {
   }
 
   function getDebugWalkableSurfaces() {
-    const surfaces = [];
-    surfaces.push({
-      minX: ROOM.minX + CAT_NAV.margin,
-      maxX: ROOM.maxX - CAT_NAV.margin,
-      minZ: ROOM.minZ + CAT_NAV.margin,
-      maxZ: ROOM.maxZ - CAT_NAV.margin,
-      y: 0,
-      yTol: 0.14,
-    });
-    for (const surface of getWalkableElevatedSurfaces()) {
-      surfaces.push({
-        minX: surface.minX,
-        maxX: surface.maxX,
-        minZ: surface.minZ,
-        maxZ: surface.maxZ,
-        y: surface.y,
-        yTol: 0.12,
-      });
-    }
-    return surfaces;
+    return getWalkableSurfaces().map((surface) => ({
+      minX: surface.minX,
+      maxX: surface.maxX,
+      minZ: surface.minZ,
+      maxZ: surface.maxZ,
+      y: surface.y,
+      yTol: surface.id === "floor" ? 0.14 : 0.12,
+    }));
   }
 
   function isPointOnDebugWalkableSurface(x, y, z, surfaces) {
@@ -1292,7 +2066,7 @@ export function createCatPathfindingRuntime(ctx) {
     return true;
   }
 
-  function buildRecastNavEntry(obstacles, includePickups, clearance) {
+  function buildRecastNavEntry(obstacles, includePickups, clearance, pathOptions = null) {
     const startedAt = performance.now();
     const profileMeta = {
       includePickups: !!includePickups,
@@ -1306,25 +2080,28 @@ export function createCatPathfindingRuntime(ctx) {
         return null;
       }
       const modeKey = includePickups ? "dynamic" : "static";
-      const sourceObstacles = buildStaticSourceObstacles();
-      const signature = getObstacleSignatureCached(sourceObstacles, clearance);
+      const sourceObstacles = buildRecastSourceObstacleSet(obstacles);
+      const signature = `${getObstacleSignatureCached(sourceObstacles, clearance)}|${getPathOptionsCacheKey(pathOptions)}`;
       const cached = navMeshCache[modeKey];
       if (cached && cached.signature === signature) {
         profileMeta.cache = "hit";
         bumpPathProfilerCounter("recastEntryCacheHits");
-        const dynamicSpecs = Array.isArray(obstacles?._tileCacheDynamicSpecs)
-          ? obstacles._tileCacheDynamicSpecs
-          : buildTileCacheDynamicSpecs(obstacles, includePickups);
-        const dynamicSignature = obstacles?._dynamicSignature || dynamicSpecsSignature(dynamicSpecs);
+        const dynamicSpecs = buildTileCacheDynamicSpecs(obstacles, includePickups, clearance);
+        const dynamicSignature = dynamicSpecsSignature(dynamicSpecs);
+        cached.debugIncludePickups = !!includePickups;
+        cached.debugSourceObstacleRefs = sourceObstacles.map((obs) => summarizeRecastSourceObstacle(obs)).filter(Boolean);
+        cached.debugDynamicSpecRefs = dynamicSpecs.map((spec) => summarizeRecastDynamicSpec(spec)).filter(Boolean);
         if (cached.tileCache) {
-          const changed = cached.dynamicSignature !== dynamicSignature || syncTileCacheObstacles(cached, dynamicSpecs);
+          const signatureChanged = cached.dynamicSignature !== dynamicSignature;
+          const tileCacheChanged = syncTileCacheObstacles(cached, dynamicSpecs);
+          const changed = signatureChanged || tileCacheChanged;
           if (changed) cached.dynamicSignature = dynamicSignature;
           profileMeta.dynamicChanged = !!changed;
         } else {
           cached.dynamicSignature = "none";
         }
         if (cached.debugDirty) {
-          const debugGeometry = extractDebugGeometryFromNavMesh(cached.navMesh, sourceObstacles);
+          const debugGeometry = extractDebugGeometryFromNavMesh(cached.navMesh, obstacles);
           cached.segments = debugGeometry.segments;
           cached.triangles = debugGeometry.triangles;
           cached.debugDirty = false;
@@ -1337,7 +2114,7 @@ export function createCatPathfindingRuntime(ctx) {
 
       bumpPathProfilerCounter("recastEntryRebuilds");
       profileMeta.cache = "rebuild";
-      const sourceMeshes = buildRecastSourceMeshes(sourceObstacles);
+      const sourceMeshes = buildRecastSourceMeshes(sourceObstacles, clearance, pathOptions);
       const result = threeToTileCache(sourceMeshes, {
         ...recastConfig,
         walkableRadius: Math.max(clearance, 0.05),
@@ -1362,7 +2139,7 @@ export function createCatPathfindingRuntime(ctx) {
       const navQuery = new NavMeshQuery(navMesh, { maxNodes: 4096 });
       navQuery.defaultQueryHalfExtents = { x: 2.5, y: 2.0, z: 2.5 };
 
-      const debugGeometry = extractDebugGeometryFromNavMesh(navMesh, sourceObstacles);
+      const debugGeometry = extractDebugGeometryFromNavMesh(navMesh, obstacles);
       const entry = {
         signature,
         includePickups,
@@ -1376,16 +2153,18 @@ export function createCatPathfindingRuntime(ctx) {
         segments: debugGeometry.segments,
         triangles: debugGeometry.triangles,
         clearance,
+        debugIncludePickups: !!includePickups,
+        debugSourceObstacleRefs: sourceObstacles.map((obs) => summarizeRecastSourceObstacle(obs)).filter(Boolean),
+        debugDynamicSpecRefs: [],
       };
 
       if (tileCache) {
-        const dynamicSpecs = Array.isArray(obstacles?._tileCacheDynamicSpecs)
-          ? obstacles._tileCacheDynamicSpecs
-          : buildTileCacheDynamicSpecs(obstacles, includePickups);
+        const dynamicSpecs = buildTileCacheDynamicSpecs(obstacles, includePickups, clearance);
+        entry.debugDynamicSpecRefs = dynamicSpecs.map((spec) => summarizeRecastDynamicSpec(spec)).filter(Boolean);
         syncTileCacheObstacles(entry, dynamicSpecs);
-        entry.dynamicSignature = obstacles?._dynamicSignature || dynamicSpecsSignature(dynamicSpecs);
+        entry.dynamicSignature = dynamicSpecsSignature(dynamicSpecs);
         if (entry.debugDirty) {
-          const refreshed = extractDebugGeometryFromNavMesh(entry.navMesh, sourceObstacles);
+          const refreshed = extractDebugGeometryFromNavMesh(entry.navMesh, obstacles);
           entry.segments = refreshed.segments;
           entry.triangles = refreshed.triangles;
           entry.debugDirty = false;
@@ -1404,30 +2183,45 @@ export function createCatPathfindingRuntime(ctx) {
       profileMeta.ok = true;
       return entry;
     } catch (error) {
-      recastState.ready = false;
-      recastState.failed = true;
       profileMeta.reason = "exception";
-      console.warn("Recast navmesh build failed, using fallback nav pathing.", error);
+      console.warn("Recast navmesh build failed; leaving recast enabled for retry.", error);
       return null;
     } finally {
       finishPathProfilerMetric("buildRecastNavEntry", startedAt, profileMeta, 4.5);
     }
   }
 
-  function computeRecastPath(start, goal, obstacles, clearance, queryY = 0) {
+  function computeRecastPath(start, goal, obstacles, clearance, queryY = 0, pathOptions = null) {
     const startedAt = performance.now();
     const profileMeta = {
       includePickups: !!obstacles?._includePickups,
       ok: false,
       pathLen: 0,
     };
+    let smoothedBlockDetail = null;
+    let rawBlockDetail = null;
+    let startProjectionDetail = null;
+    let goalProjectionDetail = null;
+    let startPointBlockDetail = null;
+    let goalPointBlockDetail = null;
+    let blockedSampleNavDetail = null;
+    let rawFirstSegmentPreview = "";
+    let smoothFirstSegmentPreview = "";
+    let rawPathPreview = "";
+    let smoothPathPreview = "";
+    let solveInputPresence = "";
     try {
+      updateLastSolverDebug({
+        recastReason: "",
+        recastPathLen: 0,
+        recastIncludePickups: !!obstacles?._includePickups,
+      });
       if (!recastState.ready) {
         profileMeta.reason = "recast-not-ready";
         return null;
       }
       const includePickups = !!obstacles?._includePickups;
-      const entry = buildRecastNavEntry(obstacles, includePickups, clearance);
+      const entry = buildRecastNavEntry(obstacles, includePickups, clearance, pathOptions);
       if (!entry) {
         profileMeta.reason = "nav-entry-missing";
         return null;
@@ -1467,6 +2261,38 @@ export function createCatPathfindingRuntime(ctx) {
       };
       const startOnNav = resolveClosestNavPoint(start);
       const goalOnNav = resolveClosestNavPoint(goal);
+      startPointBlockDetail = findPointBlockingDetail(start?.x, start?.z, obstacles, clearance, planY, "plan", pathOptions);
+      goalPointBlockDetail = findPointBlockingDetail(goal?.x, goal?.z, obstacles, clearance, planY, "plan", pathOptions);
+      if (startOnNav) {
+        const startJoinBlock = analyzeTraversabilityFailure([
+          new THREE.Vector3(start.x, Number.isFinite(start.y) ? start.y : planY, start.z),
+          new THREE.Vector3(startOnNav.x, Number.isFinite(startOnNav.y) ? startOnNav.y : planY, startOnNav.z),
+        ], obstacles, clearance, planY, "plan", pathOptions);
+        startProjectionDetail = {
+          joinClear: !startJoinBlock,
+          snapDistance: Math.hypot((startOnNav.x || 0) - (start?.x || 0), (startOnNav.z || 0) - (start?.z || 0)),
+          fromX: start?.x,
+          fromZ: start?.z,
+          toX: startOnNav.x,
+          toZ: startOnNav.z,
+          blockDetail: startJoinBlock,
+        };
+      }
+      if (goalOnNav) {
+        const goalJoinBlock = analyzeTraversabilityFailure([
+          new THREE.Vector3(goalOnNav.x, Number.isFinite(goalOnNav.y) ? goalOnNav.y : planY, goalOnNav.z),
+          new THREE.Vector3(goal.x, Number.isFinite(goal.y) ? goal.y : planY, goal.z),
+        ], obstacles, clearance, planY, "plan", pathOptions);
+        goalProjectionDetail = {
+          joinClear: !goalJoinBlock,
+          snapDistance: Math.hypot((goalOnNav.x || 0) - (goal?.x || 0), (goalOnNav.z || 0) - (goal?.z || 0)),
+          fromX: goalOnNav.x,
+          fromZ: goalOnNav.z,
+          toX: goal?.x,
+          toZ: goal?.z,
+          blockDetail: goalJoinBlock,
+        };
+      }
       if (!startOnNav || !goalOnNav) {
         profileMeta.reason = "projection-failed";
         return [];
@@ -1504,21 +2330,96 @@ export function createCatPathfindingRuntime(ctx) {
       if (path[last].distanceToSquared(goalOnNav) > 0.01 * 0.01) path.push(new THREE.Vector3(goalOnNav.x, goalOnNav.y, goalOnNav.z));
       else path[last].set(goalOnNav.x, goalOnNav.y, goalOnNav.z);
 
-      const smoothed = smoothCatPath(path, obstacles, clearance, planY);
+      const smoothed = smoothCatPath(path, obstacles, clearance, planY, pathOptions);
+      rawFirstSegmentPreview = formatFirstSegment(path, "raw1");
+      smoothFirstSegmentPreview = formatFirstSegment(smoothed, "smooth1");
+      rawPathPreview = formatPathPreview(path, "rawPts");
+      smoothPathPreview = formatPathPreview(smoothed, "smoothPts");
+      const recastValidationClearance = clearance;
       let finalPath = [];
-      if (isPathTraversable(smoothed, obstacles, clearance, planY)) finalPath = smoothed;
-      else if (isPathTraversable(path, obstacles, clearance, planY)) finalPath = path;
+      let acceptedMode = "";
+      if (smoothed.length >= 2 && isPathTraversable(smoothed, obstacles, recastValidationClearance, planY, "plan", pathOptions)) {
+        finalPath = smoothed;
+        acceptedMode = "smoothed-baked";
+      } else if (path.length >= 2 && isPathTraversable(path, obstacles, recastValidationClearance, planY, "plan", pathOptions)) {
+        finalPath = path;
+        acceptedMode = "raw-baked";
+      }
       profileMeta.ok = finalPath.length >= 2;
       profileMeta.pathLen = finalPath.length;
-      if (!profileMeta.ok) profileMeta.reason = "post-smooth-blocked";
+      if (profileMeta.ok) {
+        profileMeta.acceptedMode = acceptedMode;
+      } else {
+        profileMeta.reason = "post-smooth-blocked";
+        profileMeta.validationClearance = recastValidationClearance;
+        smoothedBlockDetail = analyzeTraversabilityFailure(smoothed, obstacles, recastValidationClearance, planY, "plan", pathOptions);
+        rawBlockDetail = analyzeTraversabilityFailure(path, obstacles, recastValidationClearance, planY, "plan", pathOptions);
+        if (smoothedBlockDetail) {
+          profileMeta.blockedPathType = "smoothed";
+          profileMeta.blockedObstacle = smoothedBlockDetail.obstacleLabel || smoothedBlockDetail.obstacleKind || "";
+          profileMeta.blockedSegment = smoothedBlockDetail.segmentIndex;
+        } else if (rawBlockDetail) {
+          profileMeta.blockedPathType = "raw";
+          profileMeta.blockedObstacle = rawBlockDetail.obstacleLabel || rawBlockDetail.obstacleKind || "";
+          profileMeta.blockedSegment = rawBlockDetail.segmentIndex;
+        }
+        const samplePoint = smoothedBlockDetail || rawBlockDetail;
+        if (samplePoint) {
+          blockedSampleNavDetail = probeNavPoint(entry, { x: samplePoint.sampleX, z: samplePoint.sampleZ }, planY, isGroundPlan);
+        }
+        const blockParts = [];
+        if (smoothedBlockDetail) blockParts.push(formatTraversabilityFailure(smoothedBlockDetail, "smoothed"));
+        if (rawBlockDetail) blockParts.push(formatTraversabilityFailure(rawBlockDetail, "raw"));
+        if (startProjectionDetail) blockParts.push(formatProjectionDetail(startProjectionDetail, "startProj"));
+        if (goalProjectionDetail) blockParts.push(formatProjectionDetail(goalProjectionDetail, "goalProj"));
+        blockParts.push(formatPointBlockDetail(startPointBlockDetail, "startBlk"));
+        blockParts.push(formatPointBlockDetail(goalPointBlockDetail, "goalBlk"));
+        if (blockedSampleNavDetail) blockParts.push(formatNavProbe(blockedSampleNavDetail, "sampleNav"));
+        solveInputPresence = formatSolveInputPresence(samplePoint, entry, "solveIn");
+        if (solveInputPresence) blockParts.push(solveInputPresence);
+        if (rawFirstSegmentPreview) blockParts.push(rawFirstSegmentPreview);
+        if (smoothFirstSegmentPreview) blockParts.push(smoothFirstSegmentPreview);
+        if (rawPathPreview) blockParts.push(rawPathPreview);
+        if (smoothPathPreview) blockParts.push(smoothPathPreview);
+        if (blockParts.length) {
+          traceFunction(
+            "recastPostBlockV14",
+            `${blockParts.join(" ")} target=${Number.isFinite(goal?.x) ? goal.x.toFixed(2) : "na"},${Number.isFinite(goal?.z) ? goal.z.toFixed(2) : "na"}`
+          );
+        }
+      }
       return finalPath;
     } finally {
+      updateLastSolverDebug({
+        recastReason: profileMeta.ok ? "ok" : (profileMeta.reason || ""),
+        recastPathLen: profileMeta.pathLen || 0,
+        recastIncludePickups: !!obstacles?._includePickups,
+        recastBlockedPathType: profileMeta.blockedPathType || "",
+        recastBlockedObstacle: profileMeta.blockedObstacle || "",
+        recastBlockedSegment: Number.isFinite(profileMeta.blockedSegment) ? profileMeta.blockedSegment : 0,
+        recastSmoothedBlock: smoothedBlockDetail ? formatTraversabilityFailure(smoothedBlockDetail) : "",
+        recastRawBlock: rawBlockDetail ? formatTraversabilityFailure(rawBlockDetail) : "",
+        recastStartProjection: startProjectionDetail ? formatProjectionDetail(startProjectionDetail) : "",
+        recastGoalProjection: goalProjectionDetail ? formatProjectionDetail(goalProjectionDetail) : "",
+        recastStartPointBlock: formatPointBlockDetail(startPointBlockDetail),
+        recastGoalPointBlock: formatPointBlockDetail(goalPointBlockDetail),
+        recastSampleNavProbe: blockedSampleNavDetail ? formatNavProbe(blockedSampleNavDetail) : "",
+        recastSolveInputPresence: solveInputPresence || "",
+        recastRawFirstSegment: rawFirstSegmentPreview || "",
+        recastSmoothFirstSegment: smoothFirstSegmentPreview || "",
+        recastRawPathPreview: rawPathPreview || "",
+        recastSmoothPathPreview: smoothPathPreview || "",
+        recastStartProjectionClear: !!startProjectionDetail?.joinClear,
+        recastGoalProjectionClear: !!goalProjectionDetail?.joinClear,
+        recastBlockSampleX: Number.isFinite((smoothedBlockDetail || rawBlockDetail)?.sampleX) ? (smoothedBlockDetail || rawBlockDetail).sampleX : NaN,
+        recastBlockSampleZ: Number.isFinite((smoothedBlockDetail || rawBlockDetail)?.sampleZ) ? (smoothedBlockDetail || rawBlockDetail).sampleZ : NaN,
+      });
       bumpPathProfilerReason("recastReason", profileMeta.ok ? "ok" : (profileMeta.reason || "unknown"));
       finishPathProfilerMetric("computeRecastPath", startedAt, profileMeta, 5.5);
     }
   }
 
-  function stepDetourCrowdToward(target, dt, useDynamicPlan = true, desiredSpeed = null) {
+  function stepDetourCrowdToward(target, dt, useDynamicPlan = true, desiredSpeed = null, options = null) {
     const startedAt = performance.now();
     const profileMeta = {
       useDynamicPlan: !!useDynamicPlan,
@@ -1526,8 +2427,10 @@ export function createCatPathfindingRuntime(ctx) {
       recreated: false,
     };
     try {
-      if (!CAT_NAV.useDetourCrowd || !recastState.ready || cat.group.position.y > 0.02) {
-        profileMeta.reason = !CAT_NAV.useDetourCrowd ? "disabled" : (!recastState.ready ? "recast-not-ready" : "not-grounded");
+      if (!CAT_NAV.useDetourCrowd || !recastState.ready) {
+        profileMeta.reason = !CAT_NAV.useDetourCrowd
+          ? "disabled"
+          : "recast-not-ready";
         return null;
       }
 
@@ -1535,20 +2438,24 @@ export function createCatPathfindingRuntime(ctx) {
       const baseSpeed = Number.isFinite(desiredSpeed) && desiredSpeed > 0 ? desiredSpeed : (cat.speed || 1);
       const detourSpeedScale = Math.max(0.1, Number.isFinite(CAT_NAV.detourSpeedScale) ? CAT_NAV.detourSpeedScale : 0.4);
       const agentSpeed = Math.max(0.2, baseSpeed * detourSpeedScale);
-
-      const obstacles = buildCatObstacles(!!useDynamicPlan, true);
+      const pathOptions = options && typeof options === "object" ? { ...options } : null;
+      const queryY = Number.isFinite(pathOptions?.queryY)
+        ? Number(pathOptions.queryY)
+        : (Number.isFinite(target?.y) ? Number(target.y) : (Number.isFinite(cat.group.position.y) ? Number(cat.group.position.y) : 0));
+      const obstacles = filterObstaclesForPathOptions(buildCatObstacles(!!useDynamicPlan, true), pathOptions);
       const crowdObstacles = attachObstacleMetadata(
         obstacles.filter((obs) => obstacleAffectsDetourCrowd(obs)),
-        false,
-        false
+        !!useDynamicPlan,
+        true
       );
-      const entry = buildRecastNavEntry(crowdObstacles, false, clearance);
+      const entry = buildRecastNavEntry(crowdObstacles, !!useDynamicPlan, clearance, pathOptions);
       if (!entry) {
         profileMeta.reason = "nav-entry-missing";
         return null;
       }
 
-      const signature = `${useDynamicPlan ? "dynamic" : "static"}|${entry.runtimeSignature || entry.signature}|${Math.round(clearance * 1000) / 1000}`;
+      const q = (v, quantum = 0.04) => Math.round((Number.isFinite(v) ? v : 0) / quantum);
+      const signature = `${useDynamicPlan ? "dynamic" : "static"}|${entry.runtimeSignature || entry.signature}|${Math.round(clearance * 1000) / 1000}|y:${q(queryY)}`;
       let recreated = false;
       if (!crowdState.crowd || crowdState.entry !== entry || crowdState.signature !== signature) {
         destroyCrowdState();
@@ -1563,10 +2470,10 @@ export function createCatPathfindingRuntime(ctx) {
 
       if (!crowdState.agent) {
         const nearest = entry.navQuery.findClosestPoint(
-          { x: cat.pos.x, y: 0, z: cat.pos.z },
-          { halfExtents: { x: 1.8, y: 1.8, z: 1.8 } }
+          { x: cat.pos.x, y: queryY, z: cat.pos.z },
+          { halfExtents: { x: 1.8, y: queryY <= 0.08 ? 1.8 : 0.6, z: 1.8 } }
         );
-        const startPos = nearest?.success ? nearest.point : { x: cat.pos.x, y: 0, z: cat.pos.z };
+        const startPos = nearest?.success ? nearest.point : { x: cat.pos.x, y: queryY, z: cat.pos.z };
         crowdState.agent = crowdState.crowd.addAgent(startPos, {
           radius: Math.max(0.05, clearance),
           height: 0.4,
@@ -1598,7 +2505,7 @@ export function createCatPathfindingRuntime(ctx) {
       const driftSq = (agentPos.x - cat.pos.x) ** 2 + (agentPos.z - cat.pos.z) ** 2;
       const teleportedToCat = recreated || driftSq > 0.32 * 0.32;
       if (teleportedToCat) {
-        agent.teleport({ x: cat.pos.x, y: 0, z: cat.pos.z });
+        agent.teleport({ x: cat.pos.x, y: queryY, z: cat.pos.z });
       }
 
       const snapRadius = Math.max(0.06, Number.isFinite(CAT_NAV.detourArriveSnapRadius) ? CAT_NAV.detourArriveSnapRadius : 0.1);
@@ -1613,7 +2520,7 @@ export function createCatPathfindingRuntime(ctx) {
       const targetChanged = reqDx * reqDx + reqDz * reqDz > 0.05 * 0.05;
       const now = getClockTime();
       if (targetChanged || now - crowdState.lastRequestAt > 0.4) {
-        const ok = agent.requestMoveTarget({ x: requestX, y: 0, z: requestZ });
+        const ok = agent.requestMoveTarget({ x: requestX, y: queryY, z: requestZ });
         if (!ok) {
           profileMeta.reason = "request-move-failed";
           return { ok: false, reason: "requestMoveTargetFailed" };
@@ -1631,8 +2538,8 @@ export function createCatPathfindingRuntime(ctx) {
       profileMeta.ok = true;
       return {
         ok: true,
-        position: new THREE.Vector3(nextPos.x, 0, nextPos.z),
-        velocity: new THREE.Vector3(velocity.x, 0, velocity.z),
+        position: new THREE.Vector3(nextPos.x, Number.isFinite(nextPos.y) ? nextPos.y : queryY, nextPos.z),
+        velocity: new THREE.Vector3(velocity.x, Number.isFinite(velocity.y) ? velocity.y : 0, velocity.z),
         state,
         recreated,
         teleportedToCat,
@@ -1642,32 +2549,33 @@ export function createCatPathfindingRuntime(ctx) {
         requestZ,
         targetChanged,
         lastRequestAge: now - crowdState.lastRequestAt,
-        agentPos: new THREE.Vector3(agentPos.x, 0, agentPos.z),
+        agentPos: new THREE.Vector3(agentPos.x, Number.isFinite(agentPos.y) ? agentPos.y : queryY, agentPos.z),
         stepDt,
+        queryY,
       };
     } finally {
       finishPathProfilerMetric("stepDetourCrowdToward", startedAt, profileMeta, 3.5);
     }
   }
 
-  function findNearestWalkablePoint(point, obstacles, clearance, queryY = null) {
+  function findNearestWalkablePoint(point, obstacles, clearance, queryY = null, pathOptions = null) {
     const startedAt = performance.now();
     const profileMeta = { cached: false, found: false };
     try {
       const y = Number.isFinite(queryY) ? queryY : (Number.isFinite(point?.y) ? point.y : 0);
       const q = (v, quantum = 0.08) => Math.round((Number.isFinite(v) ? v : 0) / quantum);
       const signature = getObstacleSignatureCached(obstacles, clearance);
-      const cacheKey = `${signature}|${q(point?.x)}:${q(point?.z)}:${q(y, 0.06)}`;
+      const cacheKey = `${signature}|${getPathOptionsCacheKey(pathOptions)}|${q(point?.x)}:${q(point?.z)}:${q(y, 0.06)}`;
       const now = getClockTime();
       const cached = nearestWalkableCache.get(cacheKey);
-      if (cached && now - cached.at <= NEAREST_WALKABLE_CACHE_TTL) {
+      if (cached && now - cached.at <= NEAREST_WALKABLE_CACHE_TTL && cached.point) {
         bumpPathProfilerCounter("nearestWalkableCacheHits");
         profileMeta.cached = true;
         profileMeta.found = true;
         return cached.point.clone();
       }
       bumpPathProfilerCounter("nearestWalkableCacheMisses");
-      if (!isCatPointBlocked(point.x, point.z, obstacles, clearance, y)) {
+      if (!isCatPointBlocked(point.x, point.z, obstacles, clearance, y, "plan", pathOptions)) {
         const exact = point.clone();
         nearestWalkableCache.set(cacheKey, { at: now, point: exact.clone() });
         if (nearestWalkableCache.size > NEAREST_WALKABLE_CACHE_LIMIT) {
@@ -1685,7 +2593,7 @@ export function createCatPathfindingRuntime(ctx) {
         for (let i = 0; i < steps; i++) {
           const t = (i / steps) * Math.PI * 2;
           candidate.set(point.x + Math.cos(t) * ringDist, y, point.z + Math.sin(t) * ringDist);
-          if (!isCatPointBlocked(candidate.x, candidate.z, obstacles, clearance, y)) {
+          if (!isCatPointBlocked(candidate.x, candidate.z, obstacles, clearance, y, "plan", pathOptions)) {
             const found = candidate.clone();
             nearestWalkableCache.set(cacheKey, { at: now, point: found.clone() });
             if (nearestWalkableCache.size > NEAREST_WALKABLE_CACHE_LIMIT) {
@@ -1697,13 +2605,8 @@ export function createCatPathfindingRuntime(ctx) {
           }
         }
       }
-      const fallback = point.clone();
-      nearestWalkableCache.set(cacheKey, { at: now, point: fallback.clone() });
-      if (nearestWalkableCache.size > NEAREST_WALKABLE_CACHE_LIMIT) {
-        const oldestKey = nearestWalkableCache.keys().next().value;
-        if (oldestKey != null) nearestWalkableCache.delete(oldestKey);
-      }
-      return fallback;
+      profileMeta.reason = "not-found";
+      return null;
     } finally {
       finishPathProfilerMetric("findNearestWalkablePoint", startedAt, profileMeta, 2.5);
     }
@@ -1719,7 +2622,7 @@ export function createCatPathfindingRuntime(ctx) {
     return !(hasNeg && hasPos);
   }
 
-  function buildTriangleNavMeshCore(obstacles, clearance, queryY = 0) {
+  function buildTriangleNavMeshCore(obstacles, clearance, queryY = 0, pathOptions = null) {
     const step = CAT_NAV.step;
     const minX = ROOM.minX + CAT_NAV.margin;
     const maxX = ROOM.maxX - CAT_NAV.margin;
@@ -1737,7 +2640,7 @@ export function createCatPathfindingRuntime(ctx) {
         const id = vertexId(ix, iz);
         const v = new THREE.Vector3(minX + ix * step, queryY, minZ + iz * step);
         vertices[id] = v;
-        if (!isCatPointBlocked(v.x, v.z, obstacles, clearance, queryY)) walkable[id] = 1;
+        if (!isCatPointBlocked(v.x, v.z, obstacles, clearance, queryY, "plan", pathOptions)) walkable[id] = 1;
       }
     }
 
@@ -1759,9 +2662,9 @@ export function createCatPathfindingRuntime(ctx) {
       const va = vertices[a];
       const vb = vertices[b];
       const vc = vertices[c];
-      if (!hasClearTravelLine(va, vb, obstacles, clearance, queryY)) return;
-      if (!hasClearTravelLine(vb, vc, obstacles, clearance, queryY)) return;
-      if (!hasClearTravelLine(vc, va, obstacles, clearance, queryY)) return;
+      if (!hasClearTravelLine(va, vb, obstacles, clearance, queryY, "plan", pathOptions)) return;
+      if (!hasClearTravelLine(vb, vc, obstacles, clearance, queryY, "plan", pathOptions)) return;
+      if (!hasClearTravelLine(vc, va, obstacles, clearance, queryY, "plan", pathOptions)) return;
       const triIndex = triangles.length;
       triangles.push({
         a,
@@ -1789,13 +2692,13 @@ export function createCatPathfindingRuntime(ctx) {
     return { vertices, triangles, pointTriCache: new Map() };
   }
 
-  function buildTriangleNavMesh(obstacles, clearance, queryY = 0) {
+  function buildTriangleNavMesh(obstacles, clearance, queryY = 0, pathOptions = null) {
     const startedAt = performance.now();
     const profileMeta = { cache: "miss", triangles: 0 };
     try {
       const q = (v, quantum = 0.08) => Math.round((Number.isFinite(v) ? v : 0) / quantum);
       const signature = getObstacleSignatureCached(obstacles, clearance);
-      const cacheKey = `${signature}|${q(clearance, 0.02)}|${q(queryY, 0.08)}`;
+      const cacheKey = `${signature}|${getPathOptionsCacheKey(pathOptions)}|${q(clearance, 0.02)}|${q(queryY, 0.08)}`;
       const now = getClockTime();
       const cached = triangleNavMeshCache.get(cacheKey);
       if (cached && now - cached.at <= TRIANGLE_NAV_CACHE_TTL && cached.navMesh) {
@@ -1805,7 +2708,7 @@ export function createCatPathfindingRuntime(ctx) {
         return cached.navMesh;
       }
       bumpPathProfilerCounter("triangleNavMeshCacheMisses");
-      const navMesh = buildTriangleNavMeshCore(obstacles, clearance, queryY);
+      const navMesh = buildTriangleNavMeshCore(obstacles, clearance, queryY, pathOptions);
       triangleNavMeshCache.set(cacheKey, { at: now, navMesh });
       if (triangleNavMeshCache.size > TRIANGLE_NAV_CACHE_LIMIT) {
         const oldestKey = triangleNavMeshCache.keys().next().value;
@@ -1928,6 +2831,10 @@ export function createCatPathfindingRuntime(ctx) {
 
       const freeStart = findNearestWalkablePoint(start, obstacles, navClearance, queryY);
       const freeGoal = findNearestWalkablePoint(goal, obstacles, navClearance, queryY);
+      if (!freeStart || !freeGoal) {
+        profileMeta.reason = !freeStart ? "no-walkable-start" : "no-walkable-goal";
+        return [];
+      }
       const navMesh = buildTriangleNavMesh(obstacles, navClearance, queryY);
       if (!navMesh.triangles.length) {
         profileMeta.reason = "no-triangles";
@@ -2051,7 +2958,7 @@ export function createCatPathfindingRuntime(ctx) {
     }
   }
 
-  function computeCatPath(start, goal, obstacles, queryY = null, allowFallback = null, recordDebug = true) {
+  function computeCatPath(start, goal, obstacles, queryY = null, allowFallback = null, recordDebug = true, pathOptions = null) {
     const startedAt = performance.now();
     const profileMeta = {
       mode: "",
@@ -2061,19 +2968,63 @@ export function createCatPathfindingRuntime(ctx) {
       allowFallback: shouldAllowFallbackPlanner(allowFallback),
       pathLen: 0,
     };
+    const solveDebug = {
+      mode: "",
+      reason: "",
+      pathLen: 0,
+      cached: false,
+      family: false,
+      includePickups: !!obstacles?._includePickups,
+      queryY: Number.isFinite(queryY)
+        ? queryY
+        : (Number.isFinite(start?.y) ? start.y : (Number.isFinite(goal?.y) ? goal.y : 0)),
+      allowFallback: !!profileMeta.allowFallback,
+      detourExpansions: 0,
+      detourCandidates: 0,
+      detourLegMisses: 0,
+      detourBestDepth: 0,
+      detourFound: false,
+    };
     try {
       const allowFallbackPlanner = profileMeta.allowFallback;
-      const navClearance = getCatPathClearance();
+      const resolvedPathOptions =
+        pathOptions && typeof pathOptions === "object"
+          ? pathOptions
+          : getActiveCatPathOptions();
+      const navClearance = resolvePathClearance(resolvePathClearanceOverride(resolvedPathOptions));
       const pathY = Number.isFinite(queryY)
         ? queryY
         : (Number.isFinite(start?.y) ? start.y : (Number.isFinite(goal?.y) ? goal.y : 0));
+      solveDebug.queryY = pathY;
+      solveDebug.allowFallback = !!allowFallbackPlanner;
+      if (resolvePathSupportSurfaceId(resolvedPathOptions)) {
+        solveDebug.supportSurfaceId = resolvePathSupportSurfaceId(resolvedPathOptions);
+      } else {
+        delete solveDebug.supportSurfaceId;
+      }
+      updateLastSolverDebug(solveDebug);
+      const startOnPlane = new THREE.Vector3(start.x, pathY, start.z);
+      const goalOnPlane = new THREE.Vector3(goal.x, pathY, goal.z);
+      const softStartEscape = buildStartOverlapEscapeObstacles(startOnPlane, obstacles, navClearance, pathY);
+      const runtimeAlignedStart = !softStartEscape
+        ? buildStartRuntimeAlignedObstacles(startOnPlane, obstacles, navClearance, pathY)
+        : null;
+      const planningObstacles = softStartEscape?.obstacles || runtimeAlignedStart?.obstacles || obstacles;
+      if (softStartEscape) {
+        solveDebug.softStartEscape = true;
+        solveDebug.softStartEscapeCount = softStartEscape.blockerLabels.length;
+        solveDebug.softStartEscapeLabels = softStartEscape.blockerLabels.join(",");
+      }
+      if (runtimeAlignedStart) {
+        solveDebug.startRuntimeAligned = true;
+        solveDebug.startRuntimeAlignedCount = runtimeAlignedStart.blockerLabels.length;
+        solveDebug.startRuntimeAlignedLabels = runtimeAlignedStart.blockerLabels.join(",");
+      }
       const q = (v) => Math.round((Number.isFinite(v) ? v : 0) / PATH_CACHE_QUANTUM);
-      const signature = getObstacleSignatureCached(obstacles, navClearance);
+      const signature = `${getObstacleSignatureCached(planningObstacles, navClearance)}|${getPathOptionsCacheKey(resolvedPathOptions)}`;
       const cacheKey = `${signature}|${allowFallbackPlanner ? 1 : 0}|${q(start?.x)}:${q(start?.z)}:${q(goal?.x)}:${q(goal?.z)}:${q(pathY)}`;
       const cached = pathSolveCache.get(cacheKey);
       const now = getClockTime();
-      const startOnPlane = new THREE.Vector3(start.x, pathY, start.z);
-      const goalOnPlane = new THREE.Vector3(goal.x, pathY, goal.z);
       const setDebugSnapshot = (mode, startPoint, goalPoint, edges = [], finalPath = []) => {
         if (!recordDebug) return;
         lastAStarDebug.mode = mode;
@@ -2084,19 +3035,41 @@ export function createCatPathfindingRuntime(ctx) {
         lastAStarDebug.timestamp = getClockTime();
       };
       if (cached && now - cached.at <= PATH_CACHE_TTL) {
-        bumpPathProfilerCounter("pathCacheHits");
-        const cachedPath = cached.path.map((p) => p.clone());
-        setDebugSnapshot(cached.mode, start, goal, [], cachedPath.map((p) => p.clone()));
-        profileMeta.cached = true;
-        profileMeta.mode = `cache:${cached.mode || "unknown"}`;
-        profileMeta.ok = cachedPath.length >= 2;
-        profileMeta.pathLen = cachedPath.length;
-        return cachedPath;
+        const cachedPath = Array.isArray(cached.path) ? cached.path.map((p) => p.clone()) : null;
+        const nextPoint = cachedPath && cachedPath.length > 1 ? (cachedPath[1] || cachedPath[0]) : null;
+        const prevPoint = cachedPath && cachedPath.length > 1 ? (cachedPath[cachedPath.length - 2] || cachedPath[cachedPath.length - 1]) : null;
+        const cachePathReusable = !!(
+          cachedPath &&
+          cachedPath.length >= 2 &&
+          nextPoint &&
+          prevPoint &&
+          hasClearTravelLine(startOnPlane, nextPoint, planningObstacles, navClearance, pathY, "plan", resolvedPathOptions) &&
+          hasClearTravelLine(prevPoint, goalOnPlane, planningObstacles, navClearance, pathY, "plan", resolvedPathOptions)
+        );
+        if (cachePathReusable) {
+          bumpPathProfilerCounter("pathCacheHits");
+          cachedPath[0] = startOnPlane.clone();
+          cachedPath[cachedPath.length - 1] = goalOnPlane.clone();
+          setDebugSnapshot(cached.mode, startOnPlane, goalOnPlane, [], cachedPath.map((p) => p.clone()));
+          profileMeta.cached = true;
+          profileMeta.mode = `cache:${cached.mode || "unknown"}`;
+          profileMeta.ok = cachedPath.length >= 2;
+          profileMeta.pathLen = cachedPath.length;
+          solveDebug.mode = profileMeta.mode;
+          solveDebug.cached = true;
+          solveDebug.pathLen = cachedPath.length;
+          return cachedPath;
+        }
+        if (cached) {
+          pathSolveCache.delete(cacheKey);
+          solveDebug.cacheRejected = true;
+          solveDebug.cacheRejectReason = "endpoint-join-blocked";
+        }
       }
       bumpPathProfilerCounter("pathCacheMisses");
       const familyKey = makePathFamilyKey(signature, allowFallbackPlanner, pathY, startOnPlane, goalOnPlane);
       const reuseKey = makeCorridorGoalReuseKey(signature, allowFallbackPlanner, pathY, goalOnPlane);
-      const familyPath = getCachedFamilyPath(familyKey, startOnPlane, goalOnPlane, obstacles, navClearance, pathY, now);
+      const familyPath = getCachedFamilyPath(familyKey, startOnPlane, goalOnPlane, planningObstacles, navClearance, pathY, now, resolvedPathOptions);
       if (familyPath) {
         bumpPathProfilerCounter("pathFamilyHits");
         setDebugSnapshot(familyPath.mode, startOnPlane, goalOnPlane, [], familyPath.path.map((p) => p.clone()));
@@ -2104,23 +3077,45 @@ export function createCatPathfindingRuntime(ctx) {
         profileMeta.mode = `family:${familyPath.mode || "unknown"}`;
         profileMeta.ok = familyPath.path.length >= 2;
         profileMeta.pathLen = familyPath.path.length;
+        solveDebug.mode = profileMeta.mode;
+        solveDebug.family = true;
+        solveDebug.pathLen = familyPath.path.length;
         return familyPath.path;
       }
       bumpPathProfilerCounter("pathFamilyMisses");
-      const freeStart = findNearestWalkablePoint(startOnPlane, obstacles, navClearance, pathY);
-      const freeGoal = findNearestWalkablePoint(goalOnPlane, obstacles, navClearance, pathY);
+      let freeStart = softStartEscape ? startOnPlane.clone() : findNearestWalkablePoint(startOnPlane, planningObstacles, navClearance, pathY, resolvedPathOptions);
+      let freeGoal = findNearestWalkablePoint(goalOnPlane, planningObstacles, navClearance, pathY, resolvedPathOptions);
+      const rescueSurfaceId = !softStartEscape ? resolvePathSupportSurfaceId(resolvedPathOptions) : "";
+      if (!freeStart && rescueSurfaceId) {
+        const rescueObstacles = filterObstaclesForSameSurfaceStartRescue(planningObstacles, rescueSurfaceId);
+        if (rescueObstacles !== planningObstacles) {
+          const rescuedStart = findNearestWalkablePoint(startOnPlane, rescueObstacles, navClearance, pathY, resolvedPathOptions);
+          if (rescuedStart) {
+            freeStart = rescuedStart;
+            solveDebug.startRescue = true;
+            solveDebug.startRescueSurfaceId = rescueSurfaceId;
+          }
+        }
+      }
+      if (!freeStart || !freeGoal) {
+        profileMeta.reason = !freeStart ? "no-walkable-start" : "no-walkable-goal";
+        solveDebug.reason = profileMeta.reason;
+        return [];
+      }
 
-      if (hasClearTravelLine(freeStart, freeGoal, obstacles, navClearance, pathY)) {
+      if (hasClearTravelLine(freeStart, freeGoal, planningObstacles, navClearance, pathY, "plan", resolvedPathOptions)) {
         const directPath = materializePathWithEndpoints(
           [freeStart.clone(), freeGoal.clone()],
           startOnPlane,
           freeStart,
           goalOnPlane,
           freeGoal,
-          obstacles,
+          planningObstacles,
           navClearance,
-          pathY
-        );        const directEdges = [];
+          pathY,
+          resolvedPathOptions
+        );
+        const directEdges = [];
         for (let i = 1; i < directPath.length; i++) {
           directEdges.push({
             from: directPath[i - 1].clone(),
@@ -2145,10 +3140,12 @@ export function createCatPathfindingRuntime(ctx) {
         profileMeta.mode = "direct";
         profileMeta.ok = true;
         profileMeta.pathLen = directPath.length;
+        solveDebug.mode = "direct";
+        solveDebug.pathLen = directPath.length;
         return directPath;
       }
 
-      const recastPath = computeRecastPath(freeStart, freeGoal, obstacles, navClearance, pathY);
+      const recastPath = computeRecastPath(freeStart, freeGoal, planningObstacles, navClearance, pathY, resolvedPathOptions);
       if (Array.isArray(recastPath) && recastPath.length >= 2) {
         const corePath = recastPath.map((p) => p.clone());
         corePath[0].copy(freeStart);
@@ -2159,10 +3156,12 @@ export function createCatPathfindingRuntime(ctx) {
           freeStart,
           goalOnPlane,
           freeGoal,
-          obstacles,
+          planningObstacles,
           navClearance,
-          pathY
-        );        const recastEdges = [];
+          pathY,
+          resolvedPathOptions
+        );
+        const recastEdges = [];
         for (let i = 1; i < path.length; i++) {
           recastEdges.push({
             from: path[i - 1].clone(),
@@ -2187,6 +3186,8 @@ export function createCatPathfindingRuntime(ctx) {
         profileMeta.mode = "recast";
         profileMeta.ok = true;
         profileMeta.pathLen = path.length;
+        solveDebug.mode = "recast";
+        solveDebug.pathLen = path.length;
         return path;
       }
 
@@ -2196,10 +3197,11 @@ export function createCatPathfindingRuntime(ctx) {
         freeStart,
         goalOnPlane,
         freeGoal,
-        obstacles,
+        planningObstacles,
         navClearance,
         pathY,
-        now
+        now,
+        resolvedPathOptions
       );
       if (corridorPath) {
         bumpPathProfilerCounter("pathCorridorHits");
@@ -2218,50 +3220,69 @@ export function createCatPathfindingRuntime(ctx) {
         profileMeta.mode = `corridor:${corridorPath.mode || "unknown"}`;
         profileMeta.ok = corridorPath.path.length >= 2;
         profileMeta.pathLen = corridorPath.path.length;
+        solveDebug.mode = profileMeta.mode;
+        solveDebug.family = true;
+        solveDebug.pathLen = corridorPath.path.length;
         return corridorPath.path;
       }
       bumpPathProfilerCounter("pathCorridorMisses");
 
-      if (!allowFallbackPlanner) {
-        setDebugSnapshot("none", startOnPlane, goalOnPlane, [], []);
+      const detourDebug = {};
+      const detourPath = buildNoFallbackObstacleDetourPath(
+        startOnPlane,
+        goalOnPlane,
+        planningObstacles,
+        navClearance,
+        pathY,
+        detourDebug,
+        resolvedPathOptions
+      );
+      Object.assign(solveDebug, detourDebug);
+      if (detourPath.length >= 2) {
+        setDebugSnapshot("recast-detour", startOnPlane, goalOnPlane, [], detourPath.map((p) => p.clone()));
         pathSolveCache.set(cacheKey, {
           at: now,
-          mode: "none",
-          path: [],
+          mode: "recast-detour",
+          path: detourPath.map((p) => p.clone()),
         });
+        storePathFamily(familyKey, now, "recast-detour", detourPath, reuseKey);
         if (pathSolveCache.size > PATH_CACHE_LIMIT) {
           const oldestKey = pathSolveCache.keys().next().value;
           if (oldestKey != null) pathSolveCache.delete(oldestKey);
         }
-        bumpPathProfilerCounter("computeCatPathNone");
-        profileMeta.mode = "none";
-        profileMeta.reason = "fallback-disabled";
-        return [];
+        bumpPathProfilerCounter("computeCatPathRecast");
+        profileMeta.mode = "recast-detour";
+        profileMeta.ok = true;
+        profileMeta.pathLen = detourPath.length;
+        solveDebug.mode = "recast-detour";
+        solveDebug.pathLen = detourPath.length;
+        return detourPath;
       }
 
-      const fallbackPath = computeFallbackCatPath(startOnPlane, goalOnPlane, obstacles, navClearance, pathY, recordDebug);
-      pathSolveCache.set(cacheKey, {
-        at: now,
-        mode: lastAStarDebug.mode,
-        path: fallbackPath.map((p) => p.clone()),
-      });
-      if (fallbackPath.length >= 2) storePathFamily(familyKey, now, lastAStarDebug.mode, fallbackPath, reuseKey);
-      if (pathSolveCache.size > PATH_CACHE_LIMIT) {
-        const oldestKey = pathSolveCache.keys().next().value;
-        if (oldestKey != null) pathSolveCache.delete(oldestKey);
-      }
-      bumpPathProfilerCounter(fallbackPath.length >= 2 ? "computeCatPathFallback" : "computeCatPathFallbackMiss");
-      profileMeta.mode = fallbackPath.length >= 2 ? "fallback" : "fallback-empty";
-      profileMeta.ok = fallbackPath.length >= 2;
-      profileMeta.pathLen = fallbackPath.length;
-      if (!profileMeta.ok) profileMeta.reason = "fallback-empty";
-      return fallbackPath;
+      setDebugSnapshot("none", startOnPlane, goalOnPlane, [], []);
+      bumpPathProfilerCounter("computeCatPathNone");
+      profileMeta.mode = "none";
+      profileMeta.reason = "recast-unresolved";
+      solveDebug.mode = "none";
+      solveDebug.reason = profileMeta.reason;
+      return [];
     } finally {
+      solveDebug.mode = profileMeta.mode || solveDebug.mode || "";
+      solveDebug.reason = profileMeta.reason || solveDebug.reason || "";
+      solveDebug.pathLen = profileMeta.pathLen || solveDebug.pathLen || 0;
+      solveDebug.cached = !!profileMeta.cached;
+      solveDebug.family = !!profileMeta.family;
+      solveDebug.includePickups = !!obstacles?._includePickups;
+      solveDebug.queryY = Number.isFinite(queryY)
+        ? queryY
+        : (Number.isFinite(start?.y) ? start.y : (Number.isFinite(goal?.y) ? goal.y : 0));
+      solveDebug.allowFallback = !!profileMeta.allowFallback;
+      updateLastSolverDebug(solveDebug);
       finishPathProfilerMetric("computeCatPath", startedAt, profileMeta, 5.5);
     }
   }
 
-  function isPathTraversable(path, obstacles, clearance = null, queryY = null) {
+  function isPathTraversable(path, obstacles, clearance = null, queryY = null, stage = "plan", pathOptions = null) {
     const navClearance = resolvePathClearance(clearance);
     if (!path || path.length < 2) return false;
     for (let i = 1; i < path.length; i++) {
@@ -2272,7 +3293,7 @@ export function createCatPathfindingRuntime(ctx) {
               ? (path[i - 1].y + path[i].y) * 0.5
               : 0
           );
-      if (!hasClearTravelLine(path[i - 1], path[i], obstacles, navClearance, segY)) return false;
+      if (!hasClearTravelLine(path[i - 1], path[i], obstacles, navClearance, segY, stage, pathOptions)) return false;
     }
     return true;
   }
@@ -2281,7 +3302,11 @@ export function createCatPathfindingRuntime(ctx) {
     const startedAt = performance.now();
     const profileMeta = { cached: false, ok: false };
     try {
-      const navClearance = getCatPathClearance();
+      const clearanceOverride =
+        options && typeof options === "object"
+          ? resolvePathClearanceOverride(options)
+          : null;
+      const navClearance = resolvePathClearance(clearanceOverride);
       const allowFallback = typeof options === "boolean"
         ? options
         : (
@@ -2322,17 +3347,26 @@ export function createCatPathfindingRuntime(ctx) {
         return !!ok;
       };
       const freeGoal = findNearestWalkablePoint(goalOnPlane, pathObstacles, navClearance, 0);
+      if (!freeGoal) {
+        return commit(false, "goal-not-walkable");
+      }
       const maxGoalSnap = Math.max(0.16, CAT_NAV.step * 1.25, navClearance * 1.9);
       if (freeGoal.distanceToSquared(goalOnPlane) > maxGoalSnap * maxGoalSnap) {
         return commit(false, "goal-snap-too-far");
       }
-      if (startOnPlane.distanceToSquared(freeGoal) < 0.1 * 0.1) {
+      if (
+        startOnPlane.distanceToSquared(freeGoal) < 0.1 * 0.1 &&
+        hasClearTravelLine(startOnPlane, freeGoal, pathObstacles, navClearance, 0)
+      ) {
         return commit(true, "already-near-goal");
       }
       if (hasClearTravelLine(startOnPlane, freeGoal, pathObstacles, navClearance, 0)) {
         return commit(true, "direct-line");
       }
-      const path = computeCatPath(startOnPlane, freeGoal, pathObstacles, 0, allowFallback, false);
+      const pathOptions = Number.isFinite(clearanceOverride)
+        ? { clearanceOverride }
+        : null;
+      const path = computeCatPath(startOnPlane, freeGoal, pathObstacles, 0, allowFallback, false, pathOptions);
       if (isPathTraversable(path, pathObstacles, navClearance, 0)) {
         return commit(true, "path-traversable");
       }
@@ -2372,14 +3406,29 @@ export function createCatPathfindingRuntime(ctx) {
       const pathOptions = getActiveCatPathOptions();
       const obstacles = filterObstaclesForPathOptions(builtObstacles, pathOptions);
       const modeKey = useDynamic ? "dynamic" : "static";
-      const targetOnPlane = new THREE.Vector3(target.x, pathY, target.z);
-      const allowEndpointPushableGoal = pathY <= 0.02;
+      const requestedTargetOnPlane = new THREE.Vector3(target.x, pathY, target.z);
+      const startOnPlane = new THREE.Vector3(cat.pos.x, pathY, cat.pos.z);
+      const allowEndpointPushableGoal = true;
       const pathObstacles = allowEndpointPushableGoal
-        ? filterEndpointPushableGoalObstacles(targetOnPlane, obstacles, navClearance, pathY, "plan")
+        ? filterEndpointPushableGoalObstacles(requestedTargetOnPlane, obstacles, navClearance, pathY, "plan")
         : obstacles;
-      const navSignature = getObstacleSignatureCached(pathObstacles, navClearance);
+      const targetOnPlane = resolveNearestPlanarPathTarget(
+        requestedTargetOnPlane,
+        pathObstacles,
+        navClearance,
+        pathY,
+        pathOptions,
+        startOnPlane
+      );
+      const navSignature = `${getObstacleSignatureCached(pathObstacles, navClearance)}|${getPathOptionsCacheKey(pathOptions)}`;
       if (pathOptions?.ignorePushableSurfaceId) profileMeta.ignorePushableSurfaceId = String(pathOptions.ignorePushableSurfaceId);
-      if (pathOptions?.supportSurfaceId) profileMeta.supportSurfaceId = String(pathOptions.supportSurfaceId);
+      if (targetOnPlane !== requestedTargetOnPlane) {
+        profileMeta.targetAdjusted = true;
+        profileMeta.targetAdjustFromX = requestedTargetOnPlane.x;
+        profileMeta.targetAdjustFromZ = requestedTargetOnPlane.z;
+        profileMeta.targetAdjustToX = targetOnPlane.x;
+        profileMeta.targetAdjustToZ = targetOnPlane.z;
+      }
       const navChanged = lastPlannedSignature[modeKey] !== navSignature;
       const now = getClockTime();
       const goalDelta = cat.nav.goal.distanceToSquared(targetOnPlane);
@@ -2390,19 +3439,58 @@ export function createCatPathfindingRuntime(ctx) {
           bumpPathProfilerCounter("ensureCatPathSkipped");
           profileMeta.action = "skip-existing";
           profileMeta.pathLen = cat.nav.path.length || 0;
+          updateLastSolverDebug({
+            ensureAction: profileMeta.action,
+            ensurePathLen: profileMeta.pathLen,
+            ensureUseDynamic: !!useDynamic,
+            ensureTargetAdjusted: profileMeta.targetAdjusted ? 1 : 0,
+            ensureTargetAdjustFrom: profileMeta.targetAdjusted
+              ? `${profileMeta.targetAdjustFromX.toFixed(2)},${profileMeta.targetAdjustFromZ.toFixed(2)}`
+              : "",
+            ensureTargetAdjustTo: profileMeta.targetAdjusted
+              ? `${profileMeta.targetAdjustToX.toFixed(2)},${profileMeta.targetAdjustToZ.toFixed(2)}`
+              : "",
+          });
           return;
         }
         if (navChanged && goalUnchanged && !allowNavRefreshNow) {
           bumpPathProfilerCounter("ensureCatPathThrottled");
           profileMeta.action = "skip-throttle";
           profileMeta.pathLen = cat.nav.path.length || 0;
+          updateLastSolverDebug({
+            ensureAction: profileMeta.action,
+            ensurePathLen: profileMeta.pathLen,
+            ensureUseDynamic: !!useDynamic,
+            ensureTargetAdjusted: profileMeta.targetAdjusted ? 1 : 0,
+            ensureTargetAdjustFrom: profileMeta.targetAdjusted
+              ? `${profileMeta.targetAdjustFromX.toFixed(2)},${profileMeta.targetAdjustFromZ.toFixed(2)}`
+              : "",
+            ensureTargetAdjustTo: profileMeta.targetAdjusted
+              ? `${profileMeta.targetAdjustToX.toFixed(2)},${profileMeta.targetAdjustToZ.toFixed(2)}`
+              : "",
+          });
           return;
         }
       }
       activeNavMeshMode.includePickups = !!useDynamic;
       activeNavMeshMode.includeClosePickups = true;
-      const startOnPlane = new THREE.Vector3(cat.pos.x, pathY, cat.pos.z);
-      cat.nav.path = computeCatPath(startOnPlane, targetOnPlane, pathObstacles, pathY, allowFallback, true);
+      cat.nav.path = computeCatPath(startOnPlane, targetOnPlane, pathObstacles, pathY, allowFallback, true, pathOptions);
+      if ((cat.nav.path?.length || 0) <= 1) {
+        const solverDebug = cat.nav?.lastSolverDebug && typeof cat.nav.lastSolverDebug === "object"
+          ? cat.nav.lastSolverDebug
+          : null;
+        const blockerInfo = solverDebug?.recastBlockedObstacle
+          ? ` blocker=${solverDebug.recastBlockedObstacle}${solverDebug?.recastBlockedPathType ? `/${solverDebug.recastBlockedPathType}` : ""}${Number.isFinite(solverDebug?.recastBlockedSegment) && solverDebug.recastBlockedSegment > 0 ? ` seg=${solverDebug.recastBlockedSegment}` : ""}`
+          : "";
+        const blockVariants = `${solverDebug?.recastSmoothedBlock ? ` smooth=${solverDebug.recastSmoothedBlock}` : ""}${solverDebug?.recastRawBlock ? ` raw=${solverDebug.recastRawBlock}` : ""}`;
+        const projectionInfo = `${solverDebug?.recastStartProjection ? ` startProj=${solverDebug.recastStartProjection}` : ""}${solverDebug?.recastGoalProjection ? ` goalProj=${solverDebug.recastGoalProjection}` : ""}`;
+        const pointInfo = `${solverDebug?.recastStartPointBlock ? ` startBlk=${solverDebug.recastStartPointBlock}` : ""}${solverDebug?.recastGoalPointBlock ? ` goalBlk=${solverDebug.recastGoalPointBlock}` : ""}${solverDebug?.recastSampleNavProbe ? ` sampleNav=${solverDebug.recastSampleNavProbe}` : ""}${solverDebug?.recastSolveInputPresence ? ` ${solverDebug.recastSolveInputPresence}` : ""}`;
+        const pathShapeInfo = `${solverDebug?.recastRawFirstSegment ? ` ${solverDebug.recastRawFirstSegment}` : ""}${solverDebug?.recastSmoothFirstSegment ? ` ${solverDebug.recastSmoothFirstSegment}` : ""}${solverDebug?.recastRawPathPreview ? ` ${solverDebug.recastRawPathPreview}` : ""}${solverDebug?.recastSmoothPathPreview ? ` ${solverDebug.recastSmoothPathPreview}` : ""}`;
+        traceFunction(
+          "noPathSolveV14",
+          `reason=${solverDebug?.reason || "na"} recast=${solverDebug?.recastReason || "na"} ensure=${profileMeta.action || "compute"}${blockerInfo}${blockVariants}${projectionInfo}${pointInfo}${pathShapeInfo} target=${Number.isFinite(targetOnPlane?.x) ? targetOnPlane.x.toFixed(2) : "na"},${Number.isFinite(targetOnPlane?.z) ? targetOnPlane.z.toFixed(2) : "na"}`
+        );
+      }
       cat.nav.index = cat.nav.path.length > 1 ? 1 : 0;
       cat.nav.goal.copy(targetOnPlane);
       cat.nav.repathAt = now + CAT_NAV.repathInterval;
@@ -2410,6 +3498,18 @@ export function createCatPathfindingRuntime(ctx) {
       bumpPathProfilerCounter("ensureCatPathComputed");
       profileMeta.pathLen = cat.nav.path.length || 0;
     } finally {
+      updateLastSolverDebug({
+        ensureAction: profileMeta.action || "",
+        ensurePathLen: profileMeta.pathLen || 0,
+        ensureUseDynamic: !!useDynamic,
+        ensureTargetAdjusted: profileMeta.targetAdjusted ? 1 : 0,
+        ensureTargetAdjustFrom: profileMeta.targetAdjusted
+          ? `${profileMeta.targetAdjustFromX.toFixed(2)},${profileMeta.targetAdjustFromZ.toFixed(2)}`
+          : "",
+        ensureTargetAdjustTo: profileMeta.targetAdjusted
+          ? `${profileMeta.targetAdjustToX.toFixed(2)},${profileMeta.targetAdjustToZ.toFixed(2)}`
+          : "",
+      });
       finishPathProfilerMetric("ensureCatPath", startedAt, profileMeta, 4.5);
     }
   }
@@ -2459,6 +3559,7 @@ export function createCatPathfindingRuntime(ctx) {
     lastAStarDebug.edges = [];
     lastAStarDebug.finalPath = [];
     lastAStarDebug.timestamp = 0;
+    if (cat.nav && typeof cat.nav === "object") cat.nav.lastSolverDebug = {};
   }
 
   function getLastAStarDebugData() {

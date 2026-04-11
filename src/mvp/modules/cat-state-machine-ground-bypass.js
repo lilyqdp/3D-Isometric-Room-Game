@@ -17,7 +17,7 @@ export function createCatStateMachineGroundBypassRuntime(ctx) {
   const BYPASS_EXTEND_WINDOW = 0.18;
   const BYPASS_CACHE_TTL_DYNAMIC = 0.12;
   const BYPASS_CACHE_TTL_STATIC = 0.22;
-  const REACHABILITY_OPTIONS = Object.freeze({ allowFallback: true, allowEndpointPushableGoal: true });
+  const REACHABILITY_OPTIONS = Object.freeze({ allowFallback: false, allowEndpointPushableGoal: true });
 
   function clearGroundBypassMode() {
     cat.nav.dynamicBypassActive = false;

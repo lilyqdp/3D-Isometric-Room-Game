@@ -225,6 +225,38 @@ export function createCatRecoveryRuntime(ctx) {
     return true;
   }
 
+  function nudgeNearbyPickupsAwayFromCat(radius = CAT_COLLISION.catBodyRadius * 3) {
+    const pushRadius = Math.max(0.2, Number.isFinite(radius) ? radius : CAT_COLLISION.catBodyRadius * 2);
+    let nudgedCount = 0;
+    for (const p of pickups) {
+      if (!p.body) continue;
+      if (isDraggingPickup(p)) continue;
+      if (p.body.position.y > 1.2) continue;
+      let dx = p.body.position.x - cat.pos.x;
+      let dz = p.body.position.z - cat.pos.z;
+      let d = Math.hypot(dx, dz);
+      if (d > pushRadius) continue;
+      if (d < 1e-4) {
+        dx = Math.sin(cat.group.rotation.y);
+        dz = Math.cos(cat.group.rotation.y);
+        d = 1;
+      }
+      const nx = dx / d;
+      const nz = dz / d;
+      const minDist = Math.max(pushRadius + 0.02, 0.28 + pickupRadius(p) * 0.9 + 0.08);
+      p.body.position.x = cat.pos.x + nx * minDist;
+      p.body.position.z = cat.pos.z + nz * minDist;
+      p.body.velocity.x += nx * (p.type === "trash" ? 1.35 : 1.05);
+      p.body.velocity.z += nz * (p.type === "trash" ? 1.35 : 1.05);
+      p.body.velocity.y = Math.max(p.body.velocity.y, p.type === "trash" ? 0.82 : 0.64);
+      p.body.wakeUp();
+      p.inMotion = true;
+      if (p.motion === "drag") p.motion = "bounce";
+      nudgedCount += 1;
+    }
+    return nudgedCount;
+  }
+
   function getCurrentGroundGoal() {
     if (cat.state === "patrol") return cat.patrolTarget;
     if (cat.state === "toDesk") return cat.jumpAnchor || bestDeskJumpAnchor(cat.pos);
@@ -313,6 +345,7 @@ export function createCatRecoveryRuntime(ctx) {
   return {
     recoverCatFromPickupTrap,
     nudgeBlockingPickupAwayFromCat,
+    nudgeNearbyPickupsAwayFromCat,
     getCurrentGroundGoal,
     keepCatAwayFromCup,
   };

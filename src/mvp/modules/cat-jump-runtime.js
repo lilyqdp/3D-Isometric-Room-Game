@@ -105,7 +105,11 @@ export function createCatJumpRuntime(ctx) {
 
   function resolveSurfaceIdForPoint(point, y, preferredSurfaceId = "") {
     const explicit = String(preferredSurfaceId || "");
-    if (explicit) return explicit;
+    if (explicit) {
+      if (explicit === "floor") return "floor";
+      const explicitSurface = typeof getSurfaceById === "function" ? getSurfaceById(explicit) : null;
+      if (explicitSurface) return explicit;
+    }
     if (y <= 0.08) return "floor";
 
     for (const surfaceId of [
@@ -294,12 +298,24 @@ export function createCatJumpRuntime(ctx) {
     const downLandingReady = isDownJump && u >= 0.9 && y <= cat.jump.toY + 0.02;
     if (u >= 1 || downLandingReady) {
       const landedSurfaceId = resolveSurfaceIdForPoint(cat.jump.to, cat.jump.toY, cat.jump.toSurfaceId);
+      const landedSurface = landedSurfaceId !== "floor" && typeof getSurfaceById === "function"
+        ? getSurfaceById(landedSurfaceId)
+        : null;
+      const landedY = landedSurfaceId === "floor"
+        ? 0
+        : (
+            Number.isFinite(landedSurface?.y)
+              ? Number(landedSurface.y)
+              : Number.isFinite(cat.jump.toY)
+                ? cat.jump.toY
+                : Math.max(0.02, Number(cat.group.position.y) || 0.02)
+          );
       traceFunction(
         "updateJump",
         `landed=${landedSurfaceId || "na"} next=${cat.jump.nextState || "na"} down=${isDownJump ? 1 : 0}`
       );
       cat.pos.copy(cat.jump.to);
-      cat.group.position.set(cat.pos.x, cat.jump.toY, cat.pos.z);
+      cat.group.position.set(cat.pos.x, landedY, cat.pos.z);
       const next = cat.jump.nextState;
       clearActiveJump();
       commitAuthoritativeSurface(landedSurfaceId, "jump-landed", 1.2);
