@@ -256,9 +256,11 @@ export function createCatSteeringRuntime(ctx) {
     return base * speedScale;
   }
 
-  function updateDriveSpeed(targetSpeed, dt) {
+  function updateDriveSpeed(targetSpeed, dt, options = null) {
     const accel = Math.max(0.1, Number.isFinite(CAT_NAV.accel) ? CAT_NAV.accel : 3.2);
-    const decel = Math.max(0.1, Number.isFinite(CAT_NAV.decel) ? CAT_NAV.decel : 5.2);
+    const decelBase = Math.max(0.1, Number.isFinite(CAT_NAV.decel) ? CAT_NAV.decel : 5.2);
+    const decelMultiplier = Math.max(0.1, Number.isFinite(options?.decelMultiplier) ? options.decelMultiplier : 1);
+    const decel = decelBase * decelMultiplier;
     const current = Number.isFinite(cat.nav.driveSpeed) ? cat.nav.driveSpeed : 0;
     const target = Math.max(0, targetSpeed);
     const rate = target >= current ? accel : decel;
@@ -276,6 +278,7 @@ export function createCatSteeringRuntime(ctx) {
     cat.nav.turnBias = 0;
     cat.nav.turnDirLock = 0;
     cat.nav.locomotionHoldT = 0;
+    cat.nav.runRampDistance = 0;
   }
 
   function setLocomotionIntent(clipKey, clipScale) {
@@ -296,6 +299,12 @@ export function createCatSteeringRuntime(ctx) {
     cat.nav.smoothedSpeed = smooth;
     cat.nav.lastSpeed = smooth;
     cat.nav.speedNorm = THREE.MathUtils.clamp(smooth / Math.max(speedRef, 1e-5), 0, 1.75);
+    if (cat.nav.runLocomotionActive) {
+      const prevRunRampDistance = Number.isFinite(cat.nav.runRampDistance) ? cat.nav.runRampDistance : 0;
+      cat.nav.runRampDistance = prevRunRampDistance + Math.max(0, moved);
+    } else {
+      cat.nav.runRampDistance = 0;
+    }
   }
 
   function rotateCatToward(yaw, dt) {
@@ -495,6 +504,33 @@ export function createCatSteeringRuntime(ctx) {
     cat.nav.runLocomotionActive = false;
   }
 
+  function getDistanceToNextHardTurn(minTurnAngle = null) {
+    const path = Array.isArray(cat.nav?.path) ? cat.nav.path : null;
+    if (!path || path.length < 3) return Infinity;
+    const startIndex = THREE.MathUtils.clamp(Number.isFinite(cat.nav.index) ? cat.nav.index : 1, 1, path.length - 1);
+    const hardTurnAngle = Math.max(0.2, Number.isFinite(minTurnAngle) ? minTurnAngle : (Number.isFinite(CAT_NAV.runHardTurnAngle) ? CAT_NAV.runHardTurnAngle : 0.72));
+    let distance = cat.pos.distanceTo(path[startIndex]);
+    for (let i = startIndex; i < path.length - 1; i++) {
+      const prev = i === 0 ? cat.pos : path[i - 1];
+      const curr = path[i];
+      const next = path[i + 1];
+      if (!prev || !curr || !next) continue;
+      const v1x = curr.x - prev.x;
+      const v1z = curr.z - prev.z;
+      const v2x = next.x - curr.x;
+      const v2z = next.z - curr.z;
+      const len1 = Math.hypot(v1x, v1z);
+      const len2 = Math.hypot(v2x, v2z);
+      if (len1 > 1e-4 && len2 > 1e-4) {
+        const dot = THREE.MathUtils.clamp((v1x * v2x + v1z * v2z) / (len1 * len2), -1, 1);
+        const turnAngle = Math.acos(dot);
+        if (turnAngle >= hardTurnAngle) return distance;
+      }
+      distance += curr.distanceTo(next);
+    }
+    return Infinity;
+  }
+
   function shouldUseRunLocomotion(
     basePreferRun,
     distToChase,
@@ -548,27 +584,36 @@ export function createCatSteeringRuntime(ctx) {
       );
     const closeTargetThreshold = Math.max(0.46, disableDist + 0.08);
     const closeToTarget = Number.isFinite(distToTarget) && distToTarget <= closeTargetThreshold;
-    if (unstable || closeToTarget || nearJumpPoint || Math.abs(rawYawDelta) > maxYawDelta) {
+    const minStraightDistance = Math.max(0.5, Number.isFinite(CAT_NAV.runMinStraightDistance) ? CAT_NAV.runMinStraightDistance : 2.0);
+    const distanceToNextHardTurn = getDistanceToNextHardTurn();
+    const hardTurnSoon = Number.isFinite(distanceToNextHardTurn) && distanceToNextHardTurn <= minStraightDistance;
+    const postSurfaceHopRunCooldown = Math.max(0, Number.isFinite(CAT_NAV.postSurfaceHopRunCooldown) ? CAT_NAV.postSurfaceHopRunCooldown : 0.85);
+    const justCompletedSurfaceHop = clock - Math.max(0, Number(cat.nav.lastSurfaceHopAt) || 0) < postSurfaceHopRunCooldown;
+    if (unstable || closeToTarget || nearJumpPoint || hardTurnSoon || justCompletedSurfaceHop || Math.abs(rawYawDelta) > maxYawDelta) {
       cat.nav.runLocomotionActive = false;
       return false;
     }
-    const metric = Math.max(
-      Number.isFinite(distToChase) ? distToChase : 0,
-      Number.isFinite(distToTarget) ? distToTarget : 0
-    );
+    const targetMetric = Number.isFinite(distToTarget) ? distToTarget : 0;
     const wasRunning = !!cat.nav.runLocomotionActive;
     const threshold = wasRunning ? disableDist : enableDist;
-    const allowRun = metric >= threshold;
+    const allowRun = targetMetric >= threshold;
     cat.nav.runLocomotionActive = allowRun;
     return allowRun;
   }
 
   function shouldPreferWalkNearEndpoint(distToChase, distToTarget) {
+    const walkTransitionDistance = Math.max(
+      0.35,
+      Number.isFinite(CAT_NAV.runWalkTransitionDistance) ? CAT_NAV.runWalkTransitionDistance : 1.0
+    );
     const endpointMetric = Math.min(
       Number.isFinite(distToChase) ? distToChase : Infinity,
       Number.isFinite(distToTarget) ? distToTarget : Infinity
     );
-    return endpointMetric <= 0.42 || (Number.isFinite(distToTarget) && distToTarget <= 0.5);
+    return (
+      endpointMetric <= walkTransitionDistance ||
+      (Number.isFinite(distToTarget) && distToTarget <= walkTransitionDistance)
+    );
   }
 
   function getSharedProgressThreshold(step) {
@@ -665,6 +710,35 @@ export function createCatSteeringRuntime(ctx) {
     if (turnOnly) locomotionScale = 1.0;
     else locomotionScale = THREE.MathUtils.clamp(locomotionScale, 0.55, maxLocoScale);
 
+    const endpointDistance = Math.min(
+      Number.isFinite(distToChase) ? distToChase : Infinity,
+      Number.isFinite(distToTarget) ? distToTarget : Infinity
+    );
+    const walkTransitionDistance = Math.max(
+      0.35,
+      Number.isFinite(CAT_NAV.runWalkTransitionDistance) ? CAT_NAV.runWalkTransitionDistance : 1.0
+    );
+    const endpointSlowdownDistance = Math.max(
+      walkTransitionDistance,
+      Number.isFinite(CAT_NAV.endpointSlowdownDistance) ? CAT_NAV.endpointSlowdownDistance : 2.0
+    );
+    const runAccelerationDistance = Math.max(
+      endpointSlowdownDistance,
+      Number.isFinite(CAT_NAV.runAccelerationDistance) ? CAT_NAV.runAccelerationDistance : 4.0
+    );
+    const endpointWalkSpeedScale = THREE.MathUtils.clamp(
+      Number.isFinite(CAT_NAV.endpointWalkSpeedScale) ? CAT_NAV.endpointWalkSpeedScale : 0.72,
+      0.35,
+      1.0
+    );
+    const endpointSlowdownAlpha = Number.isFinite(endpointDistance)
+      ? THREE.MathUtils.smoothstep(THREE.MathUtils.clamp(endpointDistance / endpointSlowdownDistance, 0, 1), 0, 1)
+      : 1;
+    const runRampDistance = Number.isFinite(cat.nav.runRampDistance) ? cat.nav.runRampDistance : 0;
+    const runRampAlpha = runActive
+      ? THREE.MathUtils.smoothstep(THREE.MathUtils.clamp(runRampDistance / runAccelerationDistance, 0, 1), 0, 1)
+      : 1;
+
     const profile = getLocomotionProfile(locomotionClip);
     const turnRate = Math.max(
       0.28,
@@ -675,8 +749,21 @@ export function createCatSteeringRuntime(ctx) {
     const yawStep = THREE.MathUtils.clamp(rawYawDelta, -maxYawStep, maxYawStep);
     cat.group.rotation.y += yawStep;
 
-    const clipPlanarSpeed = Math.max(0, profile.planarSpeed) * locomotionScale;
-    const moveSpeed = updateDriveSpeed(turnOnly ? 0 : clipPlanarSpeed, dt);
+    let clipPlanarSpeed = Math.max(0, profile.planarSpeed) * locomotionScale;
+    if (!turnOnly && runActive) {
+      const startupSpeedScale = THREE.MathUtils.lerp(endpointWalkSpeedScale, 1, runRampAlpha);
+      clipPlanarSpeed *= startupSpeedScale;
+    }
+    if (!turnOnly && nearEndpoint) {
+      const slowdownScale = THREE.MathUtils.lerp(endpointWalkSpeedScale, 1, endpointSlowdownAlpha);
+      clipPlanarSpeed *= slowdownScale;
+    }
+    const endpointDecelMultiplier = nearEndpoint
+      ? Math.max(1, Number.isFinite(CAT_NAV.endpointDecelMultiplier) ? CAT_NAV.endpointDecelMultiplier : 2.35)
+      : 1;
+    const moveSpeed = updateDriveSpeed(turnOnly ? 0 : clipPlanarSpeed, dt, {
+      decelMultiplier: endpointDecelMultiplier,
+    });
     const step = turnOnly ? 0 : Math.min(distToChase, moveSpeed * dt);
     const commandedSpeed = Math.max(
       0.05,

@@ -1277,6 +1277,19 @@ export function createCatModelRuntime(ctx) {
       key === "runL" ||
       key === "runR";
     const isTurnKey = (key) => key === "turn90L" || key === "turn90R" || key === "turn45L" || key === "turn45R";
+    const gaitFamilyKey = (key) => {
+      if (key === 'walkF' || key === 'runF') return 'forward';
+      if (key === 'walkL' || key === 'runL') return 'left';
+      if (key === 'walkR' || key === 'runR') return 'right';
+      return '';
+    };
+    const isRunWalkTransition =
+      targetKey !== prevTargetKey &&
+      isWalkKey(targetKey) &&
+      isWalkKey(prevTargetKey) &&
+      targetKey.startsWith('run') !== prevTargetKey.startsWith('run') &&
+      gaitFamilyKey(targetKey) !== '' &&
+      gaitFamilyKey(targetKey) === gaitFamilyKey(prevTargetKey);
 
     if (blendingOutOfCatnipRecover) {
       if (catObject.catnipRecoverBlendTargetKey !== targetKey) {
@@ -1346,10 +1359,11 @@ export function createCatModelRuntime(ctx) {
     const requestedScale = Number.isFinite(catObject.locomotion?.clipScale) ? catObject.locomotion.clipScale : 0;
     const gaitNorm = THREE.MathUtils.clamp(speedNorm, 0, 1.7);
     const desiredScale = requestedScale > 1e-3 ? requestedScale : THREE.MathUtils.clamp(0.2 + gaitNorm * 1.05, 0.2, 1.45);
+    const clipScaleDamp = target === idleAction ? 18 : (isRunWalkTransition ? 6.5 : 14);
     catObject.clipWalkScale = THREE.MathUtils.damp(
       Number.isFinite(catObject.clipWalkScale) ? catObject.clipWalkScale : 0,
       target === idleAction ? 0 : desiredScale,
-      target === idleAction ? 18 : 14,
+      clipScaleDamp,
       Math.max(dt, 0)
     );
     const activeScale = Math.max(0.01, catObject.clipWalkScale);
@@ -1393,6 +1407,15 @@ export function createCatModelRuntime(ctx) {
           weightRate = targetWeight > currentWeight ? 10 : 7;
         } else if (isTurnKey(actionKey)) {
           weightRate = targetWeight > currentWeight ? 10 : 16;
+        }
+      }
+      if (isRunWalkTransition) {
+        if (actionKey === targetKey) {
+          weightRate = targetWeight > currentWeight ? 4.2 : 9;
+        } else if (actionKey === prevTargetKey) {
+          weightRate = targetWeight > currentWeight ? 7 : 5.2;
+        } else if (isWalkKey(actionKey)) {
+          weightRate = targetWeight > currentWeight ? 8 : 10;
         }
       }
       let nextWeight = THREE.MathUtils.damp(currentWeight, targetWeight, weightRate, Math.max(dt, 0));
