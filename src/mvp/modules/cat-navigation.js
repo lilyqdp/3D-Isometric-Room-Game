@@ -54,6 +54,7 @@ export function createCatNavigationRuntime(ctx) {
     cup,
     pickupRadius,
     getClockTime,
+    recordFunctionTrace,
     shouldRecordPathProfiler,
   });
 
@@ -65,16 +66,16 @@ export function createCatNavigationRuntime(ctx) {
     return pathRuntime.buildCatObstacles(includePickups, includeClosePickups);
   }
 
-  function isCatPointBlocked(x, z, obstacles, clearance = null, queryY = 0, stage = "plan") {
-    return pathRuntime.isCatPointBlocked(x, z, obstacles, clearance, queryY, stage);
+  function isCatPointBlocked(x, z, obstacles, clearance = null, queryY = 0, stage = "plan", pathOptions = null) {
+    return pathRuntime.isCatPointBlocked(x, z, obstacles, clearance, queryY, stage, pathOptions);
   }
 
   function getCatPathClearance() {
     return pathRuntime.getCatPathClearance();
   }
 
-  function hasClearTravelLine(a, b, obstacles, clearance = null, queryY = 0, stage = "plan") {
-    return pathRuntime.hasClearTravelLine(a, b, obstacles, clearance, queryY, stage);
+  function hasClearTravelLine(a, b, obstacles, clearance = null, queryY = 0, stage = "plan", pathOptions = null) {
+    return pathRuntime.hasClearTravelLine(a, b, obstacles, clearance, queryY, stage, pathOptions);
   }
 
   function catPathDistance(path) {
@@ -93,12 +94,12 @@ export function createCatNavigationRuntime(ctx) {
     return pathRuntime.getLastAStarDebugData();
   }
 
-  function computeCatPath(start, goal, obstacles, queryY = null, allowFallback = null, recordDebug = true) {
-    return pathRuntime.computeCatPath(start, goal, obstacles, queryY, allowFallback, recordDebug);
+  function computeCatPath(start, goal, obstacles, queryY = null, allowFallback = null, recordDebug = true, pathOptions = null) {
+    return pathRuntime.computeCatPath(start, goal, obstacles, queryY, allowFallback, recordDebug, pathOptions);
   }
 
-  function isPathTraversable(path, obstacles, clearance = null, queryY = null) {
-    return pathRuntime.isPathTraversable(path, obstacles, clearance, queryY);
+  function isPathTraversable(path, obstacles, clearance = null, queryY = null, stage = "plan", pathOptions = null) {
+    return pathRuntime.isPathTraversable(path, obstacles, clearance, queryY, stage, pathOptions);
   }
 
   function canReachGroundTarget(start, goal, obstacles, options = null) {
@@ -117,8 +118,8 @@ export function createCatNavigationRuntime(ctx) {
     return pathRuntime.invalidateNavCaches();
   }
 
-  function stepDetourCrowdToward(target, dt, useDynamicPlan = true, desiredSpeed = null) {
-    return pathRuntime.stepDetourCrowdToward(target, dt, useDynamicPlan, desiredSpeed);
+  function stepDetourCrowdToward(target, dt, useDynamicPlan = true, desiredSpeed = null, options = null) {
+    return pathRuntime.stepDetourCrowdToward(target, dt, useDynamicPlan, desiredSpeed, options);
   }
 
   function resetDetourCrowd() {
@@ -199,6 +200,8 @@ export function createCatNavigationRuntime(ctx) {
     ensureCatPathNoFallback,
     stepDetourCrowdToward,
     canReachGroundTarget,
+    nudgeBlockingPickupAwayFromCat: recoveryRuntime.nudgeBlockingPickupAwayFromCat,
+    nudgeNearbyPickupsAwayFromCat: recoveryRuntime.nudgeNearbyPickupsAwayFromCat,
   });
 
   return {

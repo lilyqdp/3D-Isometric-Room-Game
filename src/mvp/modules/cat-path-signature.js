@@ -5,8 +5,9 @@ export function createCatPathSignatureRuntime(ctx) {
     return Math.round(v / quantum) * quantum;
   }
 
-  function buildTileCacheDynamicSpecs(obstacles, includePickups) {
+  function buildTileCacheDynamicSpecs(obstacles, includePickups, clearance = 0) {
     if (!Array.isArray(obstacles) || !includePickups) return [];
+    const clearancePad = Math.max(0, Number.isFinite(clearance) ? clearance : 0);
     const specs = [];
     for (const obs of obstacles) {
       const mode = String(obs?.mode || "hard");
@@ -18,6 +19,7 @@ export function createCatPathSignatureRuntime(ctx) {
       // nav cutouts, even though they are still pushable at runtime.
       if (mode !== "hard" && !isPickupObstacle) continue;
       const navPad = Math.max(0, Number(obs?.navPad) || 0);
+      const recastPad = navPad + clearancePad;
       if (obs.tag === "cup") {
         specs.push({
           key: "cup",
@@ -26,9 +28,9 @@ export function createCatPathSignatureRuntime(ctx) {
           x: obs.x,
           y: Number.isFinite(obs.y) ? obs.y : 0.1,
           z: obs.z,
-          radius: Math.max(0.03, (obs.r || CUP_COLLISION.radius || 0.08) + navPad),
+          radius: Math.max(0.03, (obs.r || CUP_COLLISION.radius || 0.08) + recastPad),
           height: Math.max(0.12, obs.h || (CUP_COLLISION.waterHeight || 0.27)),
-          navPad,
+          navPad: recastPad,
         });
       } else if (obs.kind === "obb" && obs.pickupKey) {
         specs.push({
@@ -38,11 +40,11 @@ export function createCatPathSignatureRuntime(ctx) {
           x: obs.x,
           y: Number.isFinite(obs.y) ? obs.y : 0.1,
           z: obs.z,
-          hx: Math.max(0.03, (obs.hx || 0.1) + navPad),
+          hx: Math.max(0.03, (obs.hx || 0.1) + recastPad),
           hy: Math.max(0.05, (obs.h || 0.2) * 0.5),
-          hz: Math.max(0.03, (obs.hz || 0.1) + navPad),
+          hz: Math.max(0.03, (obs.hz || 0.1) + recastPad),
           angle: Number.isFinite(obs.yaw) ? obs.yaw : 0,
-          navPad,
+          navPad: recastPad,
         });
       }
     }

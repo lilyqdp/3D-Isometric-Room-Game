@@ -593,12 +593,24 @@ export function createCatJumpPlanningRuntime(ctx) {
     return obstacles.filter((obs) => !shouldIgnoreObstacleForLink(obs, fromSurfaceId, toSurfaceId));
   }
 
+  function preserveTraversalObstacleMetadata(filtered, source) {
+    if (!Array.isArray(filtered) || !Array.isArray(source)) return filtered;
+    if (filtered === source) return filtered;
+    if (source._includePickups != null) filtered._includePickups = !!source._includePickups;
+    if (source._includeClosePickups != null) filtered._includeClosePickups = !!source._includeClosePickups;
+    filtered._signatureByClearance = new Map();
+    delete filtered._tileCacheDynamicSpecs;
+    delete filtered._dynamicSignature;
+    return filtered;
+  }
+
   function filterObstaclesForSurfaceTraversal(obstacles, surfaceId) {
     const resolvedSurfaceId = surfaceId == null ? null : String(surfaceId);
     if (!resolvedSurfaceId || resolvedSurfaceId === "floor") {
       return Array.isArray(obstacles) ? obstacles : [];
     }
-    return filterObstaclesForLink(obstacles, resolvedSurfaceId, resolvedSurfaceId);
+    const filtered = filterObstaclesForLink(obstacles, resolvedSurfaceId, resolvedSurfaceId);
+    return preserveTraversalObstacleMetadata(filtered, obstacles);
   }
 
   function getJumpObstaclesForLink(link, obstacles, options = null) {
@@ -1134,6 +1146,7 @@ export function createCatJumpPlanningRuntime(ctx) {
     if (!link) return false;
     if (link.staticValidUp === false) return false;
     const linkObstacles = getJumpObstaclesForLink(link, dynamicObstacles, { ignorePushable: safetyOptions.allowPushableBlocked });
+    const staticLinkObstacles = getJumpObstaclesForLink(link, buildCatObstacles(false, false));
     const built = ensureJumpGraph();
     const fromSurface = built.surfaces.byId.get(link.fromSurfaceId);
     const toSurface = built.surfaces.byId.get(link.toSurfaceId);
@@ -1141,10 +1154,14 @@ export function createCatJumpPlanningRuntime(ctx) {
     const toY = Number.isFinite(toSurface?.y) ? toSurface.y : fromY;
     const anchorClearance = CAT_NAV.clearance * 0.9;
     if (!isJumpPointSafeAtY(link.jumpFrom, fromY, linkObstacles, anchorClearance)) return false;
+    const launchDir = link.hook.clone().sub(link.jumpFrom);
+    if (!isStaticJumpEndpointNeighborhoodSafe(link.jumpFrom, fromY, staticLinkObstacles, anchorClearance, launchDir)) return false;
     if (isSegmentBlocked(link.jumpFrom, link.hook, anchorClearance, fromY, toY, linkObstacles)) {
       return false;
     }
     const landingClearance = CAT_COLLISION.catBodyRadius * SURFACE_CFG.landingClearanceMul;
+    const landingDir = link.top.clone().sub(link.hook);
+    if (!isStaticJumpEndpointNeighborhoodSafe(link.top, toY, staticLinkObstacles, landingClearance, landingDir)) return false;
     if (isSegmentBlocked(link.hook, link.top, landingClearance, toY, toY, linkObstacles)) {
       return false;
     }
@@ -1156,6 +1173,7 @@ export function createCatJumpPlanningRuntime(ctx) {
     if (!link) return false;
     if (link.staticValidDown === false) return false;
     const linkObstacles = getJumpObstaclesForLink(link, dynamicObstacles, { ignorePushable: safetyOptions.allowPushableBlocked });
+    const staticLinkObstacles = getJumpObstaclesForLink(link, buildCatObstacles(false, false));
     const built = ensureJumpGraph();
     const fromSurface = built.surfaces.byId.get(link.fromSurfaceId);
     const toSurface = built.surfaces.byId.get(link.toSurfaceId);
@@ -1163,9 +1181,13 @@ export function createCatJumpPlanningRuntime(ctx) {
     const sourceY = Number.isFinite(toSurface?.y) ? toSurface.y : floorY;
     const anchorClearance = CAT_NAV.clearance * 0.9;
     const landingClearance = CAT_COLLISION.catBodyRadius * SURFACE_CFG.landingClearanceMul;
+    const launchDir = link.jumpFrom.clone().sub(link.top);
     if (!isJumpPointSafeAtY(link.top, sourceY, linkObstacles, anchorClearance)) return false;
+    if (!isStaticJumpEndpointNeighborhoodSafe(link.top, sourceY, staticLinkObstacles, anchorClearance, launchDir)) return false;
     if (!isJumpPointSafeAtY(link.jumpFrom, landingY, linkObstacles, landingClearance)) return false;
     if (!isJumpPointSafeAtY(link.jumpFrom, landingY + 0.18, linkObstacles, landingClearance)) return false;
+    const landingDir = link.jumpFrom.clone().sub(link.top);
+    if (!isStaticJumpEndpointNeighborhoodSafe(link.jumpFrom, landingY, staticLinkObstacles, landingClearance, landingDir)) return false;
     if (isSegmentBlocked(link.top, link.jumpFrom, anchorClearance, sourceY, landingY, linkObstacles)) {
       return false;
     }
@@ -1336,14 +1358,73 @@ export function createCatJumpPlanningRuntime(ctx) {
     return true;
   }
 
+  function isStaticJumpEndpointNeighborhoodSafe(
+    point,
+    yLevel,
+    staticObstacles,
+    clearance = CAT_NAV.clearance * 0.9,
+    primaryDir = null
+  ) {
+    if (!point) return false;
+    const y = Number.isFinite(yLevel) ? yLevel : floorY;
+    if (!isJumpPointSafeAtY(point, y, staticObstacles, clearance)) return false;
+
+    const probeClearance = Math.max(0.02, CAT_COLLISION.catBodyRadius * 0.18);
+    const radius = Math.max(0.06, clearance * 0.9);
+    const halfRadius = radius * 0.55;
+    const samples = [];
+
+    const pushOffsets = (dx, dz) => {
+      samples.push([dx, dz]);
+      samples.push([dx * 0.5, dz * 0.5]);
+    };
+
+    const dir = primaryDir?.clone ? primaryDir.clone() : new THREE.Vector3();
+    dir.y = 0;
+    if (dir.lengthSq() > 1e-8) {
+      dir.normalize();
+      const right = new THREE.Vector3(-dir.z, 0, dir.x);
+      pushOffsets(dir.x * radius, dir.z * radius);
+      pushOffsets(-dir.x * halfRadius, -dir.z * halfRadius);
+      pushOffsets(right.x * radius, right.z * radius);
+      pushOffsets(-right.x * radius, -right.z * radius);
+      pushOffsets((dir.x + right.x) * halfRadius, (dir.z + right.z) * halfRadius);
+      pushOffsets((dir.x - right.x) * halfRadius, (dir.z - right.z) * halfRadius);
+      pushOffsets((-dir.x + right.x) * halfRadius, (-dir.z + right.z) * halfRadius);
+      pushOffsets((-dir.x - right.x) * halfRadius, (-dir.z - right.z) * halfRadius);
+    } else {
+      pushOffsets(radius, 0);
+      pushOffsets(-radius, 0);
+      pushOffsets(0, radius);
+      pushOffsets(0, -radius);
+      pushOffsets(halfRadius, halfRadius);
+      pushOffsets(halfRadius, -halfRadius);
+      pushOffsets(-halfRadius, halfRadius);
+      pushOffsets(-halfRadius, -halfRadius);
+    }
+
+    for (const [dx, dz] of samples) {
+      const x = point.x + dx;
+      const z = point.z + dz;
+      if (isCatPointBlocked(x, z, staticObstacles, probeClearance, y)) return false;
+      if (isCatPointBlocked(x, z, staticObstacles, probeClearance, y + 0.18)) return false;
+    }
+    return true;
+  }
+
   function groundPathCost(from, to, dynamicObstacles, clearance) {
     if (hasClearTravelLine(from, to, dynamicObstacles, clearance, floorY)) {
       return from.distanceTo(to);
     }
-    // Surface-transition planning is an explicit rescue case: if Recast misses an
-    // around-obstacle route to an otherwise valid jump anchor, allow the sampled
-    // fallback so the route planner does not reject the whole transition.
-    const p = computeCatPath(from, to, dynamicObstacles, null, true, false);
+    const p = computeCatPath(
+      from,
+      to,
+      dynamicObstacles,
+      floorY,
+      false,
+      false,
+      { clearanceOverride: clearance }
+    );
     if (!isPathTraversable(p, dynamicObstacles, clearance, floorY)) return Infinity;
     return catPathDistance(p);
   }
@@ -1384,13 +1465,19 @@ export function createCatJumpPlanningRuntime(ctx) {
     const surfaceObstacles = filterObstaclesForSurfaceTraversal(dynamicObstacles, sourceSurfaceId);
     const fromOnSurface = new THREE.Vector3(from.x, sourceY, from.z);
     const toOnSurface = new THREE.Vector3(to.x, sourceY, to.z);
-    if (hasClearTravelLine(fromOnSurface, toOnSurface, surfaceObstacles, clearance, sourceY)) {
+    if (hasClearTravelLine(fromOnSurface, toOnSurface, surfaceObstacles, clearance, sourceY, "plan", { supportSurfaceId: sourceSurfaceId })) {
       return fromOnSurface.distanceTo(toOnSurface);
     }
-    // Apply the same rescue policy on elevated supports so jump-anchor staging uses
-    // the best available path estimate instead of collapsing to "no anchor".
-    const p = computeCatPath(fromOnSurface, toOnSurface, surfaceObstacles, null, true, false);
-    if (!isPathTraversable(p, surfaceObstacles, clearance, sourceY)) return Infinity;
+    const p = computeCatPath(
+      fromOnSurface,
+      toOnSurface,
+      surfaceObstacles,
+      sourceY,
+      false,
+      false,
+      { supportSurfaceId: sourceSurfaceId, clearanceOverride: clearance }
+    );
+    if (!isPathTraversable(p, surfaceObstacles, clearance, sourceY, "plan", { supportSurfaceId: sourceSurfaceId })) return Infinity;
     return catPathDistance(p);
   }
 
@@ -1422,11 +1509,30 @@ export function createCatJumpPlanningRuntime(ctx) {
     const allowPushableBlockedLinks = false;
     const dynamicSurfaceJumpCounts = minDynamicSurfaceJumpsToTarget(surfaceId, dynamicObstacles, false);
     const sourceDynamicMinJumps = dynamicSurfaceJumpCounts.get(resolvedFromSurfaceId);
+    const debugSummary = {
+      fromSurfaceId: String(resolvedFromSurfaceId || ""),
+      targetSurfaceId: String(surfaceId || ""),
+      totalUpLinks: 0,
+      totalDownLinks: 0,
+      safeUpLinks: 0,
+      safeDownLinks: 0,
+      graphCandidateCount: 0,
+      pathAttemptCount: 0,
+      pathCandidateCount: 0,
+      pathRejectedCount: 0,
+      reason: "",
+      firstRejectedTransition: "",
+      firstRejectedNextSurfaceId: "",
+      firstRejectedAnchorX: NaN,
+      firstRejectedAnchorZ: NaN,
+    };
 
     const candidates = [];
     const outgoingUpLinks = built.linksByFromSurface.get(resolvedFromSurfaceId) || [];
+    debugSummary.totalUpLinks = outgoingUpLinks.length;
     for (const link of outgoingUpLinks) {
       if (!isSurfaceJumpUpSafe(link, dynamicObstacles, allowPushableBlockedLinks)) continue;
+      debugSummary.safeUpLinks += 1;
       const remainingCost = minGraphCostToSurface(link.toNodeId, surfaceId, desiredTopPoint);
       const remainingJumps = minGraphJumpCountToSurface(link.toNodeId, surfaceId, desiredTopPoint);
       if (!Number.isFinite(remainingCost)) continue;
@@ -1460,11 +1566,14 @@ export function createCatJumpPlanningRuntime(ctx) {
         totalDynamicJumps: Infinity,
         jumpSpan,
       });
+      debugSummary.graphCandidateCount += 1;
     }
 
     const incomingDownLinks = built.linksByToSurface.get(resolvedFromSurfaceId) || [];
+    debugSummary.totalDownLinks = incomingDownLinks.length;
     for (const link of incomingDownLinks) {
       if (!isSurfaceJumpDownSafe(link, dynamicObstacles, allowPushableBlockedLinks)) continue;
+      debugSummary.safeDownLinks += 1;
       const landingNodeId = nearestSurfaceNodeId(link.fromSurfaceId, link.jumpFrom);
       const remainingCost =
         link.fromSurfaceId === surfaceId
@@ -1505,9 +1614,16 @@ export function createCatJumpPlanningRuntime(ctx) {
         totalDynamicJumps: Infinity,
         jumpSpan,
       });
+      debugSummary.graphCandidateCount += 1;
     }
 
-    if (!candidates.length) return null;
+    if (!candidates.length) {
+      debugSummary.reason =
+        debugSummary.safeUpLinks + debugSummary.safeDownLinks <= 0
+          ? "no-safe-links"
+          : "no-graph-route";
+      return null;
+    }
 
     for (const c of candidates) {
       const dynRemaining = dynamicSurfaceJumpCounts.get(c.nextSurfaceId);
@@ -1555,8 +1671,10 @@ export function createCatJumpPlanningRuntime(ctx) {
       // 3) tie-break by shorter on-surface approach to reduce dithering
       let best = null;
       let bestScore = Infinity;
+      const attemptedPathCandidates = new Set();
       for (const set of candidateSets) {
         for (const c of set) {
+          const candidateKey = `${String(c.link?.id || "")}|${String(c.transition || "")}|${String(c.nextSurfaceId || "")}`;
           const pathCost = surfacePathCost(
             from,
             c.anchorPoint,
@@ -1564,6 +1682,21 @@ export function createCatJumpPlanningRuntime(ctx) {
             anchorClearance,
             resolvedFromSurfaceId
           );
+          if (!attemptedPathCandidates.has(candidateKey)) {
+            attemptedPathCandidates.add(candidateKey);
+            debugSummary.pathAttemptCount += 1;
+            if (Number.isFinite(pathCost)) {
+              debugSummary.pathCandidateCount += 1;
+            } else {
+              debugSummary.pathRejectedCount += 1;
+              if (!debugSummary.firstRejectedTransition) {
+                debugSummary.firstRejectedTransition = String(c.transition || "");
+                debugSummary.firstRejectedNextSurfaceId = String(c.nextSurfaceId || "");
+                debugSummary.firstRejectedAnchorX = Number.isFinite(c.anchorPoint?.x) ? Number(c.anchorPoint.x) : NaN;
+                debugSummary.firstRejectedAnchorZ = Number.isFinite(c.anchorPoint?.z) ? Number(c.anchorPoint.z) : NaN;
+              }
+            }
+          }
           if (!Number.isFinite(pathCost)) continue;
           let score =
             pathCost +
@@ -1593,7 +1726,9 @@ export function createCatJumpPlanningRuntime(ctx) {
         }
         if (best) break;
       }
-      if (best) return best;
+      if (best) {
+        return best;
+      }
     }
 
     return null;
@@ -1757,7 +1892,7 @@ export function createCatJumpPlanningRuntime(ctx) {
         const stagePathCost = surfacePathCost(
           fromTopPoint,
           stageTop,
-          surfaceTraversalObstacles,
+          dynamicObstacles,
           topClearance,
           surfaceId
         );

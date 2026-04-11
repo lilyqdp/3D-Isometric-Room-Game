@@ -360,8 +360,8 @@ export function updateCatStateMachineRuntime(ctx, dt) {
     };
     if (data && typeof data === "object") Object.assign(evt, data);
     cat.nav.debugEvents.push(evt);
-    if (cat.nav.debugEvents.length > 160) {
-      cat.nav.debugEvents.splice(0, cat.nav.debugEvents.length - 160);
+    if (cat.nav.debugEvents.length > 420) {
+      cat.nav.debugEvents.splice(0, cat.nav.debugEvents.length - 420);
     }
   }
 
@@ -404,11 +404,18 @@ export function updateCatStateMachineRuntime(ctx, dt) {
   function getSurfaceTargetY(surfaceId = FLOOR_SURFACE_ID, point = null, fallbackY = null) {
     const resolvedSurfaceId = normalizeSurfaceId(surfaceId || FLOOR_SURFACE_ID);
     if (isFloorSurfaceId(resolvedSurfaceId)) return 0;
+    const surface = typeof getSurfaceById === "function" ? getSurfaceById(resolvedSurfaceId) : null;
+    const surfaceY = Number.isFinite(surface?.y) ? Number(surface.y) : NaN;
     const pointY = Number.isFinite(point?.y) ? Number(point.y) : NaN;
     const resolvedFallbackY = Number.isFinite(fallbackY)
       ? Number(fallbackY)
       : (Number.isFinite(cat.group.position.y) ? Number(cat.group.position.y) : 0.02);
-    return Math.max(0.02, Number.isFinite(pointY) ? pointY : resolvedFallbackY);
+    return Math.max(
+      0.02,
+      Number.isFinite(surfaceY)
+        ? surfaceY
+        : (Number.isFinite(pointY) ? pointY : resolvedFallbackY)
+    );
   }
 
   function isCatAlignedToSurface(surfaceId = FLOOR_SURFACE_ID, point = null, tolerance = 0.12) {
@@ -463,6 +470,7 @@ export function updateCatStateMachineRuntime(ctx, dt) {
     cat.pos.x = Number(targetPoint.x || 0);
     cat.pos.z = Number(targetPoint.z || 0);
     cat.group.position.set(cat.pos.x, targetY, cat.pos.z);
+    markCatSurfaceId(resolvedSurfaceId, "surface-settle", 0.35);
     clearCatNavPath(false);
     cat.nav.arrivalHoldUntil = clockTime + Math.max(ROUTE_FINISH_SETTLE, 0.28);
     return true;
@@ -1540,11 +1548,14 @@ export function updateCatStateMachineRuntime(ctx, dt) {
       cat.lastState = String(request.lastState || "debugMove");
       cat.stateT = 0;
       cat.phaseT = 0;
-      cat.nav.debugDestination.set(
-        finalPoint.x,
-        finalSurfaceId === "floor" ? 0 : Number(finalPoint.y || 0.02),
-        finalPoint.z
-      );
+      const activeRoute = getActiveNavRoute();
+      if (!activeRoute?.active) {
+        cat.nav.debugDestination.set(
+          finalPoint.x,
+          finalSurfaceId === "floor" ? 0 : Number(finalPoint.y || 0.02),
+          finalPoint.z
+        );
+      }
       return true;
     }
 
@@ -2134,7 +2145,15 @@ export function updateCatStateMachineRuntime(ctx, dt) {
     }
 
     if (!catHasTrackedNonFloorSurface() && cat.group.position.y > 0.08) {
-      markCatSurfaceId(getCurrentCatSurfaceId() || cat.nav?.route?.surfaceId || cat.nav?.surfaceState?.lastStableSurfaceId || "desk", "jump-down-plan", 0.4);
+      markCatSurfaceId(
+        getCurrentCatSurfaceId() ||
+          cat.nav?.route?.surfaceId ||
+          cat.nav?.route?.finalSurfaceId ||
+          cat.nav?.surfaceState?.lastStableSurfaceId ||
+          FLOOR_SURFACE_ID,
+        "jump-down-plan",
+        0.4
+      );
     }
 
     const finalizeRouteArrival = (arrivalSurfaceId = null) => {
@@ -2281,7 +2300,7 @@ export function updateCatStateMachineRuntime(ctx, dt) {
             easeY: true,
             preventSurfaceClip: usingElevatedApproach,
             fromSurfaceId: approachSurfaceId,
-            toSurfaceId: String(route.surfaceId || route.finalSurfaceId || "desk"),
+            toSurfaceId: normalizeSurfaceId(route.surfaceId || route.finalSurfaceId || FLOOR_SURFACE_ID),
           });
           cat.status = usingElevatedApproach ? "Jumping across" : "Jumping up";
         }
@@ -2314,7 +2333,9 @@ export function updateCatStateMachineRuntime(ctx, dt) {
           animateCatPose(stepDt, false);
           return true;
         }
-        const jumpOffSurfaceId = String(getCurrentCatSurfaceId() || route.surfaceId || "desk");
+        const jumpOffSurfaceId = normalizeSurfaceId(
+          getCurrentCatSurfaceId() || route.surfaceId || route.finalSurfaceId || FLOOR_SURFACE_ID
+        );
         const clampedJumpOff =
           clampPointToSurfaceSupport(
             jumpOffSurfaceId,
@@ -3060,7 +3081,7 @@ export function updateCatStateMachineRuntime(ctx, dt) {
             cat.pos,
             cat.jumpAnchor,
             true,
-            { allowFallback: true, allowEndpointPushableGoal: false },
+            { allowFallback: false, allowEndpointPushableGoal: false },
             "desk-anchor"
           );
           if (!hasDynamicPath) {

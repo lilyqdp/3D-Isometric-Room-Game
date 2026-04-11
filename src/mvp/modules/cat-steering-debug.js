@@ -51,8 +51,8 @@ export function createCatSteeringDebugRuntime(ctx) {
     };
     if (data && typeof data === "object") Object.assign(evt, data);
     cat.nav.debugEvents.push(evt);
-    if (cat.nav.debugEvents.length > 160) {
-      cat.nav.debugEvents.splice(0, cat.nav.debugEvents.length - 160);
+    if (cat.nav.debugEvents.length > 420) {
+      cat.nav.debugEvents.splice(0, cat.nav.debugEvents.length - 420);
     }
   }
 
