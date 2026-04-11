@@ -424,6 +424,57 @@ export function makeDesk(scene, desk) {
     tagRoomObject(leg, desk);
     group.add(leg);
   }
+
+  // Computer setup
+  const monitorBaseMat = makeTintedStandardMaterial(0x222222, { roughness: 0.6, metalness: 0.3 }, desk);
+  const monitorScreenMat = new THREE.MeshStandardMaterial({ color: 0x1a1a2e, roughness: 0.2, metalness: 0.1 });
+  const monitorGlowMat = new THREE.MeshStandardMaterial({ color: 0x4a90d9, roughness: 0.3, emissive: 0x1a3a6e, emissiveIntensity: 0.4 });
+  const keyboardMat = makeTintedStandardMaterial(0x2a2a2a, { roughness: 0.7 }, desk);
+
+  const standBase = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.03, 0.22), monitorBaseMat);
+  standBase.position.set(-0.3, 1.09, -0.3);
+  tagRoomObject(standBase, desk);
+  group.add(standBase);
+
+  const neck = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.22, 0.05), monitorBaseMat);
+  neck.position.set(-0.3, 1.22, -0.3);
+  tagRoomObject(neck, desk);
+  group.add(neck);
+
+  const monitorBack = new THREE.Mesh(new THREE.BoxGeometry(0.72, 0.44, 0.04), monitorBaseMat);
+  monitorBack.position.set(-0.3, 1.52, -0.32);
+  tagRoomObject(monitorBack, desk);
+  group.add(monitorBack);
+
+  const monitorScreen = new THREE.Mesh(new THREE.BoxGeometry(0.66, 0.38, 0.02), monitorScreenMat);
+  monitorScreen.position.set(-0.3, 1.52, -0.29);
+  tagRoomObject(monitorScreen, desk);
+  group.add(monitorScreen);
+
+  const screenGlow = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.34, 0.01), monitorGlowMat);
+  screenGlow.position.set(-0.3, 1.52, -0.28);
+  tagRoomObject(screenGlow, desk);
+  group.add(screenGlow);
+
+  const keyboard = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.03, 0.18), keyboardMat);
+  keyboard.position.set(-0.18, 1.10, 0.1);
+  tagRoomObject(keyboard, desk);
+  group.add(keyboard);
+
+  const keyRowMat = makeTintedStandardMaterial(0x3a3a3a, { roughness: 0.8 }, desk);
+  for (let i = 0; i < 3; i++) {
+    const keyRow = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.01, 0.03), keyRowMat);
+    keyRow.position.set(-0.18, 1.115, 0.04 + i * 0.05);
+    tagRoomObject(keyRow, desk);
+    group.add(keyRow);
+  }
+
+  const mouseMat = makeTintedStandardMaterial(0x333333, { roughness: 0.65 }, desk);
+  const mouse = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.03, 0.14), mouseMat);
+  mouse.position.set(0.32, 1.10, 0.08);
+  tagRoomObject(mouse, desk);
+  group.add(mouse);
+
   tagRoomObject(group, desk);
   scene.add(group);
 }
