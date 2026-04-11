@@ -61,28 +61,28 @@
       "id": "desk",
       "type": "desk",
       "pos": {
-        "x": -2.4,
+        "x": 0.501,
         "y": 0,
-        "z": -2.6
+        "z": -4.725
       },
-      "sizeX": 3.1,
-      "sizeZ": 1.8,
-      "topY": 1.08,
+      "sizeX": 1.95,
+      "sizeZ": 1.55,
+      "topY": 0.95,
       "rotQuarterTurns": 0,
       "approach": {
-        "x": -0.8,
+        "x": 2.101,
         "y": 0,
-        "z": -1.8
+        "z": -3.925
       },
       "perch": {
-        "x": -1.9,
+        "x": 1.001,
         "y": 0,
-        "z": -2.3
+        "z": -4.425
       },
       "cup": {
-        "x": -0.98,
+        "x": 1.921,
         "y": 0,
-        "z": -2.22
+        "z": -4.345
       },
       "editorLocked": false,
       "tint": "",
@@ -94,6 +94,9 @@
         "flags": {
           "randomPatrol": true,
           "manualPatrol": true,
+          "allowCatSpawn": false,
+          "allowTrashSpawn": false,
+          "allowLaundrySpawn": false,
           "allowCatnip": true
         },
         "special": {
@@ -157,15 +160,23 @@
         "blockers": []
       },
       "name": "",
+      "obstacle": {
+        "enabled": true,
+        "mode": "hard",
+        "navPad": 0.02,
+        "steerPad": 0.02,
+        "collisionPad": 0,
+        "jumpIgnoreSurfaceIds": []
+      },
       "visible": true
     },
     {
       "id": "chair",
       "type": "chair",
       "pos": {
-        "x": 0.45,
+        "x": 0.579,
         "y": 0,
-        "z": -1.65
+        "z": -3.61
       },
       "sizeX": 0.92,
       "sizeZ": 0.86,
@@ -177,7 +188,7 @@
       "legInsetZ": 0.28,
       "backHeight": 0.82,
       "backThickness": 0.08,
-      "rotQuarterTurns": 0,
+      "rotQuarterTurns": 2,
       "editorLocked": false,
       "tint": "",
       "specialFlags": {},
@@ -186,9 +197,14 @@
         "flags": {
           "randomPatrol": false,
           "manualPatrol": true,
+          "allowCatSpawn": false,
+          "allowTrashSpawn": false,
+          "allowLaundrySpawn": false,
           "allowCatnip": true
         },
-        "special": {},
+        "special": {
+          "type": "chair"
+        },
         "supportOffsets": [
           {
             "dx": -0.31,
@@ -257,110 +273,24 @@
         "blockers": []
       },
       "name": "",
-      "visible": true
-    },
-    {
-      "id": "shelf",
-      "type": "shelf",
-      "pos": {
-        "x": -3.423,
-        "y": 0,
-        "z": -4.9
+      "obstacle": {
+        "enabled": false,
+        "mode": "soft",
+        "navPad": 0.03,
+        "steerPad": 0.01,
+        "collisionPad": 0,
+        "jumpIgnoreSurfaceIds": []
       },
-      "width": 2.35,
-      "depth": 0.92,
-      "postHalf": 0.045,
-      "surfaceY": 1.22,
-      "boardThickness": 0.09,
-      "rotQuarterTurns": 0,
-      "editorLocked": false,
-      "tint": "",
-      "specialFlags": {},
-      "surface": {
-        "enabled": true,
-        "flags": {
-          "randomPatrol": false,
-          "manualPatrol": true,
-          "allowCatnip": true
-        },
-        "special": {},
-        "supportOffsets": [
-          {
-            "dx": -1.1300000000000001,
-            "dz": -0.41500000000000004,
-            "hx": 0.065,
-            "hz": 0.065,
-            "topY": 1.13,
-            "mode": "soft",
-            "navPad": 0.02,
-            "steerPad": 0.01,
-            "collisionPad": 0
-          },
-          {
-            "dx": 1.1300000000000001,
-            "dz": -0.41500000000000004,
-            "hx": 0.065,
-            "hz": 0.065,
-            "topY": 1.13,
-            "mode": "soft",
-            "navPad": 0.02,
-            "steerPad": 0.01,
-            "collisionPad": 0
-          },
-          {
-            "dx": -1.1300000000000001,
-            "dz": 0.41500000000000004,
-            "hx": 0.065,
-            "hz": 0.065,
-            "topY": 1.13,
-            "mode": "soft",
-            "navPad": 0.02,
-            "steerPad": 0.01,
-            "collisionPad": 0
-          },
-          {
-            "dx": 1.1300000000000001,
-            "dz": 0.41500000000000004,
-            "hx": 0.065,
-            "hz": 0.065,
-            "topY": 1.13,
-            "mode": "soft",
-            "navPad": 0.02,
-            "steerPad": 0.01,
-            "collisionPad": 0
-          }
-        ],
-        "blockerOffsets": [
-          {
-            "kind": "box",
-            "dx": 0,
-            "dz": -0.44,
-            "hx": 1.195,
-            "hz": 0.04,
-            "y": 0.6649999999999999,
-            "h": 1.1400000000000001,
-            "navPad": 0.02
-          }
-        ],
-        "shape": "rect",
-        "width": null,
-        "depth": null,
-        "radius": null,
-        "offsetX": 0,
-        "offsetZ": 0,
-        "supports": [],
-        "blockers": []
-      },
-      "name": "",
-      "visible": true
+      "visible": true,
+      "rotYDeg": 180
     },
     {
       "id": "hoverShelf",
       "type": "platform",
       "pos": {
-        "x": 0.1,
+        "x": -2.052,
         "y": 0,
-        "z": -3.05
+        "z": -4.85
       },
       "width": 1.25,
       "depth": 0.9,
@@ -375,6 +305,9 @@
         "flags": {
           "randomPatrol": false,
           "manualPatrol": true,
+          "allowCatSpawn": false,
+          "allowTrashSpawn": false,
+          "allowLaundrySpawn": false,
           "allowCatnip": true
         },
         "special": {
@@ -392,15 +325,23 @@
         "blockers": []
       },
       "name": "",
+      "obstacle": {
+        "enabled": false,
+        "mode": "soft",
+        "navPad": 0.03,
+        "steerPad": 0.01,
+        "collisionPad": 0,
+        "jumpIgnoreSurfaceIds": []
+      },
       "visible": true
     },
     {
       "id": "lowerPlatform",
       "type": "platform",
       "pos": {
-        "x": 0.1,
+        "x": -0.503,
         "y": 0,
-        "z": -3.95
+        "z": -4.95
       },
       "width": 0.95,
       "depth": 0.72,
@@ -415,6 +356,9 @@
         "flags": {
           "randomPatrol": false,
           "manualPatrol": true,
+          "allowCatSpawn": false,
+          "allowTrashSpawn": false,
+          "allowLaundrySpawn": false,
           "allowCatnip": true
         },
         "special": {
@@ -432,15 +376,23 @@
         "blockers": []
       },
       "name": "",
+      "obstacle": {
+        "enabled": false,
+        "mode": "soft",
+        "navPad": 0.03,
+        "steerPad": 0.01,
+        "collisionPad": 0,
+        "jumpIgnoreSurfaceIds": []
+      },
       "visible": true
     },
     {
       "id": "upperPlatform",
       "type": "platform",
       "pos": {
-        "x": 0.1,
+        "x": 0.948,
         "y": 0,
-        "z": -4.7
+        "z": -4.888
       },
       "width": 0.95,
       "depth": 0.72,
@@ -455,6 +407,9 @@
         "flags": {
           "randomPatrol": false,
           "manualPatrol": true,
+          "allowCatSpawn": false,
+          "allowTrashSpawn": false,
+          "allowLaundrySpawn": false,
           "allowCatnip": true
         },
         "special": {
@@ -472,15 +427,23 @@
         "blockers": []
       },
       "name": "",
+      "obstacle": {
+        "enabled": false,
+        "mode": "soft",
+        "navPad": 0.03,
+        "steerPad": 0.01,
+        "collisionPad": 0,
+        "jumpIgnoreSurfaceIds": []
+      },
       "visible": true
     },
     {
       "id": "windowSill",
       "type": "windowSill",
       "pos": {
-        "x": -0.69,
+        "x": 3.11,
         "y": 0,
-        "z": -5.004
+        "z": -4.916
       },
       "width": 2.1,
       "depth": 0.6,
@@ -492,9 +455,9 @@
       "openingCenterY": 2,
       "openDuration": 20,
       "sitPoint": {
-        "x": -0.69,
+        "x": 3.11,
         "y": 0,
-        "z": -5.004
+        "z": -4.916
       },
       "outsideYaw": 3.141592653589793,
       "rotQuarterTurns": 0,
@@ -509,6 +472,9 @@
         "flags": {
           "randomPatrol": false,
           "manualPatrol": true,
+          "allowCatSpawn": false,
+          "allowTrashSpawn": false,
+          "allowLaundrySpawn": false,
           "allowCatnip": true
         },
         "special": {
@@ -527,6 +493,14 @@
         "blockers": []
       },
       "name": "",
+      "obstacle": {
+        "enabled": false,
+        "mode": "soft",
+        "navPad": 0.03,
+        "steerPad": 0.01,
+        "collisionPad": 0,
+        "jumpIgnoreSurfaceIds": []
+      },
       "visible": true,
       "rotYDeg": 0
     },
@@ -534,9 +508,9 @@
       "id": "hamper",
       "type": "hamper",
       "pos": {
-        "x": -5.8,
+        "x": 2.717,
         "y": 0,
-        "z": 2.4
+        "z": 0.862
       },
       "outerHalfX": 0.34,
       "outerHalfZ": 0.34,
@@ -552,17 +526,48 @@
       "specialFlags": {
         "allowCleanLaundry": true
       },
-      "surface": null,
+      "surface": {
+        "enabled": false,
+        "shape": "rect",
+        "width": null,
+        "depth": null,
+        "radius": null,
+        "offsetX": 0,
+        "offsetZ": 0,
+        "flags": {
+          "randomPatrol": false,
+          "manualPatrol": true,
+          "allowCatSpawn": false,
+          "allowTrashSpawn": false,
+          "allowLaundrySpawn": false,
+          "allowCatnip": true
+        },
+        "special": {
+          "type": "hamper"
+        },
+        "supportOffsets": [],
+        "blockerOffsets": [],
+        "supports": [],
+        "blockers": []
+      },
       "name": "",
+      "obstacle": {
+        "enabled": true,
+        "mode": "hard",
+        "navPad": 0.02,
+        "steerPad": 0.02,
+        "collisionPad": 0,
+        "jumpIgnoreSurfaceIds": []
+      },
       "visible": true
     },
     {
       "id": "trashCan",
       "type": "trashCan",
       "pos": {
-        "x": 2.6,
+        "x": -1.219,
         "y": 0,
-        "z": 2.4
+        "z": -4.717
       },
       "outerRadius": 0.52,
       "radius": 0.5,
@@ -576,17 +581,100 @@
       "specialFlags": {
         "allowCleanTrash": true
       },
-      "surface": null,
+      "surface": {
+        "enabled": false,
+        "shape": "rect",
+        "width": null,
+        "depth": null,
+        "radius": null,
+        "offsetX": 0,
+        "offsetZ": 0,
+        "flags": {
+          "randomPatrol": false,
+          "manualPatrol": true,
+          "allowCatSpawn": false,
+          "allowTrashSpawn": false,
+          "allowLaundrySpawn": false,
+          "allowCatnip": true
+        },
+        "special": {
+          "type": "trashCan"
+        },
+        "supportOffsets": [],
+        "blockerOffsets": [],
+        "supports": [],
+        "blockers": []
+      },
       "name": "",
+      "obstacle": {
+        "enabled": true,
+        "mode": "hard",
+        "navPad": 0.02,
+        "steerPad": 0.02,
+        "collisionPad": 0,
+        "jumpIgnoreSurfaceIds": []
+      },
       "visible": true
+    },
+    {
+      "id": "fishtank",
+      "type": "fishtank",
+      "pos": {
+        "x": -1.591,
+        "y": 0,
+        "z": -3.054
+      },
+      "width": 1.3,
+      "depth": 0.85,
+      "height": 1.4,
+      "surfaceY": 0.65,
+      "editorLocked": false,
+      "tint": "",
+      "surface": {
+        "enabled": false,
+        "shape": "rect",
+        "width": null,
+        "depth": null,
+        "radius": null,
+        "offsetX": 0,
+        "offsetZ": 0,
+        "flags": {
+          "randomPatrol": false,
+          "manualPatrol": true,
+          "allowCatSpawn": false,
+          "allowTrashSpawn": false,
+          "allowLaundrySpawn": false,
+          "allowCatnip": true
+        },
+        "special": {
+          "type": "fishtank"
+        },
+        "supportOffsets": [],
+        "blockerOffsets": [],
+        "supports": [],
+        "blockers": []
+      },
+      "name": "",
+      "obstacle": {
+        "enabled": true,
+        "mode": "hard",
+        "navPad": 0.02,
+        "steerPad": 0.02,
+        "collisionPad": 0,
+        "jumpIgnoreSurfaceIds": []
+      },
+      "visible": true,
+      "rotQuarterTurns": 3,
+      "rotYDeg": 270,
+      "specialFlags": {}
     },
     {
       "id": "bed",
       "type": "bed",
       "pos": {
-        "x": 3.007,
+        "x": 3.054,
         "y": 0,
-        "z": -3.508
+        "z": -3.4
       },
       "visible": true,
       "specialFlags": {},
@@ -637,13 +725,36 @@
       "id": "bedsideTable",
       "type": "bedsideTable",
       "pos": {
-        "x": 3,
+        "x": 4.571,
         "y": 0,
-        "z": -1.6
+        "z": -4.749
       },
       "visible": true,
       "specialFlags": {},
-      "surface": null,
+      "surface": {
+        "enabled": false,
+        "flags": {
+          "randomPatrol": false,
+          "manualPatrol": true,
+          "allowCatSpawn": false,
+          "allowTrashSpawn": false,
+          "allowLaundrySpawn": false,
+          "allowCatnip": true
+        },
+        "special": {
+          "type": "bedsideTable"
+        },
+        "supportOffsets": [],
+        "blockerOffsets": [],
+        "shape": "rect",
+        "width": null,
+        "depth": null,
+        "radius": null,
+        "offsetX": 0,
+        "offsetZ": 0,
+        "supports": [],
+        "blockers": []
+      },
       "rotQuarterTurns": 0,
       "editorLocked": false,
       "tint": "",
@@ -665,9 +776,9 @@
       "id": "rug",
       "type": "rug",
       "pos": {
-        "x": -1.499,
+        "x": 0.446,
         "y": 0.035,
-        "z": 0.501
+        "z": -1.188
       },
       "visible": true,
       "specialFlags": {},
@@ -710,15 +821,16 @@
         "steerPad": 0.01,
         "collisionPad": 0,
         "jumpIgnoreSurfaceIds": []
-      }
+      },
+      "rotYDeg": 0
     },
     {
       "id": "wardrobe",
       "type": "wardrobe",
       "pos": {
-        "x": -6,
+        "x": -1.609,
         "y": 0,
-        "z": -2
+        "z": 0.342
       },
       "visible": true,
       "specialFlags": {},
@@ -767,9 +879,9 @@
       "id": "bookcase",
       "type": "bookcase",
       "pos": {
-        "x": -5.503,
+        "x": -1.356,
         "y": 0,
-        "z": -5.2
+        "z": -1.231
       },
       "visible": true,
       "specialFlags": {},
@@ -800,7 +912,7 @@
       "width": 1.1,
       "height": 1.8,
       "depth": 0.38,
-      "rotQuarterTurns": 0,
+      "rotQuarterTurns": 1,
       "editorLocked": false,
       "tint": "",
       "name": "",
@@ -813,7 +925,7 @@
         "collisionPad": 0,
         "jumpIgnoreSurfaceIds": []
       },
-      "rotYDeg": 0
+      "rotYDeg": 90
     }
   ]
 }

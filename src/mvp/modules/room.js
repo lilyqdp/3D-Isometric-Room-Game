@@ -413,10 +413,10 @@ export function makeDesk(scene, desk) {
 
   const legGeo = new THREE.BoxGeometry(0.12, 1.0, 0.12);
   const legOffsets = [
-    [-1.45, -0.8],
-    [1.45, -0.8],
-    [-1.45, 0.8],
-    [1.45, 0.8],
+    [-0.88, -0.47],
+    [0.88, -0.47],
+    [-0.88, 0.47],
+    [0.88, 0.47],
   ];
   for (const [dx, dz] of legOffsets) {
     const leg = new THREE.Mesh(legGeo, legMat);
@@ -806,6 +806,91 @@ export function makeCurtains(scene, windowSill) {
       scene.add(fold);
     }
   }
+}
+
+export function makeFishtank(scene, tank) {
+  const group = new THREE.Group();
+  group.position.copy(tank.pos);
+  group.rotation.y = getObjectRotation(tank);
+  if (!isRoomObjectVisible(tank)) {
+    tagRoomObject(group, tank);
+    scene.add(group);
+    return;
+  }
+
+  const w = Math.max(0.1, Number(tank.width) || 1.0);
+  const d = Math.max(0.1, Number(tank.depth) || 0.45);
+  const h = Math.max(0.1, Number(tank.height) || 0.65);
+
+  // Stand legs
+  const legMat = makeTintedStandardMaterial(0x2a2a2a, { roughness: 0.7 }, tank);
+  const legGeo = new THREE.BoxGeometry(0.06, h * 0.45, 0.06);
+  for (const [dx, dz] of [[-w * 0.44, -d * 0.4], [w * 0.44, -d * 0.4], [-w * 0.44, d * 0.4], [w * 0.44, d * 0.4]]) {
+    const leg = new THREE.Mesh(legGeo, legMat);
+    leg.position.set(dx, h * 0.225, dz);
+    tagRoomObject(leg, tank);
+    group.add(leg);
+  }
+
+  // Stand shelf
+  const shelfMat = makeTintedStandardMaterial(0x1a1a1a, { roughness: 0.6 }, tank);
+  const standShelf = new THREE.Mesh(new THREE.BoxGeometry(w * 0.92, 0.04, d * 0.84), shelfMat);
+  standShelf.position.set(0, h * 0.45, 0);
+  tagRoomObject(standShelf, tank);
+  group.add(standShelf);
+
+  // Glass tank body (slightly transparent blue-green)
+  const glassMat = new THREE.MeshStandardMaterial({
+    color: 0x4fc3c3,
+    transparent: true,
+    opacity: 0.25,
+    roughness: 0.05,
+    metalness: 0.1,
+    side: THREE.DoubleSide,
+  });
+  const tankBody = new THREE.Mesh(new THREE.BoxGeometry(w, h * 0.52, d), glassMat);
+  tankBody.position.set(0, h * 0.45 + h * 0.26 + 0.02, 0);
+  tagRoomObject(tankBody, tank);
+  group.add(tankBody);
+
+  // Water fill (darker teal inside)
+  const waterMat = new THREE.MeshStandardMaterial({
+    color: 0x1a7a6e,
+    transparent: true,
+    opacity: 0.45,
+    roughness: 0.1,
+  });
+  const water = new THREE.Mesh(new THREE.BoxGeometry(w * 0.92, h * 0.44, d * 0.88), waterMat);
+  water.position.set(0, h * 0.45 + h * 0.22 + 0.02, 0);
+  tagRoomObject(water, tank);
+  group.add(water);
+
+  // Gravel bottom
+  const gravelMat = makeTintedStandardMaterial(0x8a7a5a, { roughness: 0.95 }, tank);
+  const gravel = new THREE.Mesh(new THREE.BoxGeometry(w * 0.9, 0.04, d * 0.85), gravelMat);
+  gravel.position.set(0, h * 0.45 + 0.04, 0);
+  tagRoomObject(gravel, tank);
+  group.add(gravel);
+
+  // Black frame top rim
+  const rimMat = makeTintedStandardMaterial(0x111111, { roughness: 0.5 }, tank);
+  const rim = new THREE.Mesh(new THREE.BoxGeometry(w + 0.02, 0.03, d + 0.02), rimMat);
+  rim.position.set(0, h * 0.45 + h * 0.52 + 0.035, 0);
+  tagRoomObject(rim, tank);
+  group.add(rim);
+
+  // Small orange fish blobs
+  const fishMat = new THREE.MeshStandardMaterial({ color: 0xff6a00, roughness: 0.8 });
+  const fishPositions = [[w * 0.15, 0], [-w * 0.1, 0.04], [w * 0.28, -0.03]];
+  for (const [fx, fz] of fishPositions) {
+    const fish = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.05, 0.04), fishMat);
+    fish.position.set(fx, h * 0.45 + h * 0.28, fz);
+    tagRoomObject(fish, tank);
+    group.add(fish);
+  }
+
+  tagRoomObject(group, tank);
+  scene.add(group);
 }
 
 export function makeChair(scene, chair) {
@@ -1486,6 +1571,9 @@ export function buildRoomSceneFromLayout({
         break;
       case "desk":
         makeDesk(scene, object);
+        break;
+      case "fishtank":
+        makeFishtank(scene, object);
         break;
       case "chair":
         makeChair(scene, object);

@@ -359,6 +359,7 @@ const SUPPORTED_ROOM_OBJECT_TYPES = new Set([
   "rug",
   "wardrobe",
   "bookcase",
+  "fishtank",
 ]);
 
 function isSupportedRoomObjectType(type) {
@@ -526,6 +527,7 @@ function objectSupportsObstacleSettings(object) {
     "rug",
     "wardrobe",
     "bookcase",
+    "fishtank"
   ].includes(object.type);
 }
 
@@ -553,7 +555,7 @@ function getDefaultSurfaceSpecialType(object) {
 }
 
 function getDefaultObstacleConfigForObject(object) {
-  if (["desk", "hamper", "trashCan", "bed", "bedsideTable", "wardrobe", "bookcase"].includes(object?.type)) {
+  if (["desk", "hamper", "trashCan", "bed", "bedsideTable", "wardrobe", "bookcase", "fishtank"].includes(object?.type)) {
     return createDefaultObstacleConfig({ enabled: true, mode: "hard" });
   }
   return createDefaultObstacleConfig({ enabled: false, mode: "soft" });
@@ -868,7 +870,7 @@ function getLayoutObjectCenterY(object) {
 
 function objectCanSupportSurface(object) {
   if (!object) return false;
-  if (["floor", "desk", "chair", "shelf", "platform", "windowSill", "model", "hamper", "trashCan", "bed", "bedsideTable", "rug", "wardrobe", "bookcase"].includes(object.type)) return true;
+  if (["floor", "desk", "chair", "shelf", "platform", "windowSill", "model", "hamper", "trashCan", "bed", "bedsideTable", "rug", "wardrobe", "bookcase", "fishtank"].includes(object.type)) return true;
   if (object.type === "primitive") return object.shapeKind !== "sphere";
   return false;
 }
@@ -973,8 +975,8 @@ export function createDefaultRoomLayout(THREE) {
     id: "desk",
     type: "desk",
     pos: new THREE.Vector3(-2.4, 0, -2.6),
-    sizeX: 3.1,
-    sizeZ: 1.8,
+    sizeX: 1.950,
+    sizeZ: 1.550,
     topY: 1.08,
     rotQuarterTurns: 0,
     approach: new THREE.Vector3(-0.8, 0, -1.8),
@@ -994,10 +996,10 @@ export function createDefaultRoomLayout(THREE) {
       },
       special: { type: "desk", cupLoss: true },
       supportOffsets: [
-        { dx: -1.45, dz: -0.8, hx: 0.13, hz: 0.13, topY: 1.02, mode: "soft", navPad: 0.03, steerPad: 0.01, collisionPad: 0 },
-        { dx: 1.45, dz: -0.8, hx: 0.13, hz: 0.13, topY: 1.02, mode: "soft", navPad: 0.03, steerPad: 0.01, collisionPad: 0 },
-        { dx: -1.45, dz: 0.8, hx: 0.13, hz: 0.13, topY: 1.02, mode: "soft", navPad: 0.03, steerPad: 0.01, collisionPad: 0 },
-        { dx: 1.45, dz: 0.8, hx: 0.13, hz: 0.13, topY: 1.02, mode: "soft", navPad: 0.03, steerPad: 0.01, collisionPad: 0 },
+        { dx: -0.88, dz: -0.47, hx: 0.13, hz: 0.13, topY: 1.02, mode: "soft", navPad: 0.03, steerPad: 0.01, collisionPad: 0 },
+        { dx: 0.88, dz: -0.47, hx: 0.13, hz: 0.13, topY: 1.02, mode: "soft", navPad: 0.03, steerPad: 0.01, collisionPad: 0 },
+        { dx: -0.88, dz: 0.47, hx: 0.13, hz: 0.13, topY: 1.02, mode: "soft", navPad: 0.03, steerPad: 0.01, collisionPad: 0 },
+        { dx: 0.88, dz: 0.47, hx: 0.13, hz: 0.13, topY: 1.02, mode: "soft", navPad: 0.03, steerPad: 0.01, collisionPad: 0 },
       ],
       blockerOffsets: [],
     },
@@ -1242,6 +1244,20 @@ export function createDefaultRoomLayout(THREE) {
     surface: null,
   };
 
+   const fishtank = {
+    id: "fishtank",
+    type: "fishtank",
+    pos: new THREE.Vector3(2.2, 0, -3.0),
+    width: 1.0,
+    depth: 0.45,
+    height: 0.65,
+    surfaceY: 0.65,
+    editorLocked: false,
+    tint: "",
+    surface: { enabled: false },
+  };
+  
+
   const objects = [
     floor,
     desk,
@@ -1253,6 +1269,7 @@ export function createDefaultRoomLayout(THREE) {
     windowSill,
     hamper,
     trashCan,
+    fishtank,
   ];
 
   const objectsById = Object.fromEntries(objects.map((object) => [object.id, object]));
@@ -1281,6 +1298,7 @@ export function createDefaultRoomLayout(THREE) {
     windowSill,
     hamper,
     trashCan,
+    fishtank,
   });
 }
 
