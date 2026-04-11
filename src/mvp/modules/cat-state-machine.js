@@ -2696,7 +2696,10 @@ export function updateCatStateMachineRuntime(ctx, dt) {
       const windowTarget = clampPointToSurfaceSupport(windowSurfaceId, windowTargetRaw, 0.05) || windowTargetRaw;
 
       const windowRoute = getActiveNavRoute();
-      if (windowRoute && windowRoute.finalSurfaceId !== windowSurfaceId) {
+      if (windowRoute && String(windowRoute.source || "") !== "window") {
+        clearNavRoute("window-route-override");
+        cat.manualPatrolActive = false;
+      } else if (windowRoute && windowRoute.finalSurfaceId !== windowSurfaceId) {
         clearNavRoute("window-retarget");
       }
 
@@ -2740,11 +2743,11 @@ export function updateCatStateMachineRuntime(ctx, dt) {
             hadRecentSurfaceRouteInstability(activeWindowRoute) ||
             hasStaleElevatedRouteProgress(activeWindowRoute, 0.34)
           );
-        const queued = planElevatedHopToFinalTarget(
+        const queued = requestSharedMoveRoute(
           windowSurfaceId,
           new THREE.Vector3(windowTarget.x, windowY, windowTarget.z),
           Math.max(0.3, (game.windowOpenUntil || 0) - clockTime),
-          { forceReplan: forceWindowReplan }
+          { source: "window", forceReplan: forceWindowReplan }
         );
         if (queued) {
           cat.nav.windowNoRouteStreak = 0;
