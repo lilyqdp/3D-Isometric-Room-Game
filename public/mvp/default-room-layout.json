@@ -584,6 +584,19 @@
     "tint": "",
     "specialFlags": {},
     "surface": { "enabled": false }
-  }
+  },
+  {
+      "id": "beanbag",
+      "type": "beanbag",
+      "pos": { "x": -5.0, "y": 0, "z": 1.5 },
+      "radius": 0.52,
+      "rotQuarterTurns": 0,
+      "rotYDeg": 0,
+      "visible": true,
+      "editorLocked": false,
+      "tint": "",
+      "specialFlags": {},
+      "surface": { "enabled": false }
+    }
   ]
 }

@@ -943,6 +943,73 @@ export function makeFishtank(scene, tank) {
   tagRoomObject(group, tank);
   scene.add(group);
 }
+export function makeBeanbag(scene, beanbag) {
+  const group = new THREE.Group();
+  group.position.copy(beanbag.pos);
+  group.rotation.y = getObjectRotation(beanbag);
+  if (!isRoomObjectVisible(beanbag)) {
+    tagRoomObject(group, beanbag);
+    scene.add(group);
+    return;
+  }
+
+  const r = Math.max(0.1, Number(beanbag.radius) || 0.52);
+  const mainMat = makeTintedStandardMaterial(0x3ab0e0, { roughness: 0.88 }, beanbag);
+  const darkMat = makeTintedStandardMaterial(0x1e6fa8, { roughness: 0.92 }, beanbag);
+  const seatMat = makeTintedStandardMaterial(0x1a5a8a, { roughness: 0.94 }, beanbag);
+
+  // Base ring — wide and flat
+  const base = new THREE.Mesh(new THREE.SphereGeometry(r, 24, 16), mainMat);
+  base.scale.set(1.0, 0.28, 0.88);
+  base.position.set(0, r * 0.28, 0);
+  tagRoomObject(base, beanbag);
+  group.add(base);
+
+  // Main body — wide and squat
+  const body = new THREE.Mesh(new THREE.SphereGeometry(r * 0.9, 24, 16), mainMat);
+  body.scale.set(1.05, 0.82, 0.95);
+  body.position.set(0, r * 0.78, 0);
+  tagRoomObject(body, beanbag);
+  group.add(body);
+
+  // Back — wide and low, not tall egg
+  const back = new THREE.Mesh(new THREE.SphereGeometry(r * 0.78, 20, 14), darkMat);
+  back.scale.set(1.1, 0.9, 0.55);
+  back.position.set(0, r * 1.05, -r * 0.45);
+  tagRoomObject(back, beanbag);
+  group.add(back);
+
+  // Left arm — hugging the side
+  const armL = new THREE.Mesh(new THREE.SphereGeometry(r * 0.48, 16, 12), mainMat);
+  armL.scale.set(0.5, 0.65, 1.2);
+  armL.position.set(-r * 0.78, r * 0.82, 0);
+  tagRoomObject(armL, beanbag);
+  group.add(armL);
+
+  // Right arm — hugging the side
+  const armR = new THREE.Mesh(new THREE.SphereGeometry(r * 0.48, 16, 12), mainMat);
+  armR.scale.set(0.5, 0.65, 1.2);
+  armR.position.set(r * 0.78, r * 0.82, 0);
+  tagRoomObject(armR, beanbag);
+  group.add(armR);
+
+  // Front lump — low roll at the front
+  const frontLump = new THREE.Mesh(new THREE.SphereGeometry(r * 0.5, 16, 12), mainMat);
+  frontLump.scale.set(1.15, 0.48, 0.6);
+  frontLump.position.set(0, r * 0.44, r * 0.68);
+  tagRoomObject(frontLump, beanbag);
+  group.add(frontLump);
+
+  // Seat — visible dark hollow
+  const seat = new THREE.Mesh(new THREE.SphereGeometry(r * 0.38, 20, 14), seatMat);
+  seat.scale.set(0.85, 0.08, 0.78);
+  seat.position.set(0, r * 0.90, r * 0.1);
+  tagRoomObject(seat, beanbag);
+  group.add(seat);
+
+  tagRoomObject(group, beanbag);
+  scene.add(group);
+}
 
 export function makeChair(scene, chair) {
   const seatMat = makeTintedStandardMaterial(0x544a41, { roughness: 0.82 }, chair);
@@ -1625,6 +1692,9 @@ export function buildRoomSceneFromLayout({
         break;
       case "fishtank":
         makeFishtank(scene, object);
+        break;
+      case "beanbag":
+        makeBeanbag(scene, object);
         break;
       case "chair":
         makeChair(scene, object);

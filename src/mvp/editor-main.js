@@ -1256,7 +1256,7 @@ function objectHasSpecialModel(object) {
 
 function canCalibrateObjectDimensions(object) {
   if (!object) return false;
-  if (["model", "desk", "chair", "shelf", "platform", "windowSill", "bed", "bedsideTable", "rug", "wardrobe", "bookcase", "hamper", "trashCan", "fishtank"].includes(object.type)) {
+  if (["model", "desk", "chair", "shelf", "platform", "windowSill", "bed", "bedsideTable", "rug", "wardrobe", "bookcase", "hamper", "trashCan", "fishtank", "beanbag"].includes(object.type)) {
     return true;
   }
   if (object.type !== "primitive") return false;
@@ -1317,13 +1317,13 @@ function isObjectLocked(object) {
 
 function canRotateObject(object) {
   if (!object) return false;
-  if (["desk", "chair", "shelf", "platform", "model", "windowSill", "bed", "bedsideTable", "rug", "wardrobe", "bookcase", "fishtank"].includes(object.type)) return true;
+  if (["desk", "chair", "shelf", "platform", "model", "windowSill", "bed", "bedsideTable", "rug", "wardrobe", "bookcase", "fishtank", "beanbag"].includes(object.type)) return true;
   if (object.type === "primitive") return object.shapeKind !== "sphere";
   return false;
 }
 
 function canDuplicateObject(object) {
-  return !!object && !isObjectLocked(object) && ["chair", "shelf", "platform", "primitive", "model", "bed", "bedsideTable", "rug", "wardrobe", "bookcase", "fishtank"].includes(object.type);
+  return !!object && !isObjectLocked(object) && ["chair", "shelf", "platform", "primitive", "model", "bed", "bedsideTable", "rug", "wardrobe", "bookcase", "fishtank", "beanbag"].includes(object.type);
 }
 
 function suggestDuplicateId(object) {
@@ -1451,6 +1451,10 @@ function getEditableFields(object) {
         { key: "width", label: "Width", step: 0.05 },
         { key: "depth", label: "Depth", step: 0.05 },
         { key: "height", label: "Height", step: 0.05 },
+      ];
+      case "beanbag":
+        return [
+        { key: "radius", label: "Radius", step: 0.05 },
       ];
     case "windowSill":
       return [

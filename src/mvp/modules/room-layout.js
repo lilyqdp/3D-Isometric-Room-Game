@@ -360,6 +360,7 @@ const SUPPORTED_ROOM_OBJECT_TYPES = new Set([
   "wardrobe",
   "bookcase",
   "fishtank",
+  "beanbag",
 ]);
 
 function isSupportedRoomObjectType(type) {
@@ -527,7 +528,8 @@ function objectSupportsObstacleSettings(object) {
     "rug",
     "wardrobe",
     "bookcase",
-    "fishtank"
+    "fishtank",
+    "beanbag",
   ].includes(object.type);
 }
 
@@ -555,7 +557,7 @@ function getDefaultSurfaceSpecialType(object) {
 }
 
 function getDefaultObstacleConfigForObject(object) {
-  if (["desk", "hamper", "trashCan", "bed", "bedsideTable", "wardrobe", "bookcase", "fishtank"].includes(object?.type)) {
+  if (["desk", "hamper", "trashCan", "bed", "bedsideTable", "wardrobe", "bookcase", "fishtank", "beanbag"].includes(object?.type)) {
     return createDefaultObstacleConfig({ enabled: true, mode: "hard" });
   }
   return createDefaultObstacleConfig({ enabled: false, mode: "soft" });
@@ -870,7 +872,7 @@ function getLayoutObjectCenterY(object) {
 
 function objectCanSupportSurface(object) {
   if (!object) return false;
-  if (["floor", "desk", "chair", "shelf", "platform", "windowSill", "model", "hamper", "trashCan", "bed", "bedsideTable", "rug", "wardrobe", "bookcase", "fishtank"].includes(object.type)) return true;
+  if (["floor", "desk", "chair", "shelf", "platform", "windowSill", "model", "hamper", "trashCan", "bed", "bedsideTable", "rug", "wardrobe", "bookcase", "fishtank","beanbag"].includes(object.type)) return true;
   if (object.type === "primitive") return object.shapeKind !== "sphere";
   return false;
 }
@@ -1256,7 +1258,16 @@ export function createDefaultRoomLayout(THREE) {
     tint: "",
     surface: { enabled: false },
   };
-  
+  const beanbag = {
+    id: "beanbag",
+    type: "beanbag",
+    pos: new THREE.Vector3(-5.0, 0, 1.5),
+    radius: 0.52,
+    editorLocked: false,
+    tint: "",
+    specialFlags: {},
+    surface: { enabled: false },
+  };
 
   const objects = [
     floor,
@@ -1270,6 +1281,7 @@ export function createDefaultRoomLayout(THREE) {
     hamper,
     trashCan,
     fishtank,
+    "beanbag",
   ];
 
   const objectsById = Object.fromEntries(objects.map((object) => [object.id, object]));
@@ -1299,6 +1311,7 @@ export function createDefaultRoomLayout(THREE) {
     hamper,
     trashCan,
     fishtank,
+    beanbag,
   });
 }
 
