@@ -502,9 +502,7 @@ function createDefaultObstacleConfig({ enabled = false, mode = "soft", jumpIgnor
     enabled: !!enabled,
     mode: mode === "hard" ? "hard" : "soft",
     navPad: mode === "hard" ? 0.02 : 0.03,
-    // Recast already bakes the cat radius into the navmesh solve; keep runtime hard
-    // blockers close to their actual footprint so corners don't gain a second margin.
-    steerPad: mode === "hard" ? 0.005 : 0.01,
+    steerPad: mode === "hard" ? 0.02 : 0.01,
     collisionPad: 0,
     jumpIgnoreSurfaceIds: Array.isArray(jumpIgnoreSurfaceIds)
       ? jumpIgnoreSurfaceIds.map((value) => String(value))
@@ -649,7 +647,7 @@ function ensureRoomObjectDefaults(object) {
       object.obstacle = defaults;
     } else {
       object.obstacle.enabled = object.obstacle.enabled != null ? !!object.obstacle.enabled : defaults.enabled;
-      object.obstacle.mode = object.obstacle.mode === "hard" ? "hard" : "soft";
+      object.obstacle.mode = object.obstacle.mode === "hard" ? "hard" : defaults.mode;
       object.obstacle.jumpIgnoreSurfaceIds = Array.isArray(object.obstacle.jumpIgnoreSurfaceIds)
         ? object.obstacle.jumpIgnoreSurfaceIds.map((value) => String(value))
         : object.obstacle.jumpIgnoreSurfaceIds
@@ -658,14 +656,6 @@ function ensureRoomObjectDefaults(object) {
       if (!Number.isFinite(Number(object.obstacle.navPad))) object.obstacle.navPad = defaults.navPad;
       if (!Number.isFinite(Number(object.obstacle.steerPad))) object.obstacle.steerPad = defaults.steerPad;
       if (!Number.isFinite(Number(object.obstacle.collisionPad))) object.obstacle.collisionPad = defaults.collisionPad;
-      // Migrate the previous hard-mode runtime padding default down to the newer value.
-      if (
-        object.obstacle.mode === "hard" &&
-        Number.isFinite(Number(object.obstacle.steerPad)) &&
-        Math.abs(Number(object.obstacle.steerPad) - 0.02) <= 1e-6
-      ) {
-        object.obstacle.steerPad = defaults.steerPad;
-      }
     }
   }
 
@@ -1463,7 +1453,7 @@ function buildObjectObstacleSpec(object) {
     surfaceId: object.id,
     jumpIgnoreSurfaceIds: Array.from(jumpIgnoreSurfaceIds),
     navPad: Number.isFinite(Number(obstacle.navPad)) ? Number(obstacle.navPad) : (mode === "hard" ? 0.02 : 0.03),
-    steerPad: Number.isFinite(Number(obstacle.steerPad)) ? Number(obstacle.steerPad) : (mode === "hard" ? 0.005 : 0.01),
+    steerPad: Number.isFinite(Number(obstacle.steerPad)) ? Number(obstacle.steerPad) : (mode === "hard" ? 0.02 : 0.01),
     collisionPad: Number.isFinite(Number(obstacle.collisionPad)) ? Number(obstacle.collisionPad) : 0,
     blocksRuntime: mode === "hard",
     blocksPath: true,
@@ -1899,27 +1889,7 @@ export function setRoomObjectObstacleMode(layout, objectId, mode) {
   if (!object.obstacle || typeof object.obstacle !== "object") {
     object.obstacle = getDefaultObstacleConfigForObject(object);
   }
-  const prevMode = object.obstacle.mode === "hard" ? "hard" : "soft";
-  const nextMode = mode === "hard" ? "hard" : "soft";
-  const prevDefaults = createDefaultObstacleConfig({ enabled: !!object.obstacle.enabled, mode: prevMode });
-  const nextDefaults = createDefaultObstacleConfig({ enabled: !!object.obstacle.enabled, mode: nextMode });
-  object.obstacle.mode = nextMode;
-  if (
-    !Number.isFinite(Number(object.obstacle.navPad)) ||
-    Math.abs(Number(object.obstacle.navPad) - prevDefaults.navPad) <= 1e-6
-  ) {
-    object.obstacle.navPad = nextDefaults.navPad;
-  }
-  if (
-    !Number.isFinite(Number(object.obstacle.steerPad)) ||
-    Math.abs(Number(object.obstacle.steerPad) - prevDefaults.steerPad) <= 1e-6 ||
-    (prevMode === "hard" && Math.abs(Number(object.obstacle.steerPad) - 0.02) <= 1e-6)
-  ) {
-    object.obstacle.steerPad = nextDefaults.steerPad;
-  }
-  if (!Number.isFinite(Number(object.obstacle.collisionPad))) {
-    object.obstacle.collisionPad = nextDefaults.collisionPad;
-  }
+  object.obstacle.mode = mode === "hard" ? "hard" : "soft";
   return refreshRoomLayout(layout).objectsById?.[objectId] || null;
 }
 
