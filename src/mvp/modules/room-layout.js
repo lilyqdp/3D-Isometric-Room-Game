@@ -497,12 +497,31 @@ function createDefaultSurfaceConfig({ enabled = false, specialType = "object", s
   };
 }
 
+function normalizeObstacleMode(mode, fallback = "soft") {
+  const normalized = String(mode || fallback || "soft").toLowerCase();
+  return ["hard", "soft", "pushable"].includes(normalized)
+    ? normalized
+    : normalizeObstacleMode(fallback, "soft");
+}
+
+function getObstacleModeDefaults(mode) {
+  switch (normalizeObstacleMode(mode)) {
+    case "hard":
+      return { mode: "hard", navPad: 0.02, steerPad: 0.02 };
+    case "pushable":
+      return { mode: "pushable", navPad: 0.05, steerPad: 0.0 };
+    default:
+      return { mode: "soft", navPad: 0.03, steerPad: 0.01 };
+  }
+}
+
 function createDefaultObstacleConfig({ enabled = false, mode = "soft", jumpIgnoreSurfaceIds = [] } = {}) {
+  const defaults = getObstacleModeDefaults(mode);
   return {
     enabled: !!enabled,
-    mode: mode === "hard" ? "hard" : "soft",
-    navPad: mode === "hard" ? 0.02 : 0.03,
-    steerPad: mode === "hard" ? 0.02 : 0.01,
+    mode: defaults.mode,
+    navPad: defaults.navPad,
+    steerPad: defaults.steerPad,
     collisionPad: 0,
     jumpIgnoreSurfaceIds: Array.isArray(jumpIgnoreSurfaceIds)
       ? jumpIgnoreSurfaceIds.map((value) => String(value))
@@ -546,6 +565,8 @@ function objectSupportsGenericObstacle(object) {
     "rug",
     "wardrobe",
     "bookcase",
+    "fishtank",
+    "beanbag",
   ].includes(object.type);
 }
 
@@ -647,7 +668,7 @@ function ensureRoomObjectDefaults(object) {
       object.obstacle = defaults;
     } else {
       object.obstacle.enabled = object.obstacle.enabled != null ? !!object.obstacle.enabled : defaults.enabled;
-      object.obstacle.mode = object.obstacle.mode === "hard" ? "hard" : defaults.mode;
+      object.obstacle.mode = normalizeObstacleMode(object.obstacle.mode, defaults.mode);
       object.obstacle.jumpIgnoreSurfaceIds = Array.isArray(object.obstacle.jumpIgnoreSurfaceIds)
         ? object.obstacle.jumpIgnoreSurfaceIds.map((value) => String(value))
         : object.obstacle.jumpIgnoreSurfaceIds
@@ -774,7 +795,12 @@ function getLayoutObjectLocalFootprint(object) {
     case "rug":
     case "wardrobe":
     case "bookcase":
+    case "fishtank":
       return { width: Math.max(0.1, Number(object.width) || 0.1), depth: Math.max(0.1, Number(object.depth) || 0.1) };
+    case "beanbag": {
+      const radius = Math.max(0.1, Number(object.radius) || 0.52);
+      return { width: radius * 2.04, depth: radius * 1.9 };
+    }
     case "primitive":
       if (object.shapeKind === "sphere" || object.shapeKind === "cylinder") {
         const diameter = Math.max(0.1, (Number(object.radius) || 0.5) * 2);
@@ -820,6 +846,8 @@ function getLayoutObjectFootprint(object) {
     case "rug":
     case "wardrobe":
     case "bookcase":
+    case "fishtank":
+    case "beanbag":
       return getRotatedRectSize(local.width, local.depth, getObjectRotationRadians(object));
     case "primitive":
       return getPrimitiveFootprint(object);
@@ -983,7 +1011,7 @@ export function createDefaultRoomLayout(THREE) {
     rotQuarterTurns: 0,
     approach: new THREE.Vector3(-0.8, 0, -1.8),
     perch: new THREE.Vector3(-1.9, 0, -2.3),
-    cup: new THREE.Vector3(-0.98, 0, -2.22),
+    cup: new THREE.Vector3(-0.230, 0, -4.330),
     editorLocked: false,
     tint: "",
     specialFlags: {
@@ -1438,7 +1466,8 @@ export function buildRoomObjectSurfaceSpec(object) {
 function buildObjectObstacleSpec(object) {
   const obstacle = object?.obstacle;
   if (!object || !obstacle?.enabled) return null;
-  const mode = obstacle.mode === "hard" ? "hard" : "soft";
+  const mode = normalizeObstacleMode(obstacle.mode, "soft");
+  const modeDefaults = getObstacleModeDefaults(mode);
   const jumpIgnoreSurfaceIds = new Set(
     Array.isArray(obstacle.jumpIgnoreSurfaceIds)
       ? obstacle.jumpIgnoreSurfaceIds.map((value) => String(value))
@@ -1452,12 +1481,12 @@ function buildObjectObstacleSpec(object) {
     tag: "layoutObject",
     surfaceId: object.id,
     jumpIgnoreSurfaceIds: Array.from(jumpIgnoreSurfaceIds),
-    navPad: Number.isFinite(Number(obstacle.navPad)) ? Number(obstacle.navPad) : (mode === "hard" ? 0.02 : 0.03),
-    steerPad: Number.isFinite(Number(obstacle.steerPad)) ? Number(obstacle.steerPad) : (mode === "hard" ? 0.02 : 0.01),
+    navPad: Number.isFinite(Number(obstacle.navPad)) ? Number(obstacle.navPad) : modeDefaults.navPad,
+    steerPad: Number.isFinite(Number(obstacle.steerPad)) ? Number(obstacle.steerPad) : modeDefaults.steerPad,
     collisionPad: Number.isFinite(Number(obstacle.collisionPad)) ? Number(obstacle.collisionPad) : 0,
-    blocksRuntime: mode === "hard",
+    blocksRuntime: mode === "hard" || mode === "pushable",
     blocksPath: true,
-    pushable: false,
+    pushable: mode === "pushable",
   };
   const centerY = getLayoutObjectCenterY(object);
   if (object.type === "primitive" && (object.shapeKind === "sphere" || object.shapeKind === "cylinder")) {
@@ -1507,8 +1536,10 @@ function buildObjectObstacleSpec(object) {
           ? runtimeModelBounds.height
           : Number(object.height) || 0.9
       )
-    : ["bed", "bedsideTable", "rug", "wardrobe", "bookcase"].includes(object.type)
+    : ["bed", "bedsideTable", "rug", "wardrobe", "bookcase", "fishtank"].includes(object.type)
       ? Math.max(0.05, Number(object.height) || 0.9)
+    : object.type === "beanbag"
+      ? Math.max(0.05, Number(object.height) || (Number(object.radius) || 0.52) * 1.78)
     : Math.max(0.05, Number(object.topY || object.surfaceY || object.rimY || 0.9));
   const yaw = getObjectRotationRadians(object);
   return {
@@ -1889,7 +1920,7 @@ export function setRoomObjectObstacleMode(layout, objectId, mode) {
   if (!object.obstacle || typeof object.obstacle !== "object") {
     object.obstacle = getDefaultObstacleConfigForObject(object);
   }
-  object.obstacle.mode = mode === "hard" ? "hard" : "soft";
+  object.obstacle.mode = normalizeObstacleMode(mode, object.obstacle.mode || "soft");
   return refreshRoomLayout(layout).objectsById?.[objectId] || null;
 }
 
