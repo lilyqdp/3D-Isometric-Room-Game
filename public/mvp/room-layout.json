@@ -61,28 +61,28 @@
       "id": "desk",
       "type": "desk",
       "pos": {
-        "x": 0.605,
+        "x": 0.604,
         "y": 0,
-        "z": -4.702
+        "z": -4.706
       },
       "sizeX": 1.95,
       "sizeZ": 1.55,
       "topY": 0.95,
       "rotQuarterTurns": 0,
       "approach": {
-        "x": 2.205,
+        "x": 2.204,
         "y": 0,
-        "z": -3.902
+        "z": -3.906
       },
       "perch": {
-        "x": 1.105,
+        "x": 1.104,
         "y": 0,
-        "z": -4.402
+        "z": -4.406
       },
       "cup": {
-        "x": -0.23,
+        "x": -0.231,
         "y": 0,
-        "z": -4.33
+        "z": -4.334
       },
       "editorLocked": false,
       "tint": "",
@@ -1229,9 +1229,9 @@
       "type": "primitive",
       "shapeKind": "rectPrism",
       "pos": {
-        "x": 0.232,
+        "x": 0.18,
         "y": 0,
-        "z": -5.104
+        "z": -5.217
       },
       "rotYDeg": 0,
       "rotQuarterTurns": 0,
