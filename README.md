@@ -24,16 +24,22 @@ rm -rf node_modules
 
 Then 'run npm install' again.
 
-▶️ Run the Development Server
+▶️ Running Instructions
 
-Start the local development server with:
+Install dependencies:
 
+```bash
+npm install
+```
+
+Run the development server:
+
+```bash
 npm run dev
+```
 
-You should see output similar to:
+Open the local Vite URL shown in the terminal, usually:
 
-VITE vX.X.X ready in XXX ms
-
-➜  Local:   http://localhost:5173/
-
-Open the displayed Local URL in your browser to run the project.
+```text
+http://localhost:5173/
+```
