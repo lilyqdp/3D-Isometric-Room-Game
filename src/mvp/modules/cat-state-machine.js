@@ -476,17 +476,37 @@ export function updateCatStateMachineRuntime(ctx, dt) {
     return true;
   }
 
-  function nudgeCatTowardWindowSitPoint(windowTarget) {
-    if (!windowTarget) return;
-    const dx = Number(windowTarget.x || 0) - cat.pos.x;
-    const dz = Number(windowTarget.z || 0) - cat.pos.z;
-    const dist = Math.hypot(dx, dz);
-    if (dist <= 1e-5) return;
-    const step = Math.min(WINDOW_SIT_NUDGE_MAX, dist * 0.45);
-    cat.pos.x += (dx / dist) * step;
-    cat.pos.z += (dz / dist) * step;
-    cat.group.position.x = cat.pos.x;
-    cat.group.position.z = cat.pos.z;
+  function getWindowFacingYaw() {
+    if (!windowSill) return Number.isFinite(cat.group.rotation.y) ? cat.group.rotation.y : Math.PI;
+    const centerX = Number.isFinite(windowSill.pos?.x) ? Number(windowSill.pos.x) : Number(windowSill.sitPoint?.x) || cat.pos.x;
+    const halfWidth = Math.max(0.05, (Number(windowSill.windowWidth) || Number(windowSill.width) || 0.8) * 0.5);
+    const targetX = THREE.MathUtils.clamp(cat.pos.x, centerX - halfWidth, centerX + halfWidth);
+    const targetZ = Number.isFinite(windowSill.wallZ) ? Number(windowSill.wallZ) : (Number(windowSill.sitPoint?.z) || cat.pos.z);
+    const dx = targetX - cat.pos.x;
+    const dz = targetZ - cat.pos.z;
+    if (dx * dx + dz * dz <= 1e-6) {
+      return Number.isFinite(windowSill?.outsideYaw) ? windowSill.outsideYaw : Math.PI;
+    }
+    return Math.atan2(dx, dz);
+  }
+
+  function faceWindowNearestPoint(stepDt) {
+    const yaw = getWindowFacingYaw();
+    const dy = Math.atan2(
+      Math.sin(yaw - cat.group.rotation.y),
+      Math.cos(yaw - cat.group.rotation.y)
+    );
+    cat.group.rotation.y += dy * Math.min(1, stepDt * 6.8);
+  }
+
+  function clearWindowArrivalMotion() {
+    cat.nav.lastSpeed = 0;
+    cat.nav.commandedSpeed = 0;
+    cat.nav.driveSpeed = 0;
+    cat.nav.speedNorm = 0;
+    cat.nav.smoothedSpeed = 0;
+    cat.nav.turnOnlyT = 0;
+    cat.motionBlend = 0;
   }
 
   function hadRecentSurfaceRouteInstability(route = null, within = 0.9) {
@@ -2617,7 +2637,8 @@ export function updateCatStateMachineRuntime(ctx, dt) {
       cat.state === "pullUp" ||
       cat.state === "jumpSettle" ||
       cat.state === "jumpDown" ||
-      cat.state === "landStop";
+      cat.state === "landStop" ||
+      cat.state === "windowAlign";
 
     if (!windowActive) {
       cat.nav.windowNoRouteStreak = 0;
@@ -2709,23 +2730,25 @@ export function updateCatStateMachineRuntime(ctx, dt) {
         getCurrentCatSurfaceId() === windowSurfaceId;
 
       if (onTargetSurface) {
-        markCatSurfaceId(getCurrentCatSurfaceId() || cat.nav?.route?.surfaceId || cat.nav?.surfaceState?.lastStableSurfaceId || "desk", "jump-down-plan", 0.4);
-        const route = ensureNavRoute();
-        route.surfaceId = windowSurfaceId;
-        route.target.set(windowTarget.x, windowY, windowTarget.z);
-        route.finalTarget.set(windowTarget.x, windowY, windowTarget.z);
-        route.y = windowY;
-        route.finalY = windowY;
-        syncLegacyScalarsFromRoute(route);
-        cat.group.position.y = windowY;
+        clearNavRoute("window-sill-arrived");
+        clearCatNavPath(false);
         clearCatJumpTargets();
-        cat.nav.debugDestination.set(windowTarget.x, windowY, windowTarget.z);
-        nudgeCatTowardWindowSitPoint(windowTarget);
+        cat.group.position.y = windowY;
+        clearWindowArrivalMotion();
         markCatSurfaceId(windowSurfaceId, "window-sit", 2.2);
         setAuthoritativeCatSurfaceId(windowSurfaceId, "window-sit", 2.4);
-        cat.state = "sit";
-        cat.status = "Watching window";
-        cat.group.rotation.y = Number.isFinite(windowSill?.outsideYaw) ? windowSill.outsideYaw : Math.PI;
+        if (cat.state === "sit") {
+          cat.status = "Watching window";
+          faceWindowNearestPoint(stepDt);
+          animateCatPose(stepDt, false);
+          return;
+        }
+        if (cat.state !== "windowAlign") {
+          cat.state = "windowAlign";
+          cat.phaseT = 0;
+        }
+        cat.status = "Facing window";
+        faceWindowNearestPoint(stepDt);
         animateCatPose(stepDt, false);
         return;
       }
@@ -2800,22 +2823,17 @@ export function updateCatStateMachineRuntime(ctx, dt) {
         const closeEnough =
           dx * dx + dz * dz <= 0.14 * 0.14 && Math.abs(cat.group.position.y - windowY) <= 0.14;
         if (closeEnough) {
-          const route = clearNavRoute("window-arrived");
-          markCatSurfaceId(getCurrentCatSurfaceId() || cat.nav?.route?.surfaceId || cat.nav?.surfaceState?.lastStableSurfaceId || "desk", "jump-down-plan", 0.4);
-          route.surfaceId = windowSurfaceId;
-          route.target.set(windowTarget.x, windowY, windowTarget.z);
-          route.finalTarget.set(windowTarget.x, windowY, windowTarget.z);
-          route.y = windowY;
-          route.finalY = windowY;
-          syncLegacyScalarsFromRoute(route);
-          cat.group.position.y = windowY;
+          clearNavRoute("window-arrived");
           clearCatNavPath(false);
-          nudgeCatTowardWindowSitPoint(windowTarget);
+          clearCatJumpTargets();
+          cat.group.position.y = windowY;
+          clearWindowArrivalMotion();
           markCatSurfaceId(windowSurfaceId, "window-sit", 2.2);
           setAuthoritativeCatSurfaceId(windowSurfaceId, "window-sit", 2.4);
-          cat.state = "sit";
-          cat.status = "Watching window";
-          cat.group.rotation.y = Number.isFinite(windowSill?.outsideYaw) ? windowSill.outsideYaw : Math.PI;
+          cat.state = "windowAlign";
+          cat.phaseT = 0;
+          cat.status = "Facing window";
+          faceWindowNearestPoint(stepDt);
           animateCatPose(stepDt, false);
         } else {
           cat.state = "patrol";
@@ -3456,6 +3474,28 @@ export function updateCatStateMachineRuntime(ctx, dt) {
       return;
     }
 
+    if (cat.state === "windowAlign") {
+      cat.phaseT += stepDt;
+      const windowSurfaceId = String(windowSill?.id || "windowSill");
+      clearWindowArrivalMotion();
+      markCatSurfaceId(windowSurfaceId, "window-sit", 0.5);
+      setAuthoritativeCatSurfaceId(windowSurfaceId, "window-sit", 0.65);
+      faceWindowNearestPoint(stepDt);
+      cat.status = "Facing window";
+      animateCatPose(stepDt, false);
+      const targetYaw = getWindowFacingYaw();
+      const yawDelta = Math.atan2(
+        Math.sin(targetYaw - cat.group.rotation.y),
+        Math.cos(targetYaw - cat.group.rotation.y)
+      );
+      if (Math.abs(yawDelta) <= 0.08 || cat.phaseT >= 0.45) {
+        cat.state = "sit";
+        cat.phaseT = 0;
+        cat.status = "Watching window";
+      }
+      return;
+    }
+
     if (cat.state === "sit") {
       cat.phaseT += stepDt;
       cat.status = "Sitting";
@@ -3463,6 +3503,11 @@ export function updateCatStateMachineRuntime(ctx, dt) {
         const windowSurfaceId = String(windowSill?.id || "windowSill");
         markCatSurfaceId(windowSurfaceId, "window-sit", 0.5);
         setAuthoritativeCatSurfaceId(windowSurfaceId, "window-sit", 0.65);
+        faceWindowNearestPoint(stepDt);
+        if (windowActive) {
+          animateCatPose(stepDt, false);
+          return;
+        }
       }
       animateCatPose(stepDt, false);
       const sitFor = Math.max(0.2, Number.isFinite(cat.sitDuration) ? cat.sitDuration : 1.25);
