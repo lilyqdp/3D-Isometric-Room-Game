@@ -583,6 +583,59 @@ export function createPickupsRuntime(ctx) {
     return { friction: 0.46, settleSpeed: 0.16 };
   }
 
+  function syncPickupBodyTeleport(body) {
+    if (!body) return;
+    if (body.previousPosition?.copy) body.previousPosition.copy(body.position);
+    if (body.interpolatedPosition?.copy) body.interpolatedPosition.copy(body.position);
+  }
+
+  function containPickupInRoom(pickup) {
+    const b = pickup?.body;
+    if (!b) return false;
+    const half = pickupHalfExtents(pickup);
+    const radius = Math.max(pickupRadius(pickup), half.x, half.z);
+    const minX = Number(ROOM?.minX) + radius + 0.035;
+    const maxX = Number(ROOM?.maxX) - radius - 0.035;
+    const minZ = Number(ROOM?.minZ) + radius + 0.035;
+    const maxZ = Number(ROOM?.maxZ) - radius - 0.035;
+    if (![minX, maxX, minZ, maxZ].every(Number.isFinite)) return false;
+
+    const floorY = Number.isFinite(Number(ROOM?.floorY)) ? Number(ROOM.floorY) : 0;
+    const oldX = b.position.x;
+    const oldZ = b.position.z;
+    const clampedX = THREE.MathUtils.clamp(oldX, minX, maxX);
+    const clampedZ = THREE.MathUtils.clamp(oldZ, minZ, maxZ);
+    const fellBelowRoom = b.position.y < floorY - 0.45;
+    const outsideX = clampedX !== oldX;
+    const outsideZ = clampedZ !== oldZ;
+    if (!outsideX && !outsideZ && !fellBelowRoom) return false;
+
+    b.wakeUp();
+    b.position.x = clampedX;
+    b.position.z = clampedZ;
+    if (fellBelowRoom) {
+      b.position.y = floorY + half.y + 0.035;
+      if (b.velocity.y < 0) b.velocity.y = 0.08;
+    }
+    if (outsideX) {
+      const outwardSign = oldX < minX ? -1 : 1;
+      if (b.velocity.x * outwardSign > 0) b.velocity.x *= -0.18;
+      else b.velocity.x *= 0.35;
+    }
+    if (outsideZ) {
+      const outwardSign = oldZ < minZ ? -1 : 1;
+      if (b.velocity.z * outwardSign > 0) b.velocity.z *= -0.18;
+      else b.velocity.z *= 0.35;
+    }
+    b.velocity.x = THREE.MathUtils.clamp(b.velocity.x, -1.2, 1.2);
+    b.velocity.z = THREE.MathUtils.clamp(b.velocity.z, -1.2, 1.2);
+    b.angularVelocity.scale(0.42, b.angularVelocity);
+    pickup.inMotion = true;
+    if (!pickup.motion || pickup.motion === "drag") pickup.motion = "bounce";
+    syncPickupBodyTeleport(b);
+    return true;
+  }
+
   function isPickupRestingOnRaisedSurface(pickup) {
     const b = pickup.body;
     const halfY = pickupHalfExtents(pickup).y;
@@ -904,6 +957,8 @@ export function createPickupsRuntime(ctx) {
         p.inMotion = true;
         if (!p.motion || p.motion === "drop") p.motion = "bounce";
       }
+
+      containPickupInRoom(p);
 
       const dxTrash = b.position.x - trashCan.pos.x;
       const dzTrash = b.position.z - trashCan.pos.z;
