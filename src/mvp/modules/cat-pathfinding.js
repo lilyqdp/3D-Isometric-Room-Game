@@ -643,6 +643,109 @@ export function createCatPathfindingRuntime(ctx) {
     return parts.join("|");
   }
 
+  function mergePathOptions(baseOptions = null, extraOptions = null) {
+    const merged = {
+      ...(baseOptions && typeof baseOptions === "object" ? baseOptions : {}),
+      ...(extraOptions && typeof extraOptions === "object" ? extraOptions : {}),
+    };
+    const ids = new Set([
+      ...resolveIgnoredObstacleIds(baseOptions),
+      ...resolveIgnoredObstacleIds(extraOptions),
+    ]);
+    if (ids.size) merged.ignoreObstacleIds = Array.from(ids);
+    return Object.keys(merged).length ? merged : null;
+  }
+
+  function getPathPickupIgnoreSurfaceId(pathOptions = null) {
+    return resolvePathSupportSurfaceId(pathOptions) || "floor";
+  }
+
+  function isPickupPathObstacle(obs) {
+    return !!obs?.pickupKey || String(obs?.tag || "").startsWith("pickup-");
+  }
+
+  function obstaclePlanarDistanceToPoint(obs, point) {
+    if (!obs || !point) return Infinity;
+    const dx = (Number.isFinite(point.x) ? point.x : 0) - (Number.isFinite(obs.x) ? obs.x : 0);
+    const dz = (Number.isFinite(point.z) ? point.z : 0) - (Number.isFinite(obs.z) ? obs.z : 0);
+    const radius = Math.max(
+      0,
+      Number(obs.r) || 0,
+      Number(obs.hx) || 0,
+      Number(obs.hz) || 0
+    );
+    return Math.max(0, Math.hypot(dx, dz) - radius);
+  }
+
+  function findClosestIgnorablePathObstacleId(origin, obstacles, pathOptions = null, queryY = 0) {
+    if (!origin || !Array.isArray(obstacles) || !obstacles.length) return "";
+    const supportSurfaceId = resolvePathSupportSurfaceId(pathOptions);
+    const ignoredIds = new Set(resolveIgnoredObstacleIds(pathOptions));
+    let bestId = "";
+    let bestScore = Infinity;
+    for (const obs of obstacles) {
+      if (!obs || isPickupPathObstacle(obs)) continue;
+      const tag = String(obs.tag || "");
+      if (tag === "surfaceSupport" || tag === "surfaceBlocker") continue;
+      if (supportSurfaceId && obstacleIgnoredForPathSupportSurface(obs, supportSurfaceId)) continue;
+      if (!obstacleBlocksAtStage(obs, "plan")) continue;
+      if (!obstacleOverlapsQueryY(obs, queryY)) continue;
+      const id = getObstacleIdentity(obs);
+      if (!id || ignoredIds.has(id)) continue;
+      const score = obstaclePlanarDistanceToPoint(obs, origin);
+      if (score < bestScore) {
+        bestScore = score;
+        bestId = id;
+      }
+    }
+    return bestId;
+  }
+
+  function getActiveRouteSegmentForPathBypass() {
+    const route = cat.nav?.route;
+    if (!route?.active || !Array.isArray(route.segments)) return null;
+    const index = Number.isFinite(route.segmentIndex) ? route.segmentIndex | 0 : 0;
+    const segment = route.segments[index] || null;
+    return segment ? { route, segment, index } : null;
+  }
+
+  function persistCurrentSegmentPathBypass(pathOptions = null, queryY = 0, source = "") {
+    if (!pathOptions || typeof pathOptions !== "object") return false;
+    const ignorePushableSurfaceId = String(pathOptions.ignorePushableSurfaceId || "");
+    const ignoreObstacleIds = resolveIgnoredObstacleIds(pathOptions);
+    if (!ignorePushableSurfaceId && !ignoreObstacleIds.length) return false;
+    const active = getActiveRouteSegmentForPathBypass();
+    if (!active) return false;
+    const { segment, index } = active;
+    const segmentId = String(segment.id || "");
+    const existing = cat.nav?.segmentBypass;
+    const existingIndex = Number.isFinite(existing?.segmentIndex) ? existing.segmentIndex | 0 : -1;
+    if (existing && existingIndex === index && (!existing.segmentId || String(existing.segmentId) === segmentId)) {
+      const ids = new Set([
+        ...(Array.isArray(existing.ignoreObstacleIds) ? existing.ignoreObstacleIds : []),
+        ...ignoreObstacleIds,
+      ].map((value) => String(value || "").trim()).filter(Boolean));
+      existing.ignoreObstacleIds = Array.from(ids);
+      existing.ignorePushables = !!existing.ignorePushables || !!ignorePushableSurfaceId;
+      existing.supportSurfaceId = ignorePushableSurfaceId || String(existing.supportSurfaceId || "floor");
+      existing.queryY = Number.isFinite(queryY) ? queryY : 0;
+      existing.source = source ? String(source) : String(existing.source || "path-fallback");
+      return true;
+    }
+    segment.segmentBypassUsed = true;
+    cat.nav.segmentBypass = {
+      segmentIndex: index,
+      segmentId,
+      ignorePushables: !!ignorePushableSurfaceId,
+      ignoreObstacleIds,
+      supportSurfaceId: ignorePushableSurfaceId || "floor",
+      queryY: Number.isFinite(queryY) ? queryY : 0,
+      source: source ? String(source) : "path-fallback",
+      createdAt: getClockTime(),
+    };
+    return true;
+  }
+
   function pointRespectsPathSupportSurface(x, z, clearance = null, pathOptions = null) {
     const supportSurfaceId = resolvePathSupportSurfaceId(pathOptions);
     if (!supportSurfaceId) return true;
@@ -697,6 +800,18 @@ export function createCatPathfindingRuntime(ctx) {
     );
   }
 
+  function obstacleIgnoredForPathSupportSurface(obs, supportSurfaceId = "") {
+    const resolvedSurfaceId = String(supportSurfaceId || "");
+    if (!obs || !resolvedSurfaceId || resolvedSurfaceId === "floor") return false;
+    const ignoreIds = Array.isArray(obs.jumpIgnoreSurfaceIds)
+      ? obs.jumpIgnoreSurfaceIds.map((v) => String(v))
+      : obs.jumpIgnoreSurfaceIds != null
+        ? [String(obs.jumpIgnoreSurfaceIds)]
+        : [];
+    if (ignoreIds.includes(resolvedSurfaceId)) return true;
+    return obs.tag === "surfaceSupport" && String(obs.surfaceId || "") === resolvedSurfaceId;
+  }
+
   function getActiveCatPathOptions() {
     return cat?.nav?.pathOptions && typeof cat.nav.pathOptions === "object"
       ? cat.nav.pathOptions
@@ -708,8 +823,12 @@ export function createCatPathfindingRuntime(ctx) {
     const resolvedPathOptions = pathOptions && typeof pathOptions === "object" ? pathOptions : null;
     if (!resolvedPathOptions) return obstacles;
     const ignoreSurfaceId = String(pathOptions.ignorePushableSurfaceId || "");
+    const supportSurfaceId = resolvePathSupportSurfaceId(resolvedPathOptions);
     const ignoredObstacleIds = new Set(resolveIgnoredObstacleIds(resolvedPathOptions));
     let filtered = source;
+    if (supportSurfaceId) {
+      filtered = filtered.filter((obs) => !obstacleIgnoredForPathSupportSurface(obs, supportSurfaceId));
+    }
     if (ignoredObstacleIds.size > 0) {
       filtered = filtered.filter((obs) => !ignoredObstacleIds.has(getObstacleIdentity(obs)));
     }
@@ -876,8 +995,15 @@ export function createCatPathfindingRuntime(ctx) {
         const halfX = shape?.halfExtents?.x || (p.type === "laundry" ? 0.24 : 0.15);
         const halfZ = shape?.halfExtents?.z || (p.type === "laundry" ? 0.18 : 0.12);
         const halfY = shape?.halfExtents?.y || (p.type === "laundry" ? 0.04 : 0.03);
-        // Keep pickup obstacles tall enough that recast still blocks them after they settle flat.
-        const height = p.type === "laundry" ? Math.max(0.2, halfY * 2 + 0.1) : Math.max(0.18, halfY * 2 + 0.1);
+        // Give pickup nav obstacles a little vertical forgiveness. Physics items
+        // can settle a few centimeters above/below the visual surface, and path
+        // queries should still classify them as same-surface clutter.
+        const verticalPadDown = p.type === "laundry" ? 0.14 : 0.12;
+        const verticalPadUp = p.type === "laundry" ? 0.18 : 0.16;
+        const height = Math.max(
+          p.type === "laundry" ? 0.2 : 0.18,
+          halfY * 2 + verticalPadDown + verticalPadUp
+        );
         const rawCenterY = p.body?.position?.y ?? p.mesh.position.y;
         const supportY = rawCenterY - halfY;
         const supportSurface =
@@ -885,7 +1011,7 @@ export function createCatPathfindingRuntime(ctx) {
           (typeof getSurfaceById === "function" ? getSurfaceById("floor") : null);
         const surfaceId = String(supportSurface?.id || "floor");
         const centerY = Number.isFinite(Number(supportSurface?.y))
-          ? Number(supportSurface.y) + halfY
+          ? Number(supportSurface.y) + halfY + (verticalPadUp - verticalPadDown) * 0.5
           : rawCenterY;
         const yaw = getPickupPlanarYaw(p);
         const pickupMode = p.type === "trash" ? "pushable" : "pushable";
@@ -1008,6 +1134,7 @@ export function createCatPathfindingRuntime(ctx) {
   function isCatPointBlocked(x, z, obstacles, clearance = null, queryY = 0, stage = "plan", pathOptions = null) {
     const navClearance = resolvePathClearance(clearance);
     if (!pointRespectsPathSupportSurface(x, z, navClearance, pathOptions)) return true;
+    const supportSurfaceId = resolvePathSupportSurfaceId(pathOptions);
     const y = Number.isFinite(queryY) ? queryY : 0;
     const boundaryMargin = y <= 0.08 ? CAT_NAV.margin : 0.02;
     if (
@@ -1019,6 +1146,7 @@ export function createCatPathfindingRuntime(ctx) {
       return true;
     }
     for (const obs of obstacles) {
+      if (supportSurfaceId && obstacleIgnoredForPathSupportSurface(obs, supportSurfaceId)) continue;
       if (!obstacleBlocksAtStage(obs, stage)) continue;
       if (!obstacleOverlapsQueryY(obs, queryY)) continue;
       if (obs.tag === "cup" && (cat.state === "toCup" || cat.state === "swipe")) continue;
@@ -3302,31 +3430,44 @@ export function createCatPathfindingRuntime(ctx) {
     const startedAt = performance.now();
     const profileMeta = { cached: false, ok: false };
     try {
+      const optionObject = options && typeof options === "object" ? options : null;
       const clearanceOverride =
-        options && typeof options === "object"
+        optionObject
           ? resolvePathClearanceOverride(options)
           : null;
       const navClearance = resolvePathClearance(clearanceOverride);
       const allowFallback = typeof options === "boolean"
         ? options
         : (
-            options &&
-            typeof options === "object" &&
+            optionObject &&
             "allowFallback" in options
               ? !!options.allowFallback
               : null
           );
-      const allowEndpointPushableGoal = typeof options === "object" && options
+      const allowEndpointPushableGoal = optionObject
         ? options.allowEndpointPushableGoal !== false
         : true;
-      const startOnPlane = new THREE.Vector3(start.x, 0, start.z);
-      const goalOnPlane = new THREE.Vector3(goal.x, 0, goal.z);
+      const queryY = Number.isFinite(optionObject?.queryY)
+        ? Math.max(0, Number(optionObject.queryY))
+        : 0;
+      const pathOptions = {
+        ...(Number.isFinite(clearanceOverride) ? { clearanceOverride } : {}),
+        ...(optionObject?.supportSurfaceId ? { supportSurfaceId: String(optionObject.supportSurfaceId) } : {}),
+        ...(optionObject?.ignorePushableSurfaceId ? { ignorePushableSurfaceId: String(optionObject.ignorePushableSurfaceId) } : {}),
+        ...(Array.isArray(optionObject?.ignoreObstacleIds) && optionObject.ignoreObstacleIds.length
+          ? { ignoreObstacleIds: optionObject.ignoreObstacleIds.map((value) => String(value || "").trim()).filter(Boolean) }
+          : {}),
+      };
+      const resolvedPathOptions = Object.keys(pathOptions).length ? pathOptions : null;
+      const startOnPlane = new THREE.Vector3(start.x, queryY, start.z);
+      const goalOnPlane = new THREE.Vector3(goal.x, queryY, goal.z);
       const q = (v, quantum = 0.08) => Math.round((Number.isFinite(v) ? v : 0) / quantum);
+      const filteredObstacles = filterObstaclesForPathOptions(obstacles, resolvedPathOptions);
       const pathObstacles = allowEndpointPushableGoal
-        ? filterEndpointPushableGoalObstacles(goalOnPlane, obstacles, navClearance, 0, "plan")
-        : obstacles;
+        ? filterEndpointPushableGoalObstacles(goalOnPlane, filteredObstacles, navClearance, queryY, "plan")
+        : filteredObstacles;
       const signature = getObstacleSignatureCached(pathObstacles, navClearance);
-      const cacheKey = `${signature}|${allowFallback == null ? "default" : (allowFallback ? 1 : 0)}|ep:${allowEndpointPushableGoal ? 1 : 0}|${q(startOnPlane.x)}:${q(startOnPlane.z)}:${q(goalOnPlane.x)}:${q(goalOnPlane.z)}`;
+      const cacheKey = `${signature}|${getPathOptionsCacheKey(resolvedPathOptions)}|${allowFallback == null ? "default" : (allowFallback ? 1 : 0)}|ep:${allowEndpointPushableGoal ? 1 : 0}|${q(startOnPlane.x)}:${q(startOnPlane.z)}:${q(goalOnPlane.x)}:${q(goalOnPlane.z)}:${q(queryY, 0.06)}`;
       const now = getClockTime();
       const cached = reachabilityCache.get(cacheKey);
       if (cached && now - cached.at <= REACHABILITY_CACHE_TTL) {
@@ -3346,7 +3487,7 @@ export function createCatPathfindingRuntime(ctx) {
         if (reason) profileMeta.reason = reason;
         return !!ok;
       };
-      const freeGoal = findNearestWalkablePoint(goalOnPlane, pathObstacles, navClearance, 0);
+      const freeGoal = findNearestWalkablePoint(goalOnPlane, pathObstacles, navClearance, queryY, resolvedPathOptions);
       if (!freeGoal) {
         return commit(false, "goal-not-walkable");
       }
@@ -3356,19 +3497,20 @@ export function createCatPathfindingRuntime(ctx) {
       }
       if (
         startOnPlane.distanceToSquared(freeGoal) < 0.1 * 0.1 &&
-        hasClearTravelLine(startOnPlane, freeGoal, pathObstacles, navClearance, 0)
+        hasClearTravelLine(startOnPlane, freeGoal, pathObstacles, navClearance, queryY, "plan", resolvedPathOptions)
       ) {
         return commit(true, "already-near-goal");
       }
-      if (hasClearTravelLine(startOnPlane, freeGoal, pathObstacles, navClearance, 0)) {
+      if (hasClearTravelLine(startOnPlane, freeGoal, pathObstacles, navClearance, queryY, "plan", resolvedPathOptions)) {
         return commit(true, "direct-line");
       }
-      const pathOptions = Number.isFinite(clearanceOverride)
-        ? { clearanceOverride }
-        : null;
-      const path = computeCatPath(startOnPlane, freeGoal, pathObstacles, 0, allowFallback, false, pathOptions);
-      if (isPathTraversable(path, pathObstacles, navClearance, 0)) {
+      const path = computeCatPath(startOnPlane, freeGoal, pathObstacles, queryY, allowFallback, false, resolvedPathOptions);
+      if (isPathTraversable(path, pathObstacles, navClearance, queryY, "plan", resolvedPathOptions)) {
         return commit(true, "path-traversable");
+      }
+
+      if (queryY > 0.08 || resolvedPathOptions?.supportSurfaceId) {
+        return commit(false, "surface-path-failed");
       }
 
       const blocker = findFirstBlockingObstacleOnLine(startOnPlane, freeGoal, pathObstacles, navClearance, 0);
@@ -3403,35 +3545,62 @@ export function createCatPathfindingRuntime(ctx) {
         : (cat.group.position.y > 0.08 ? cat.group.position.y : (Number.isFinite(target?.y) ? target.y : 0));
       const navClearance = getCatPathClearance();
       const builtObstacles = buildCatObstacles(useDynamic, true);
-      const pathOptions = getActiveCatPathOptions();
-      const obstacles = filterObstaclesForPathOptions(builtObstacles, pathOptions);
+      const basePathOptions = getActiveCatPathOptions();
       const modeKey = useDynamic ? "dynamic" : "static";
       const requestedTargetOnPlane = new THREE.Vector3(target.x, pathY, target.z);
       const startOnPlane = new THREE.Vector3(cat.pos.x, pathY, cat.pos.z);
       const allowEndpointPushableGoal = true;
-      const pathObstacles = allowEndpointPushableGoal
-        ? filterEndpointPushableGoalObstacles(requestedTargetOnPlane, obstacles, navClearance, pathY, "plan")
-        : obstacles;
-      const targetOnPlane = resolveNearestPlanarPathTarget(
-        requestedTargetOnPlane,
-        pathObstacles,
-        navClearance,
-        pathY,
-        pathOptions,
-        startOnPlane
-      );
-      const navSignature = `${getObstacleSignatureCached(pathObstacles, navClearance)}|${getPathOptionsCacheKey(pathOptions)}`;
-      if (pathOptions?.ignorePushableSurfaceId) profileMeta.ignorePushableSurfaceId = String(pathOptions.ignorePushableSurfaceId);
-      if (targetOnPlane !== requestedTargetOnPlane) {
-        profileMeta.targetAdjusted = true;
-        profileMeta.targetAdjustFromX = requestedTargetOnPlane.x;
-        profileMeta.targetAdjustFromZ = requestedTargetOnPlane.z;
-        profileMeta.targetAdjustToX = targetOnPlane.x;
-        profileMeta.targetAdjustToZ = targetOnPlane.z;
-      }
-      const navChanged = lastPlannedSignature[modeKey] !== navSignature;
+      const buildPlan = (candidatePathOptions = null) => {
+        const resolvedPathOptions =
+          candidatePathOptions && typeof candidatePathOptions === "object" && Object.keys(candidatePathOptions).length
+            ? candidatePathOptions
+            : null;
+        const filteredObstacles = filterObstaclesForPathOptions(builtObstacles, resolvedPathOptions);
+        const pathObstacles = allowEndpointPushableGoal
+          ? filterEndpointPushableGoalObstacles(requestedTargetOnPlane, filteredObstacles, navClearance, pathY, "plan")
+          : filteredObstacles;
+        const targetOnPlane = resolveNearestPlanarPathTarget(
+          requestedTargetOnPlane,
+          pathObstacles,
+          navClearance,
+          pathY,
+          resolvedPathOptions,
+          startOnPlane
+        );
+        const navSignature = `${getObstacleSignatureCached(pathObstacles, navClearance)}|${getPathOptionsCacheKey(resolvedPathOptions)}`;
+        return {
+          pathOptions: resolvedPathOptions,
+          filteredObstacles,
+          pathObstacles,
+          targetOnPlane,
+          navSignature,
+        };
+      };
+      const applyPlanProfile = (plan) => {
+        profileMeta.targetAdjusted = false;
+        delete profileMeta.targetAdjustFromX;
+        delete profileMeta.targetAdjustFromZ;
+        delete profileMeta.targetAdjustToX;
+        delete profileMeta.targetAdjustToZ;
+        if (plan?.pathOptions?.ignorePushableSurfaceId) {
+          profileMeta.ignorePushableSurfaceId = String(plan.pathOptions.ignorePushableSurfaceId);
+        }
+        if (plan?.pathOptions?.ignoreObstacleIds?.length) {
+          profileMeta.ignoreObstacleIds = plan.pathOptions.ignoreObstacleIds.join(",");
+        }
+        if (plan?.targetOnPlane !== requestedTargetOnPlane) {
+          profileMeta.targetAdjusted = true;
+          profileMeta.targetAdjustFromX = requestedTargetOnPlane.x;
+          profileMeta.targetAdjustFromZ = requestedTargetOnPlane.z;
+          profileMeta.targetAdjustToX = plan.targetOnPlane.x;
+          profileMeta.targetAdjustToZ = plan.targetOnPlane.z;
+        }
+      };
+      let selectedPlan = buildPlan(basePathOptions);
+      applyPlanProfile(selectedPlan);
+      const navChanged = lastPlannedSignature[modeKey] !== selectedPlan.navSignature;
       const now = getClockTime();
-      const goalDelta = cat.nav.goal.distanceToSquared(targetOnPlane);
+      const goalDelta = cat.nav.goal.distanceToSquared(selectedPlan.targetOnPlane);
       const goalUnchanged = goalDelta < 0.05 * 0.05;
       const allowNavRefreshNow = now >= (cat.nav.repathAt || 0);
       if (!force) {
@@ -3474,7 +3643,64 @@ export function createCatPathfindingRuntime(ctx) {
       }
       activeNavMeshMode.includePickups = !!useDynamic;
       activeNavMeshMode.includeClosePickups = true;
-      cat.nav.path = computeCatPath(startOnPlane, targetOnPlane, pathObstacles, pathY, allowFallback, true, pathOptions);
+      const computePlanPath = (plan, label = "") => {
+        selectedPlan = plan;
+        applyPlanProfile(selectedPlan);
+        profileMeta.action = label ? `compute-${label}` : "compute";
+        return computeCatPath(
+          startOnPlane,
+          selectedPlan.targetOnPlane,
+          selectedPlan.pathObstacles,
+          pathY,
+          allowFallback,
+          true,
+          selectedPlan.pathOptions
+        );
+      };
+      let persistFallbackBypass = false;
+      cat.nav.path = computePlanPath(selectedPlan);
+      if ((cat.nav.path?.length || 0) <= 1 && useDynamic) {
+        let fallbackBasePlan = selectedPlan;
+        let fallbackBaseOptions = selectedPlan.pathOptions;
+        const pickupIgnoreOptions = mergePathOptions(basePathOptions, {
+          ignorePushableSurfaceId: getPathPickupIgnoreSurfaceId(basePathOptions),
+        });
+        if (getPathOptionsCacheKey(pickupIgnoreOptions) !== getPathOptionsCacheKey(selectedPlan.pathOptions)) {
+          const pickupPlan = buildPlan(pickupIgnoreOptions);
+          const pickupPath = computePlanPath(pickupPlan, "ignore-pickups");
+          bumpPathProfilerCounter("ensureCatPathPickupFallback");
+          if ((pickupPath?.length || 0) > 1) {
+            cat.nav.path = pickupPath;
+            persistFallbackBypass = true;
+          } else {
+            cat.nav.path = pickupPath;
+            fallbackBasePlan = pickupPlan;
+            fallbackBaseOptions = pickupIgnoreOptions;
+          }
+        }
+        if ((cat.nav.path?.length || 0) <= 1) {
+          const closestObstacleId = findClosestIgnorablePathObstacleId(
+            startOnPlane,
+            fallbackBasePlan.filteredObstacles,
+            fallbackBaseOptions,
+            pathY
+          );
+          if (closestObstacleId) {
+            const objectIgnoreOptions = mergePathOptions(fallbackBaseOptions, {
+              ignoreObstacleIds: [closestObstacleId],
+            });
+            const objectPlan = buildPlan(objectIgnoreOptions);
+            cat.nav.path = computePlanPath(objectPlan, "ignore-pickups-object");
+            profileMeta.ignoredClosestObstacleId = closestObstacleId;
+            bumpPathProfilerCounter("ensureCatPathObjectFallback");
+            persistFallbackBypass = (cat.nav.path?.length || 0) > 1;
+          }
+        }
+      }
+      if (persistFallbackBypass && (cat.nav.path?.length || 0) > 1) {
+        const persisted = persistCurrentSegmentPathBypass(selectedPlan.pathOptions, pathY, profileMeta.action || "path-fallback");
+        profileMeta.segmentBypassPersisted = persisted ? 1 : 0;
+      }
       if ((cat.nav.path?.length || 0) <= 1) {
         const solverDebug = cat.nav?.lastSolverDebug && typeof cat.nav.lastSolverDebug === "object"
           ? cat.nav.lastSolverDebug
@@ -3488,13 +3714,13 @@ export function createCatPathfindingRuntime(ctx) {
         const pathShapeInfo = `${solverDebug?.recastRawFirstSegment ? ` ${solverDebug.recastRawFirstSegment}` : ""}${solverDebug?.recastSmoothFirstSegment ? ` ${solverDebug.recastSmoothFirstSegment}` : ""}${solverDebug?.recastRawPathPreview ? ` ${solverDebug.recastRawPathPreview}` : ""}${solverDebug?.recastSmoothPathPreview ? ` ${solverDebug.recastSmoothPathPreview}` : ""}`;
         traceFunction(
           "noPathSolveV14",
-          `reason=${solverDebug?.reason || "na"} recast=${solverDebug?.recastReason || "na"} ensure=${profileMeta.action || "compute"}${blockerInfo}${blockVariants}${projectionInfo}${pointInfo}${pathShapeInfo} target=${Number.isFinite(targetOnPlane?.x) ? targetOnPlane.x.toFixed(2) : "na"},${Number.isFinite(targetOnPlane?.z) ? targetOnPlane.z.toFixed(2) : "na"}`
+          `reason=${solverDebug?.reason || "na"} recast=${solverDebug?.recastReason || "na"} ensure=${profileMeta.action || "compute"}${blockerInfo}${blockVariants}${projectionInfo}${pointInfo}${pathShapeInfo} target=${Number.isFinite(selectedPlan.targetOnPlane?.x) ? selectedPlan.targetOnPlane.x.toFixed(2) : "na"},${Number.isFinite(selectedPlan.targetOnPlane?.z) ? selectedPlan.targetOnPlane.z.toFixed(2) : "na"}`
         );
       }
       cat.nav.index = cat.nav.path.length > 1 ? 1 : 0;
-      cat.nav.goal.copy(targetOnPlane);
+      cat.nav.goal.copy(selectedPlan.targetOnPlane);
       cat.nav.repathAt = now + CAT_NAV.repathInterval;
-      lastPlannedSignature[modeKey] = navSignature;
+      lastPlannedSignature[modeKey] = selectedPlan.navSignature;
       bumpPathProfilerCounter("ensureCatPathComputed");
       profileMeta.pathLen = cat.nav.path.length || 0;
     } finally {

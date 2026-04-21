@@ -317,12 +317,47 @@ export function createCatnipRuntime(ctx) {
     return new THREE.Vector3(tx, 0, tz);
   }
 
-  function hasGroundEscapeSpace(origin, obstacles, clearance) {
+  function getSurfacePlacementInfo(surface) {
+    const surfaceId = normalizeSurfaceId(surface || "floor");
+    if (isFloorSurfaceId(surfaceId)) {
+      return {
+        id: "floor",
+        y: 0,
+        pathOptions: {
+          queryY: 0,
+        },
+      };
+    }
+    const surfaceDef = getNonFloorSurfaceById(surfaceId);
+    if (!surfaceDef) return null;
+    return {
+      id: surfaceId,
+      y: Math.max(0.02, Number(surfaceDef.y) || 0.02),
+      def: surfaceDef,
+      pathOptions: {
+        queryY: Math.max(0.02, Number(surfaceDef.y) || 0.02),
+        supportSurfaceId: surfaceId,
+      },
+    };
+  }
+
+  function canReachOnSurface(start, goal, obstacles, surfaceInfo, options = null) {
+    if (!start || !goal || !surfaceInfo) return false;
+    return canReachGroundTarget(start, goal, obstacles, {
+      ...(surfaceInfo.pathOptions || {}),
+      ...(options && typeof options === "object" ? options : {}),
+    });
+  }
+
+  function hasSurfaceEscapeSpace(origin, obstacles, clearance, surfaceInfo) {
     const startedAt = performance.now();
     let result = false;
     try {
       const ox = Number(origin?.x);
       const oz = Number(origin?.z);
+      const surfaceId = normalizeSurfaceId(surfaceInfo?.id || "floor");
+      const queryY = Number.isFinite(surfaceInfo?.y) ? surfaceInfo.y : 0;
+      const pathOptions = surfaceInfo?.pathOptions || { queryY: 0 };
       if (!Number.isFinite(ox) || !Number.isFinite(oz)) return false;
       const sampleRadius = Math.max(CATNIP_ESCAPE_SAMPLE_RADIUS, clearance * 2.1);
       const open = new Array(CATNIP_ESCAPE_SAMPLE_COUNT).fill(false);
@@ -331,9 +366,12 @@ export function createCatnipRuntime(ctx) {
         const angle = (i / CATNIP_ESCAPE_SAMPLE_COUNT) * Math.PI * 2;
         const sx = ox + Math.cos(angle) * sampleRadius;
         const sz = oz + Math.sin(angle) * sampleRadius;
-        if (isCatPointBlocked(sx, sz, obstacles, clearance * 0.92, 0)) continue;
-        tempEscapeSample.set(sx, 0, sz);
-        if (!canReachGroundTarget(origin, tempEscapeSample, obstacles)) continue;
+        if (!isFloorSurfaceId(surfaceId) && !isInsideNonFloorSurface(surfaceId, sx, sz, 0.12)) continue;
+        if (isCatPointBlocked(sx, sz, obstacles, clearance * 0.92, queryY, "plan", pathOptions)) continue;
+        tempEscapeSample.set(sx, queryY, sz);
+        if (!canReachOnSurface(origin, tempEscapeSample, obstacles, surfaceInfo, {
+          allowEndpointPushableGoal: false,
+        })) continue;
         open[i] = true;
       }
 
@@ -354,10 +392,11 @@ export function createCatnipRuntime(ctx) {
       return result;
     } finally {
       finishPathProfilerMetric(
-        "hasGroundEscapeSpace",
+        "hasSurfaceEscapeSpace",
         startedAt,
         {
           phase: "catnip-escape",
+          surface: String(surfaceInfo?.id || "floor"),
           result: result ? "open" : "blocked",
         },
         1.8
@@ -368,18 +407,21 @@ export function createCatnipRuntime(ctx) {
   function isValidCatnipSpot(x, z, surface) {
     const startedAt = performance.now();
     let result = false;
-    let metaPhase = String(surface || "floor") === "floor" ? "floor" : "surface";
+    const surfaceInfo = getSurfacePlacementInfo(surface);
+    let metaPhase = isFloorSurfaceId(surfaceInfo?.id || "floor") ? "floor" : "surface";
     try {
-      tempTo.set(x, 0, z);
-    const dynamicObstacles = buildCatObstacles(true, true);
-    const staticObstacles = buildCatObstacles(false);
-    const clearance = typeof getCatPathClearance === "function" ? getCatPathClearance() : CAT_NAV.clearance;
+      if (!surfaceInfo) return false;
+      const surfaceId = surfaceInfo.id;
+      const surfaceY = surfaceInfo.y;
+      tempTo.set(x, surfaceY, z);
+      const dynamicObstacles = buildCatObstacles(true, true);
+      const staticObstacles = buildCatObstacles(false);
+      const clearance = typeof getCatPathClearance === "function" ? getCatPathClearance() : CAT_NAV.clearance;
+      const pathOptions = surfaceInfo.pathOptions || { queryY: 0 };
 
-    if (surface !== "floor") {
-      if (!isInsideNonFloorSurface(surface, x, z)) return false;
-      const surfaceDef = getNonFloorSurfaceById(surface);
-      if (!surfaceDef) return false;
-      const surfaceY = surfaceDef.y;
+      if (!isFloorSurfaceId(surfaceId) && !isInsideNonFloorSurface(surfaceId, x, z)) return false;
+      if (isCatPointBlocked(tempTo.x, tempTo.z, staticObstacles, clearance, surfaceY, "plan", pathOptions)) return false;
+
       if (!cup.broken && !cup.falling) {
         if (Math.abs(cup.group.position.y - surfaceY) <= 0.36) {
           const dxCup = x - cup.group.position.x;
@@ -391,15 +433,59 @@ export function createCatnipRuntime(ctx) {
         if (Math.abs(p.mesh.position.y - surfaceY) > 0.3) continue;
         const dx = x - p.mesh.position.x;
         const dz = z - p.mesh.position.z;
-        const rr = pickupRadius(p) + 0.2;
+        const rr = pickupRadius(p) + 0.28;
         if (dx * dx + dz * dz < rr * rr) return false;
       }
+
+      if (!hasSurfaceEscapeSpace(tempTo, dynamicObstacles, clearance, surfaceInfo)) return false;
+
       const sourceSurfaceId = getCurrentCatSurfaceId();
-      if (sourceSurfaceId === surface && Math.abs(cat.group.position.y - surfaceY) <= 0.16) { result = true; return true; }
-      tempFrom.set(cat.pos.x, sourceSurfaceId === "floor" ? 0 : Math.max(0.02, cat.group.position.y), cat.pos.z);
+      const sameSurface = sourceSurfaceId === surfaceId && Math.abs(cat.group.position.y - surfaceY) <= 0.16;
+      const start = isFloorSurfaceId(sourceSurfaceId)
+        ? findSafeGroundPoint(new THREE.Vector3(cat.pos.x, 0, cat.pos.z))
+        : new THREE.Vector3(cat.pos.x, Math.max(0.02, cat.group.position.y), cat.pos.z);
+      if (isFloorSurfaceId(sourceSurfaceId)) start.y = 0;
+      tempFrom.set(start.x, start.y, start.z);
+      const approach = buildCatnipApproachPoint(x, z, start, surfaceId);
+      approach.y = surfaceY;
+      const approachBlockedStatic = isCatPointBlocked(approach.x, approach.z, staticObstacles, clearance, surfaceY, "plan", pathOptions);
+
+      if (sameSurface) {
+        const exactReachable = canReachOnSurface(start, tempTo, dynamicObstacles, surfaceInfo);
+        const approachReachable =
+          !approachBlockedStatic &&
+          hasSurfaceEscapeSpace(approach, dynamicObstacles, clearance, surfaceInfo) &&
+          canReachOnSurface(start, approach, dynamicObstacles, surfaceInfo);
+        result = approachReachable || exactReachable;
+        return result;
+      }
+
+      if (isFloorSurfaceId(surfaceId)) {
+        const floorStart = findSafeGroundPoint(new THREE.Vector3(cat.pos.x, 0, cat.pos.z));
+        floorStart.y = 0;
+        const floorApproach = buildCatnipApproachPoint(x, z, floorStart, "floor");
+        floorApproach.y = 0;
+        const floorApproachBlockedStatic = isCatPointBlocked(
+          floorApproach.x,
+          floorApproach.z,
+          staticObstacles,
+          clearance,
+          0,
+          "plan",
+          pathOptions
+        );
+        const exactReachable = canReachOnSurface(floorStart, tempTo, dynamicObstacles, surfaceInfo);
+        const approachReachable =
+          !floorApproachBlockedStatic &&
+          hasSurfaceEscapeSpace(floorApproach, dynamicObstacles, clearance, surfaceInfo) &&
+          canReachOnSurface(floorStart, floorApproach, dynamicObstacles, surfaceInfo);
+        result = approachReachable || exactReachable;
+        return result;
+      }
+
       const resolveWithSource = (sourceId, sourcePoint) => {
         const planningSource =
-          sourceId === "floor"
+          isFloorSurfaceId(sourceId)
             ? (() => {
                 const s = findSafeGroundPoint(new THREE.Vector3(sourcePoint.x, 0, sourcePoint.z));
                 s.y = 0;
@@ -409,54 +495,42 @@ export function createCatnipRuntime(ctx) {
         if (typeof bestSurfaceJumpAnchor !== "function" || typeof computeSurfaceJumpTargets !== "function") {
           return false;
         }
-        const anchor = bestSurfaceJumpAnchor(surface, planningSource, tempTo, sourceId);
+        const anchor = bestSurfaceJumpAnchor(surfaceId, planningSource, tempTo, sourceId);
         if (!anchor) return false;
-        if (sourceId === "floor" && !canReachGroundTarget(planningSource, anchor, dynamicObstacles)) return false;
-        const targets = computeSurfaceJumpTargets(surface, anchor, tempTo, sourceId);
-        return !!targets?.top;
+        if (isFloorSurfaceId(sourceId) && !canReachOnSurface(planningSource, anchor, dynamicObstacles, getSurfacePlacementInfo("floor"))) {
+          return false;
+        }
+        const targets = computeSurfaceJumpTargets(surfaceId, anchor, tempTo, sourceId);
+        if (!targets?.top) return false;
+        if (targets.surfaceId && normalizeSurfaceId(targets.surfaceId) !== surfaceId) {
+          return true;
+        }
+        const landingPoint = new THREE.Vector3(targets.top.x, surfaceY, targets.top.z);
+        const finalReachable =
+          canReachOnSurface(landingPoint, tempTo, dynamicObstacles, surfaceInfo) ||
+          (!approachBlockedStatic && canReachOnSurface(landingPoint, approach, dynamicObstacles, surfaceInfo));
+        return finalReachable;
       };
-      if (resolveWithSource(sourceSurfaceId, tempFrom)) { result = true; return true; }
-      if (sourceSurfaceId !== "floor") {
+      if (resolveWithSource(sourceSurfaceId, tempFrom)) {
+        result = true;
+        return true;
+      }
+      if (!isFloorSurfaceId(sourceSurfaceId)) {
         const floorStart = findSafeGroundPoint(new THREE.Vector3(cat.pos.x, 0, cat.pos.z));
         floorStart.y = 0;
-        if (resolveWithSource("floor", floorStart)) { result = true; return true; }
+        if (resolveWithSource("floor", floorStart)) {
+          result = true;
+          return true;
+        }
       }
       return false;
-    }
-
-    if (isCatPointBlocked(tempTo.x, tempTo.z, staticObstacles, clearance)) return false;
-    for (const p of pickups) {
-      if (p.mesh.position.y > 0.34) continue;
-      const dx = x - p.mesh.position.x;
-      const dz = z - p.mesh.position.z;
-      const rr = pickupRadius(p) + 0.28;
-      if (dx * dx + dz * dz < rr * rr) return false;
-    }
-
-    const start = findSafeGroundPoint(new THREE.Vector3(cat.pos.x, 0, cat.pos.z));
-    if (!hasGroundEscapeSpace(tempTo, dynamicObstacles, clearance)) return false;
-    if (!canReachGroundTarget(start, tempTo, dynamicObstacles)) return false;
-
-    // Validate the same approach offset used by cat behavior; fall back to center path if offset is blocked.
-    const approach = buildCatnipApproachPoint(x, z, start, "floor");
-    const approachBlockedStatic = isCatPointBlocked(approach.x, approach.z, staticObstacles, clearance);
-    if (
-      !approachBlockedStatic &&
-      hasGroundEscapeSpace(approach, dynamicObstacles, clearance) &&
-      canReachGroundTarget(start, approach, dynamicObstacles)
-    ) {
-      result = true;
-      return true;
-    }
-    result = canReachGroundTarget(start, tempTo, dynamicObstacles);
-    return result;
     } finally {
       finishPathProfilerMetric(
         "isValidCatnipSpot",
         startedAt,
         {
           phase: metaPhase,
-          surface: String(surface || "floor"),
+          surface: String(surfaceInfo?.id || surface || "floor"),
           result: result ? "valid" : "invalid",
         },
         2.5

@@ -186,13 +186,18 @@ export function createCatRecoveryRuntime(ctx) {
     return best;
   }
 
-  function nudgeBlockingPickupAwayFromCat() {
+  function nudgeBlockingPickupAwayFromCat(queryY = null) {
+    const hasQueryY = Number.isFinite(queryY);
     let best = null;
     let bestD2 = Infinity;
     for (const p of pickups) {
       if (!p.body) continue;
       if (isDraggingPickup(p)) continue;
-      if (p.body.position.y > 1.2) continue;
+      if (hasQueryY) {
+        if (Math.abs(p.body.position.y - queryY) > 0.45) continue;
+      } else if (p.body.position.y > 1.2) {
+        continue;
+      }
       const dx = p.body.position.x - cat.pos.x;
       const dz = p.body.position.z - cat.pos.z;
       const d2 = dx * dx + dz * dz;
@@ -225,13 +230,18 @@ export function createCatRecoveryRuntime(ctx) {
     return true;
   }
 
-  function nudgeNearbyPickupsAwayFromCat(radius = CAT_COLLISION.catBodyRadius * 3) {
+  function nudgeNearbyPickupsAwayFromCat(radius = CAT_COLLISION.catBodyRadius * 3, queryY = null) {
     const pushRadius = Math.max(0.2, Number.isFinite(radius) ? radius : CAT_COLLISION.catBodyRadius * 2);
+    const hasQueryY = Number.isFinite(queryY);
     let nudgedCount = 0;
     for (const p of pickups) {
       if (!p.body) continue;
       if (isDraggingPickup(p)) continue;
-      if (p.body.position.y > 1.2) continue;
+      if (hasQueryY) {
+        if (Math.abs(p.body.position.y - queryY) > 0.45) continue;
+      } else if (p.body.position.y > 1.2) {
+        continue;
+      }
       let dx = p.body.position.x - cat.pos.x;
       let dz = p.body.position.z - cat.pos.z;
       let d = Math.hypot(dx, dz);

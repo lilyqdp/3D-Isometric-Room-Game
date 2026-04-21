@@ -113,6 +113,127 @@ export function createCatSteeringRuntime(ctx) {
     return true;
   }
 
+  function getActiveRouteSegmentForBypass() {
+    const route = cat.nav?.route;
+    if (!route?.active || !Array.isArray(route.segments)) return null;
+    const index = Number.isFinite(route.segmentIndex) ? route.segmentIndex | 0 : 0;
+    const segment = route.segments[index] || null;
+    return segment ? { route, segment, index } : null;
+  }
+
+  function getActiveSegmentBypass() {
+    const active = getActiveRouteSegmentForBypass();
+    const bypass = cat.nav?.segmentBypass;
+    if (!active || !bypass || typeof bypass !== "object") return null;
+    const bypassIndex = Number.isFinite(bypass.segmentIndex) ? bypass.segmentIndex | 0 : -1;
+    const bypassId = String(bypass.segmentId || "");
+    const segmentId = String(active.segment.id || "");
+    if (bypassIndex !== active.index || (bypassId && segmentId && bypassId !== segmentId)) {
+      delete cat.nav.segmentBypass;
+      return null;
+    }
+    return bypass;
+  }
+
+  function getSegmentBypassIgnoredIds(bypass = getActiveSegmentBypass()) {
+    return Array.isArray(bypass?.ignoreObstacleIds)
+      ? bypass.ignoreObstacleIds.map((value) => String(value || "").trim()).filter(Boolean)
+      : [];
+  }
+
+  function getCurrentSegmentBypassPathOptions() {
+    const bypass = getActiveSegmentBypass();
+    if (!bypass) return null;
+    const pathOptions = {};
+    const ignoreIds = getSegmentBypassIgnoredIds(bypass);
+    if (ignoreIds.length) pathOptions.ignoreObstacleIds = ignoreIds;
+    if (bypass.ignorePushables) {
+      pathOptions.ignorePushableSurfaceId = String(bypass.supportSurfaceId || FLOOR_SURFACE_ID);
+    }
+    return Object.keys(pathOptions).length ? pathOptions : null;
+  }
+
+  function mergePathOptions(baseOptions = null, extraOptions = null) {
+    const merged = {
+      ...(baseOptions && typeof baseOptions === "object" ? baseOptions : {}),
+      ...(extraOptions && typeof extraOptions === "object" ? extraOptions : {}),
+    };
+    const ids = new Set([
+      ...(Array.isArray(baseOptions?.ignoreObstacleIds) ? baseOptions.ignoreObstacleIds : []),
+      ...(Array.isArray(extraOptions?.ignoreObstacleIds) ? extraOptions.ignoreObstacleIds : []),
+    ].map((value) => String(value || "").trim()).filter(Boolean));
+    if (ids.size) merged.ignoreObstacleIds = Array.from(ids);
+    return Object.keys(merged).length ? merged : {};
+  }
+
+  function getCurrentSegmentBypassRuntimeOptions(supportSurfaceId = "", queryY = 0) {
+    const bypass = getActiveSegmentBypass();
+    if (!bypass) return null;
+    const runtimeOptions = {};
+    const ignoreIds = getSegmentBypassIgnoredIds(bypass);
+    if (ignoreIds.length) runtimeOptions.ignoreObstacleIds = ignoreIds;
+    if (bypass.ignorePushables) {
+      runtimeOptions.freePushables = true;
+      runtimeOptions.ignorePushableSurfaceId = String(bypass.supportSurfaceId || supportSurfaceId || FLOOR_SURFACE_ID);
+    }
+    if (Number.isFinite(queryY)) runtimeOptions.queryY = queryY;
+    return Object.keys(runtimeOptions).length ? runtimeOptions : null;
+  }
+
+  function mergeRuntimeOptions(baseOptions = null, extraOptions = null) {
+    const merged = {
+      ...(baseOptions && typeof baseOptions === "object" ? baseOptions : {}),
+      ...(extraOptions && typeof extraOptions === "object" ? extraOptions : {}),
+    };
+    const ids = new Set([
+      ...(Array.isArray(baseOptions?.ignoreObstacleIds) ? baseOptions.ignoreObstacleIds : []),
+      ...(Array.isArray(extraOptions?.ignoreObstacleIds) ? extraOptions.ignoreObstacleIds : []),
+    ].map((value) => String(value || "").trim()).filter(Boolean));
+    if (ids.size) merged.ignoreObstacleIds = Array.from(ids);
+    if (baseOptions?.freePushables || extraOptions?.freePushables) merged.freePushables = true;
+    return merged;
+  }
+
+  function activateCurrentSegmentBypass(segmentBlock, queryY = 0, supportSurfaceId = "") {
+    const active = getActiveRouteSegmentForBypass();
+    if (!active) return false;
+    const { segment, index } = active;
+    if (segment.segmentBypassUsed || getActiveSegmentBypass()) return false;
+    const obstacleId = String(segmentBlock?.obstacleId || "").trim();
+    const obstacleIsPushable =
+      !!segmentBlock?.obstaclePushable ||
+      !!segmentBlock?.obstaclePickup ||
+      String(segmentBlock?.obstacleLabel || "").startsWith("pickup-");
+    const ignoreObstacleIds = obstacleId ? [obstacleId] : [];
+    if (!obstacleIsPushable && !ignoreObstacleIds.length) return false;
+    const bypassSurfaceId =
+      supportSurfaceId && supportSurfaceId !== "floor"
+        ? String(supportSurfaceId)
+        : FLOOR_SURFACE_ID;
+    segment.segmentBypassUsed = true;
+    cat.nav.segmentBypass = {
+      segmentIndex: index,
+      segmentId: String(segment.id || ""),
+      ignorePushables: obstacleIsPushable,
+      ignoreObstacleIds,
+      supportSurfaceId: bypassSurfaceId,
+      queryY: Number.isFinite(queryY) ? queryY : 0,
+      createdAt: getClockTime(),
+    };
+    recordNavEvent("segment-blocked-bypass", {
+      segmentIndex: index,
+      segmentId: String(segment.id || ""),
+      ignorePushables: obstacleIsPushable ? 1 : 0,
+      obstacleId,
+      obstacle: segmentBlock?.obstacleLabel || "",
+      obstacleKind: segmentBlock?.obstacleKind || "",
+      supportSurfaceId: bypassSurfaceId,
+    });
+    clearCatNavPath(false);
+    cat.nav.repathAt = 0;
+    return true;
+  }
+
   function ensureRouteInvalidationStore() {
     if (!cat.nav.routeInvalidation || typeof cat.nav.routeInvalidation !== "object") {
       cat.nav.routeInvalidation = {
@@ -228,15 +349,18 @@ export function createCatSteeringRuntime(ctx) {
       cat.nav.lastForceRepathKey = key;
       if (repathState) repathState.forcedCount = (repathState.forcedCount || 0) + 1;
     }
+    const activePathOptions = mergePathOptions(
+      cat.nav?.pathOptions && typeof cat.nav.pathOptions === "object" ? cat.nav.pathOptions : null,
+      getCurrentSegmentBypassPathOptions()
+    );
     if (overlapIgnoredIds.length) {
-      const activePathOptions = cat.nav?.pathOptions && typeof cat.nav.pathOptions === "object"
-        ? { ...cat.nav.pathOptions }
-        : {};
       const mergedIgnoreIds = new Set([
         ...(Array.isArray(activePathOptions.ignoreObstacleIds) ? activePathOptions.ignoreObstacleIds : []),
         ...overlapIgnoredIds,
       ].map((value) => String(value || "").trim()).filter(Boolean));
       activePathOptions.ignoreObstacleIds = Array.from(mergedIgnoreIds);
+    }
+    if (Object.keys(activePathOptions).length > 0) {
       withTemporaryPathOptions(activePathOptions, () => planner(target, force, useDynamic, queryY, true));
     } else {
       planner(target, force, useDynamic, queryY, true);
@@ -1273,7 +1397,27 @@ export function createCatSteeringRuntime(ctx) {
 
   function obstacleIgnoredForRuntimeOnSurface(obs, runtimeOptions = null) {
     const supportSurfaceId = String(runtimeOptions?.supportSurfaceId || "");
-    if (!obs || !supportSurfaceId || supportSurfaceId === "floor") return false;
+    if (!obs) return false;
+    const ignoredIds = Array.isArray(runtimeOptions?.ignoreObstacleIds)
+      ? runtimeOptions.ignoreObstacleIds.map((value) => String(value || "").trim()).filter(Boolean)
+      : [];
+    if (ignoredIds.length && ignoredIds.includes(getRuntimeObstacleIdentity(obs))) return true;
+    const ignorePushableSurfaceId = String(runtimeOptions?.ignorePushableSurfaceId || "");
+    if (
+      ignorePushableSurfaceId &&
+      obs.pushable &&
+      obstacleMatchesRuntimeSurface(obs, { supportSurfaceId: ignorePushableSurfaceId })
+    ) {
+      return true;
+    }
+    if (
+      runtimeOptions?.freePushables &&
+      obs.pushable &&
+      obstacleMatchesRuntimeSurface(obs, runtimeOptions)
+    ) {
+      return true;
+    }
+    if (!supportSurfaceId || supportSurfaceId === "floor") return false;
     const ignoreIds = Array.isArray(obs.jumpIgnoreSurfaceIds)
       ? obs.jumpIgnoreSurfaceIds.map((v) => String(v))
       : obs.jumpIgnoreSurfaceIds != null
@@ -1501,6 +1645,9 @@ export function createCatSteeringRuntime(ctx) {
     return {
       obstacleLabel: label,
       obstacleKind: obs.kind || "unknown",
+      obstacleId: getRuntimeObstacleIdentity(obs),
+      obstaclePickup: !!obs.pickupKey || String(obs.tag || "").startsWith("pickup-"),
+      obstaclePushable: !!obs.pushable,
       obstacleX: Number.isFinite(obs.x) ? obs.x : 0,
       obstacleZ: Number.isFinite(obs.z) ? obs.z : 0,
     };
@@ -1675,9 +1822,12 @@ export function createCatSteeringRuntime(ctx) {
       yLevel > 0.02 && opts.supportSurfaceId && opts.supportSurfaceId !== "floor"
         ? String(opts.supportSurfaceId)
         : "";
-    const groundRuntimeOptions = {
-      allowEndpointPushableGoal,
-    };
+    const freeSurfacePushables = yLevel > 0.02 && !!supportSurfaceId && opts.freeSurfacePushables === true;
+    const makeGroundRuntimeOptions = () => mergeRuntimeOptions(
+      { allowEndpointPushableGoal },
+      getCurrentSegmentBypassRuntimeOptions(FLOOR_SURFACE_ID, 0)
+    );
+    let groundRuntimeOptions = makeGroundRuntimeOptions();
     let chase = target;
     const speedRef = getSpeedRef(speed);
     const preferRun =
@@ -1730,8 +1880,20 @@ export function createCatSteeringRuntime(ctx) {
         ...(extraPathOptions && typeof extraPathOptions === "object" ? extraPathOptions : {}),
       };
       if (supportSurfaceId) mergedPathOptions.supportSurfaceId = supportSurfaceId;
+      if (freeSurfacePushables) mergedPathOptions.ignorePushableSurfaceId = supportSurfaceId;
       if (Object.keys(mergedPathOptions).length === 0) return fn();
       return withTemporaryPathOptions(mergedPathOptions, fn);
+    };
+    const nudgeSurfacePushablesIfNeeded = (radius = CAT_COLLISION.catBodyRadius * 2.4) => {
+      if (!freeSurfacePushables || typeof nudgeNearbyPickupsAwayFromCat !== "function") return 0;
+      if (now < Number(cat.nav.surfacePushNudgeAt || 0)) return 0;
+      const nudged = nudgeNearbyPickupsAwayFromCat(radius, Math.max(0.02, yLevel));
+      cat.nav.surfacePushNudgeAt = now + (nudged > 0 ? 0.12 : 0.08);
+      if (nudged > 0) {
+        cat.status = "Shoving clutter";
+        recordNavEvent("surface-pushable-nudge", { nudged, supportSurfaceId });
+      }
+      return nudged;
     };
 
     if (yLevel <= 0.02) {
@@ -1743,7 +1905,7 @@ export function createCatSteeringRuntime(ctx) {
       const groundCollisionObstacles = getGroundCollisionObstacles(0, groundRuntimeOptions, dynamicClearance);
       // Some click targets land inside blocker margins; resolve a nearby valid planar goal
       // so we don't churn "no path" replans for unreachable exact points.
-      const shouldSnapTarget = !cat.debugMoveActive && !cat.jump;
+      const shouldSnapTarget = !cat.debugMoveActive && !cat.jump && !getActiveSegmentBypass();
       const targetForPath = shouldSnapTarget
         ? findNearestPlanarUnblockedTarget(
             target,
@@ -1835,8 +1997,8 @@ export function createCatSteeringRuntime(ctx) {
           const lookAheadDistance = getPathLookAheadDistance(speedRef, false);
           chase = selectPathChasePoint(tempTo, segmentObstacles, segmentClearance, 0, lookAheadDistance);
           let deferredSegmentBlock = false;
-          if (!hasRuntimeClearTravelLine(cat.pos, chase, segmentObstacles, segmentClearance)) {
-            const segmentBlock = findFirstBlockingOnLine(cat.pos, chase, segmentObstacles, segmentClearance, 0);
+          if (!hasRuntimeClearTravelLine(cat.pos, chase, segmentObstacles, segmentClearance, 0, groundRuntimeOptions)) {
+            const segmentBlock = findFirstBlockingOnLine(cat.pos, chase, segmentObstacles, segmentClearance, 0, groundRuntimeOptions);
             if (segmentBlock) {
               cat.nav.debugStep.blockedObstacle = segmentBlock.obstacleLabel;
               cat.nav.debugStep.blockedObstacleKind = segmentBlock.obstacleKind;
@@ -1878,12 +2040,12 @@ export function createCatSteeringRuntime(ctx) {
               segmentObstacles = getGroundCollisionObstacles(0, groundRuntimeOptions, segmentClearance);
               if (cat.nav.path.length > 1) {
                 chase = selectPathChasePoint(tempTo, segmentObstacles, segmentClearance, 0, lookAheadDistance);
-                if (!hasRuntimeClearTravelLine(cat.pos, chase, segmentObstacles, segmentClearance)) {
+                if (!hasRuntimeClearTravelLine(cat.pos, chase, segmentObstacles, segmentClearance, 0, groundRuntimeOptions)) {
                   const nIndex = THREE.MathUtils.clamp(cat.nav.index, 1, cat.nav.path.length - 1);
                   let advanced = false;
                   for (let i = nIndex + 1; i < cat.nav.path.length; i++) {
                     const candidate = cat.nav.path[i];
-                    if (hasRuntimeClearTravelLine(cat.pos, candidate, segmentObstacles, segmentClearance)) {
+                    if (hasRuntimeClearTravelLine(cat.pos, candidate, segmentObstacles, segmentClearance, 0, groundRuntimeOptions)) {
                       cat.nav.index = i;
                       chase = candidate;
                       advanced = true;
@@ -1894,17 +2056,18 @@ export function createCatSteeringRuntime(ctx) {
                   if (advanced) {
                     // continue movement with farther visible waypoint
                   } else {
-                    const rescueChase = findNearestNavigablePoint(
-                      cat.pos,
-                      tempTo,
-                      getGroundStaticObstacles(),
-                      segmentObstacles,
-                      segmentClearance
-                    );
-                    if (rescueChase) {
-                      chase = rescueChase;
+                    if (activateCurrentSegmentBypass(segmentBlock, 0, FLOOR_SURFACE_ID)) {
+                      groundRuntimeOptions = makeGroundRuntimeOptions();
+                      tryEnsurePath(repathState, tempTo, false, !ignoreDynamic);
+                      segmentObstacles = getGroundCollisionObstacles(0, groundRuntimeOptions, segmentClearance);
+                      if (cat.nav.path.length > 1) {
+                        chase = selectPathChasePoint(tempTo, segmentObstacles, segmentClearance, 0, lookAheadDistance);
+                      }
                       bumpDebugCounter("segmentRescue");
-                      recordNavEvent("segment-blocked-local-rescue", { x: rescueChase.x, z: rescueChase.z });
+                      recordNavEvent("segment-blocked-local-rescue", {
+                        bypass: 1,
+                        ignoreDynamic: !!ignoreDynamic,
+                      });
                     }
                   }
                 }
@@ -1924,16 +2087,13 @@ export function createCatSteeringRuntime(ctx) {
                 segmentBlock?.obstacleKind === "box" ||
                 segmentBlock?.obstacleKind === "obb";
               if (shouldAttemptDeferredRescue) {
-                const rescueChase = findNearestNavigablePoint(
-                  cat.pos,
-                  tempTo,
-                  getGroundStaticObstacles(),
-                  segmentObstacles,
-                  segmentClearance,
-                  0
-                );
-                if (rescueChase) {
-                  chase = rescueChase;
+                if (activateCurrentSegmentBypass(segmentBlock, 0, FLOOR_SURFACE_ID)) {
+                  groundRuntimeOptions = makeGroundRuntimeOptions();
+                  tryEnsurePath(repathState, tempTo, false, !ignoreDynamic);
+                  segmentObstacles = getGroundCollisionObstacles(0, groundRuntimeOptions, segmentClearance);
+                  if (cat.nav.path.length > 1) {
+                    chase = selectPathChasePoint(tempTo, segmentObstacles, segmentClearance, 0, lookAheadDistance);
+                  }
                   deferredSegmentBlock = false;
                   bumpDebugCounter("segmentRescue");
                   const nudgedNearbyPickups =
@@ -1944,8 +2104,7 @@ export function createCatSteeringRuntime(ctx) {
                     cat.status = "Shoving clutter";
                   }
                   recordNavEvent("segment-blocked-defer-rescue", {
-                    x: rescueChase.x,
-                    z: rescueChase.z,
+                    bypass: 1,
                     ignoreDynamic: !!ignoreDynamic,
                     nudged: nudgedNearbyPickups,
                   });
@@ -1967,7 +2126,7 @@ export function createCatSteeringRuntime(ctx) {
           // don't force immediate global replans every frame.
           if (!deferredSegmentBlock && now >= cat.nav.wholePathValidateAt) {
             cat.nav.wholePathValidateAt = now + 0.08;
-            let wholePath = validateRemainingPathToGoal(tempTo, segmentObstacles, segmentClearance, 0);
+            let wholePath = validateRemainingPathToGoal(tempTo, segmentObstacles, segmentClearance, 0, groundRuntimeOptions);
             if (!wholePath.ok) {
               cat.nav.wholePathBlockedFrames = (cat.nav.wholePathBlockedFrames || 0) + 1;
               const wholePathBlockedFrames = cat.nav.wholePathBlockedFrames || 0;
@@ -1999,7 +2158,7 @@ export function createCatSteeringRuntime(ctx) {
                 }
 
                 segmentObstacles = getGroundCollisionObstacles(0, groundRuntimeOptions, segmentClearance);
-                wholePath = validateRemainingPathToGoal(tempTo, segmentObstacles, segmentClearance, 0);
+                wholePath = validateRemainingPathToGoal(tempTo, segmentObstacles, segmentClearance, 0, groundRuntimeOptions);
               }
 
               if (!wholePath.ok) {
@@ -2105,7 +2264,7 @@ export function createCatSteeringRuntime(ctx) {
         yLevel <= 0.02 &&
         !cat.nav?.dynamicBypassActive &&
         (cat.nav?.path?.length || 0) <= 2 &&
-        hasRuntimeClearTravelLine(cat.pos, tempTo, groundCollisionObstacles, staticClearance, 0);
+        hasRuntimeClearTravelLine(cat.pos, tempTo, groundCollisionObstacles, staticClearance, 0, groundRuntimeOptions);
       if (
         CAT_NAV.useDetourCrowd &&
         typeof stepDetourCrowdToward === "function" &&
@@ -2395,13 +2554,18 @@ export function createCatSteeringRuntime(ctx) {
       const staticClearance = getCatPathClearance();
       const dynamicClearance = staticClearance;
       const staticObstacles = getElevatedStaticObstacles();
-      const elevatedRuntimeOptions = {
-        avoidSoftRuntime: true,
-        allowEndpointPushableGoal,
-        supportSurfaceId: supportSurfaceId || "",
-        queryY,
-      };
-      const elevatedMovementRuntimeOptions = elevatedRuntimeOptions;
+      const makeElevatedRuntimeOptions = () => mergeRuntimeOptions(
+        {
+          avoidSoftRuntime: !freeSurfacePushables,
+          freePushables: freeSurfacePushables,
+          allowEndpointPushableGoal,
+          supportSurfaceId: supportSurfaceId || "",
+          queryY,
+        },
+        getCurrentSegmentBypassRuntimeOptions(supportSurfaceId || "", queryY)
+      );
+      let elevatedRuntimeOptions = makeElevatedRuntimeOptions();
+      let elevatedMovementRuntimeOptions = elevatedRuntimeOptions;
       const collisionClearance = ignoreDynamic ? staticClearance : dynamicClearance;
       const collisionObstacles = getElevatedCollisionObstacles(queryY, elevatedMovementRuntimeOptions, collisionClearance);
       const targetForPath = findNearestSupportedElevatedTarget(
@@ -2485,22 +2649,17 @@ export function createCatSteeringRuntime(ctx) {
               }
             }
             if (!hasRuntimeClearTravelLine(cat.pos, chase, segmentObstacles, segmentClearance, queryY, elevatedMovementRuntimeOptions)) {
-              const rescueChase = findNearestNavigablePoint(
-                cat.pos,
-                tempTo,
-                getElevatedStaticObstacles(),
-                segmentObstacles,
-                segmentClearance,
-                queryY,
-                supportSurfaceId,
-                elevatedMovementRuntimeOptions
-              );
-              if (rescueChase) {
-                chase = rescueChase;
+              if (activateCurrentSegmentBypass(segmentBlock, queryY, supportSurfaceId)) {
+                elevatedRuntimeOptions = makeElevatedRuntimeOptions();
+                elevatedMovementRuntimeOptions = elevatedRuntimeOptions;
+                withSurfacePathOptions(() => tryEnsurePath(repathState, tempTo, false, !ignoreDynamic, queryY));
+                segmentObstacles = getElevatedCollisionObstacles(queryY, elevatedMovementRuntimeOptions, segmentClearance);
+                if (cat.nav.path.length > 1) {
+                  chase = selectPathChasePoint(tempTo, segmentObstacles, segmentClearance, queryY, lookAheadDistance);
+                }
                 bumpDebugCounter("segmentRescue");
                 recordNavEvent("segment-blocked-local-rescue", {
-                  x: rescueChase.x,
-                  z: rescueChase.z,
+                  bypass: 1,
                   nonFloorSurface: true,
                 });
               }
@@ -2682,6 +2841,7 @@ export function createCatSteeringRuntime(ctx) {
             cat.nav.debugStep.crowdReqZ = crowdStep.requestZ;
             cat.nav.debugStep.crowdQueryY = crowdStep.queryY;
             cat.nav.debugStep.crowdSupportSurfaceId = supportSurfaceId || "";
+            nudgeSurfacePushablesIfNeeded();
             return isNearTargetXZ(target);
           }
         }
@@ -3049,6 +3209,7 @@ export function createCatSteeringRuntime(ctx) {
         cat.nav.stuckT = Math.max(0, cat.nav.stuckT - dt * 0.9);
       }
       setNavMotionMetrics(moved, dt, Math.max(0.05, cat.nav.commandedSpeed));
+      nudgeSurfacePushablesIfNeeded();
       return isNearTargetXZ(target);
     }
 
@@ -3119,11 +3280,15 @@ export function createCatSteeringRuntime(ctx) {
     const staticClearance = getCatPathClearance();
     const staticObstacles = getElevatedStaticObstacles();
     const dynamicObstacles = getElevatedCollisionObstacles();
-    const elevatedRuntimeOptions = {
-      avoidSoftRuntime: true,
-      supportSurfaceId: supportSurfaceId || "",
-      queryY,
-    };
+    const elevatedRuntimeOptions = mergeRuntimeOptions(
+      {
+        avoidSoftRuntime: !freeSurfacePushables,
+        freePushables: freeSurfacePushables,
+        supportSurfaceId: supportSurfaceId || "",
+        queryY,
+      },
+      getCurrentSegmentBypassRuntimeOptions(supportSurfaceId || "", queryY)
+    );
     const elevatedMovementRuntimeOptions = elevatedRuntimeOptions;
     const collisionObstacles = dynamicObstacles;
     const supportMargin = CAT_COLLISION.catBodyRadius + 0.005;
@@ -3357,6 +3522,7 @@ export function createCatSteeringRuntime(ctx) {
           cat.nav.noSteerFrames = 0;
           bumpDebugCounter("escape");
           recordNavEvent("escape-step", { moved, nonFloorSurface: true });
+          nudgeSurfacePushablesIfNeeded();
           return false;
         }
       }
@@ -3439,6 +3605,7 @@ export function createCatSteeringRuntime(ctx) {
     cat.group.position.set(cat.pos.x, yLevel, cat.pos.z);
     cat.nav.steerYaw = steer.yaw;
     rotateCatToward(steer.yaw, dt);
+    nudgeSurfacePushablesIfNeeded();
     const moved = cat.pos.distanceTo(tempFrom);
     const nowElevated = getClockTime();
     const progressThreshold = getSharedProgressThreshold(step);

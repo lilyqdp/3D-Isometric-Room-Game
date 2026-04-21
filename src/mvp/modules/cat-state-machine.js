@@ -700,6 +700,7 @@ export function updateCatStateMachineRuntime(ctx, dt) {
     route.segmentProgressX = cat.pos.x;
     route.segmentProgressZ = cat.pos.z;
     route.segmentProgressDist = Infinity;
+    delete cat.nav.segmentBypass;
     return route;
   }
 
@@ -721,6 +722,7 @@ export function updateCatStateMachineRuntime(ctx, dt) {
     route.segmentProgressX = cat.pos.x;
     route.segmentProgressZ = cat.pos.z;
     route.segmentProgressDist = Infinity;
+    delete cat.nav.segmentBypass;
     return getActiveRouteSegment(route);
   }
 
@@ -830,6 +832,7 @@ export function updateCatStateMachineRuntime(ctx, dt) {
     route.segmentProgressX = cat.pos.x;
     route.segmentProgressZ = cat.pos.z;
     route.segmentProgressDist = Infinity;
+    delete cat.nav.segmentBypass;
     route.target.set(cat.pos.x, 0, cat.pos.z);
     route.finalTarget.set(cat.pos.x, 0, cat.pos.z);
     route.jumpAnchor.set(cat.pos.x, 0, cat.pos.z);
@@ -2142,8 +2145,18 @@ export function updateCatStateMachineRuntime(ctx, dt) {
       cat.nav.jumpUpPlanAt = clockTime + (force ? 0.08 : 0.14);
       if (!ok) return false;
 
+      const previousLanding = route.landing?.clone ? route.landing.clone() : null;
       route.jumpAnchor.copy(jumpAnchor);
       route.landing.copy(jumpTargets.top);
+      const intermediateHop = normalizeSurfaceId(route.finalSurfaceId || nextSurfaceId) !== nextSurfaceId;
+      const targetWasPreviousLanding =
+        previousLanding &&
+        route.target?.distanceToSquared &&
+        route.target.distanceToSquared(previousLanding) <= 0.22 * 0.22;
+      if (intermediateHop || targetWasPreviousLanding) {
+        route.target.copy(jumpTargets.top);
+        route.target.y = Math.max(0.02, getSurfaceTargetY(nextSurfaceId, jumpTargets.top, route.target.y));
+      }
       route.approachSurfaceId = supportSurfaceId;
       syncLegacyScalarsFromRoute(route);
       return true;
@@ -2287,6 +2300,7 @@ export function updateCatStateMachineRuntime(ctx, dt) {
           direct: false,
           ignoreDynamic: false,
           allowEndpointPushableGoal: false,
+          freeSurfacePushables: usingElevatedApproach,
         });
         const nearJumpAnchor =
           (jumpAnchor.x - cat.pos.x) ** 2 + (jumpAnchor.z - cat.pos.z) ** 2 < 0.14 * 0.14;
@@ -2370,6 +2384,7 @@ export function updateCatStateMachineRuntime(ctx, dt) {
           direct: true,
           ignoreDynamic: true,
           supportSurfaceId: getCurrentCatSurfaceId(),
+          freeSurfacePushables: true,
         });
         const dropDx = route.jumpOff.x - cat.pos.x;
         const dropDz = route.jumpOff.z - cat.pos.z;
@@ -2433,6 +2448,7 @@ export function updateCatStateMachineRuntime(ctx, dt) {
           {
             direct: false,
             ignoreDynamic: false,
+            freeSurfacePushables: true,
           }
         );
         if (!reachedTarget) {

@@ -41,10 +41,11 @@ export function createPickupsRuntime(ctx) {
     mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
   }
 
-  function setBinHighlight(binType) {
+  function setBinHighlight(binType, valid = true) {
     const hamperOn = binType === "hamper";
     const trashOn = binType === "trash";
-    const activeColor = 0x91f0ff;
+    const activeColor = valid ? 0x91f0ff : 0xff4d4d;
+    const activeEmissive = valid ? 0x12313a : 0x4a0909;
 
     if (binVisuals.hamper.ring) {
       binVisuals.hamper.ring.material.opacity = hamperOn ? 0.55 : 0.0;
@@ -57,16 +58,16 @@ export function createPickupsRuntime(ctx) {
 
     for (const m of binVisuals.hamper.shells) {
       if (!m.material.emissive) continue;
-      m.material.emissive.setHex(hamperOn ? 0x12313a : 0x000000);
+      m.material.emissive.setHex(hamperOn ? activeEmissive : 0x000000);
     }
     for (const m of binVisuals.trash.shells) {
       if (!m.material.emissive) continue;
-      m.material.emissive.setHex(trashOn ? 0x12313a : 0x000000);
+      m.material.emissive.setHex(trashOn ? activeEmissive : 0x000000);
     }
   }
 
   function resetDragHoverState() {
-    dragHover = { binType: null, topEntry: false };
+    dragHover = { binType: null, topEntry: false, valid: false };
     setBinHighlight(null);
   }
 
@@ -96,6 +97,14 @@ export function createPickupsRuntime(ctx) {
     if (binType === "hamper") return pickupType === "laundry" && hamper?.specialFlags?.allowCleanLaundry !== false;
     if (binType === "trash") return pickupType === "trash" && trashCan?.specialFlags?.allowCleanTrash !== false;
     return false;
+  }
+
+  function wantedBinForPickup(pickup) {
+    return pickup?.type === "laundry" ? "hamper" : "trash";
+  }
+
+  function wrongBinForPickup(pickup) {
+    return wantedBinForPickup(pickup) === "hamper" ? "trash" : "hamper";
   }
 
   function getRaisedSurfaces() {
@@ -318,10 +327,76 @@ export function createPickupsRuntime(ctx) {
     return d <= trashCan.outerRadius + 0.11 && pos.y <= trashCan.rimY + 0.1;
   }
 
+  function sampleWrongBinDeflector(pickup, binType, posLike = null) {
+    if (!pickup || binType !== wrongBinForPickup(pickup)) return null;
+    const pos = posLike || pickup.body?.position || pickup.mesh?.position;
+    if (!pos) return null;
+    const r = pickupRadius(pickup);
+
+    if (binType === "trash") {
+      const dx = pos.x - trashCan.pos.x;
+      const dz = pos.z - trashCan.pos.z;
+      let dist = Math.hypot(dx, dz);
+      const radius = trashCan.outerRadius + r * 0.75;
+      if (dist > radius || pos.y > trashCan.rimY + 0.72) return null;
+      if (dist < 1e-4) {
+        dist = 1;
+        return {
+          binType,
+          nx: 1,
+          nz: 0,
+          surfaceY: trashCan.rimY + 0.42,
+          strength: 1,
+        };
+      }
+      const t = THREE.MathUtils.clamp(dist / radius, 0, 1);
+      return {
+        binType,
+        nx: dx / dist,
+        nz: dz / dist,
+        surfaceY: trashCan.rimY + 0.06 + (1 - t) * 0.36,
+        strength: 1 - t,
+      };
+    }
+
+    const dx = pos.x - hamper.pos.x;
+    const dz = pos.z - hamper.pos.z;
+    const hx = hamper.outerHalfX + r * 0.75;
+    const hz = hamper.outerHalfZ + r * 0.75;
+    const ax = Math.abs(dx);
+    const az = Math.abs(dz);
+    if (ax > hx || az > hz || pos.y > hamper.rimY + 0.78) return null;
+    const edgeT = THREE.MathUtils.clamp(Math.max(ax / hx, az / hz), 0, 1);
+    let nx = dx;
+    let nz = dz;
+    const len = Math.hypot(nx, nz);
+    if (len < 1e-4) {
+      nx = 1;
+      nz = 0;
+    } else {
+      nx /= len;
+      nz /= len;
+    }
+    return {
+      binType,
+      nx,
+      nz,
+      surfaceY: hamper.rimY + 0.07 + (1 - edgeT) * 0.38,
+      strength: 1 - edgeT,
+    };
+  }
+
+  function isWrongBinDeflectorContact(pickup, binType, posLike = null) {
+    const deflector = sampleWrongBinDeflector(pickup, binType, posLike);
+    if (!deflector) return false;
+    const pos = posLike || pickup.body?.position || pickup.mesh?.position;
+    return pos.y <= deflector.surfaceY + pickupRadius(pickup) * 1.4;
+  }
+
   function classifyBinContactForPickup(pickup) {
     const pos = pickup.mesh.position;
-    const wantedBin = pickup.type === "laundry" ? "hamper" : "trash";
-    const otherBin = wantedBin === "hamper" ? "trash" : "hamper";
+    const wantedBin = wantedBinForPickup(pickup);
+    const otherBin = wrongBinForPickup(pickup);
     const r = pickupRadius(pickup);
 
     function topEntry(binType) {
@@ -344,8 +419,9 @@ export function createPickupsRuntime(ctx) {
 
     if (topEntry(wantedBin)) return { binType: wantedBin, topEntry: true, valid: binAllowsPickup(wantedBin, pickup.type) };
     if (topEntry(otherBin)) return { binType: otherBin, topEntry: true, valid: false };
-    if (sideHit(wantedBin)) return { binType: wantedBin, topEntry: false, valid: false };
+    if (sideHit(wantedBin)) return { binType: wantedBin, topEntry: false, valid: binAllowsPickup(wantedBin, pickup.type) };
     if (sideHit(otherBin)) return { binType: otherBin, topEntry: false, valid: false };
+    if (isWrongBinDeflectorContact(pickup, otherBin, pos)) return { binType: otherBin, topEntry: false, valid: false };
     return { binType: null, topEntry: false, valid: false };
   }
 
@@ -432,6 +508,15 @@ export function createPickupsRuntime(ctx) {
       }
     }
 
+    const wrongDeflector = sampleWrongBinDeflector(pickup, wrongBinForPickup(pickup), pos);
+    if (wrongDeflector && pos.y <= wrongDeflector.surfaceY + r * 1.4) {
+      const lift = wrongDeflector.surfaceY + r * 0.45;
+      targetY = Math.max(targetY, lift);
+      const slide = THREE.MathUtils.clamp(0.018 + wrongDeflector.strength * 0.034, 0.018, 0.052);
+      pos.x += wrongDeflector.nx * slide;
+      pos.z += wrongDeflector.nz * slide;
+    }
+
     pos.y = THREE.MathUtils.lerp(pos.y, targetY, 0.34);
   }
 
@@ -469,6 +554,23 @@ export function createPickupsRuntime(ctx) {
     pickup.body.angularVelocity.set(0, 2.1, 0);
   }
 
+  function startPickupSlideOffBin(pickup, binType) {
+    const deflector = sampleWrongBinDeflector(pickup, binType, pickup.body.position);
+    if (!deflector) {
+      startPickupBounce(pickup, binType);
+      return;
+    }
+    const half = pickupHalfExtents(pickup);
+    pickup.inMotion = true;
+    pickup.motion = "bounce";
+    pickup.targetBin = null;
+    pickup.body.position.y = Math.max(pickup.body.position.y, deflector.surfaceY + half.y + 0.01);
+    pickup.body.velocity.x = deflector.nx * 1.25;
+    pickup.body.velocity.z = deflector.nz * 1.25;
+    pickup.body.velocity.y = Math.max(pickup.body.velocity.y, 0.14);
+    pickup.body.angularVelocity.set(-deflector.nz * 1.2, 1.4, deflector.nx * 1.2);
+  }
+
   function startPickupDrop(pickup) {
     pickup.inMotion = true;
     pickup.motion = "drop";
@@ -483,10 +585,53 @@ export function createPickupsRuntime(ctx) {
 
   function isPickupRestingOnRaisedSurface(pickup) {
     const b = pickup.body;
-    const halfY = pickup.type === "laundry" ? 0.04 : 0.03;
+    const halfY = pickupHalfExtents(pickup).y;
     const supportSurface = getTopSurfaceAt(b.position.x, b.position.z);
     if (!supportSurface) return false;
     return Math.abs(b.position.y - (Number(supportSurface.y || 0) + halfY)) <= 0.08;
+  }
+
+  function settlePickupOnRaisedSurface(pickup, speed = 0) {
+    const b = pickup?.body;
+    if (!b || pickup?.targetBin) return false;
+    const supportSurface = getTopSurfaceAt(b.position.x, b.position.z);
+    if (!supportSurface) return false;
+    const surfaceY = Number(supportSurface.y);
+    if (!Number.isFinite(surfaceY)) return false;
+    const halfY = pickupHalfExtents(pickup).y;
+    const bottomY = b.position.y - halfY;
+    const surfaceGap = bottomY - surfaceY;
+    const tuning = pickupTuning(pickup);
+    const planarSpeed = Math.hypot(b.velocity.x || 0, b.velocity.z || 0);
+    const angularSpeed = b.angularVelocity.length();
+    const nearSurface = surfaceGap <= 0.04 && surfaceGap >= -0.08;
+    const slowEnough =
+      Math.abs(b.velocity.y || 0) <= 0.09 &&
+      planarSpeed <= tuning.settleSpeed * 2.4 &&
+      angularSpeed <= (pickup.type === "trash" ? 2.2 : 1.6);
+    if (!nearSurface) return false;
+
+    if (surfaceGap < -0.008) {
+      b.position.y = surfaceY + halfY + 0.004;
+      if (b.velocity.y < 0) b.velocity.y = 0;
+    }
+
+    if (!slowEnough) return false;
+    b.position.y = surfaceY + halfY + 0.004;
+    b.velocity.x *= tuning.friction;
+    b.velocity.z *= tuning.friction;
+    b.velocity.y = 0;
+    b.angularVelocity.scale(0.45, b.angularVelocity);
+    if (speed < tuning.settleSpeed * 0.75 && angularSpeed < 0.55) {
+      b.velocity.setZero();
+      b.angularVelocity.setZero();
+      if (typeof b.sleep === "function") b.sleep();
+      pickup.inMotion = false;
+      pickup.motion = null;
+      pickup.targetBin = null;
+    }
+    pickup.spawnSurfaceId = String(supportSurface.id || supportSurface.name || pickup.spawnSurfaceId || "floor");
+    return true;
   }
 
   function resolvePickupCupWaterCollision(pickup) {
@@ -608,7 +753,7 @@ export function createPickupsRuntime(ctx) {
     dragState.pickup.body.angularVelocity.setZero();
 
     dragHover = classifyBinContactForPickup(dragState.pickup);
-    setBinHighlight(dragHover.binType);
+    setBinHighlight(dragHover.binType, dragHover.valid);
   }
 
   function onPointerUp() {
@@ -619,6 +764,7 @@ export function createPickupsRuntime(ctx) {
     p.body.wakeUp();
 
     if (finalHit.valid && finalHit.topEntry) startPickupIntoBin(p, finalHit.binType);
+    else if (finalHit.binType === wrongBinForPickup(p)) startPickupSlideOffBin(p, finalHit.binType);
     else if (finalHit.binType != null) startPickupBounce(p, finalHit.binType);
     else startPickupDrop(p);
 
@@ -643,7 +789,7 @@ export function createPickupsRuntime(ctx) {
         continue;
       }
 
-      if (p.type === "trash" && p.inMotion && b.position.y > 0.14) {
+      if (p.type === "trash" && p.inMotion && b.position.y > 0.14 && !isPickupRestingOnRaisedSurface(p)) {
         const fx = Math.sin(clockTime * 8 + p.pulseSeed) * 0.24;
         const fz = Math.cos(clockTime * 9 + p.pulseSeed * 1.6) * 0.2;
         b.applyForce(new CANNON.Vec3(fx, 0, fz), b.position);
@@ -742,6 +888,23 @@ export function createPickupsRuntime(ctx) {
 
       resolvePickupCupWaterCollision(p);
 
+      const wrongDeflector = sampleWrongBinDeflector(p, wrongBinForPickup(p), b.position);
+      if (wrongDeflector && pickupBottomY <= wrongDeflector.surfaceY + 0.015) {
+        b.position.y = Math.max(b.position.y, wrongDeflector.surfaceY + half.y + 0.004);
+        const slideSpeed = THREE.MathUtils.clamp(0.32 + wrongDeflector.strength * 0.74, 0.32, 1.06);
+        const outwardSpeed = b.velocity.x * wrongDeflector.nx + b.velocity.z * wrongDeflector.nz;
+        if (outwardSpeed < slideSpeed) {
+          const add = slideSpeed - outwardSpeed;
+          b.velocity.x += wrongDeflector.nx * add;
+          b.velocity.z += wrongDeflector.nz * add;
+        }
+        b.velocity.y = Math.max(b.velocity.y * -0.08, 0.04);
+        b.angularVelocity.x += -wrongDeflector.nz * 0.35;
+        b.angularVelocity.z += wrongDeflector.nx * 0.35;
+        p.inMotion = true;
+        if (!p.motion || p.motion === "drop") p.motion = "bounce";
+      }
+
       const dxTrash = b.position.x - trashCan.pos.x;
       const dzTrash = b.position.z - trashCan.pos.z;
       const dTrash = Math.hypot(dxTrash, dzTrash);
@@ -798,6 +961,8 @@ export function createPickupsRuntime(ctx) {
           continue;
         }
       }
+
+      settlePickupOnRaisedSurface(p, b.velocity.length());
 
       p.mesh.position.set(b.position.x, b.position.y, b.position.z);
       p.mesh.quaternion.set(b.quaternion.x, b.quaternion.y, b.quaternion.z, b.quaternion.w);
