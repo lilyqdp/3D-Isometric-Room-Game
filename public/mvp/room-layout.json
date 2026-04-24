@@ -19,12 +19,12 @@
       "id": "floor",
       "type": "floor",
       "pos": {
-        "x": -1,
+        "x": 0,
         "y": 0,
         "z": -1
       },
-      "width": 12,
-      "depth": 9,
+      "width": 8,
+      "depth": 8,
       "y": 0,
       "rotQuarterTurns": 0,
       "editorLocked": true,
@@ -291,9 +291,9 @@
       "id": "hoverShelf",
       "type": "platform",
       "pos": {
-        "x": -1.423,
-        "y": 0,
-        "z": -1.294
+        "x": 0.374,
+        "y": -0.3,
+        "z": -5.05
       },
       "width": 1.25,
       "depth": 0.9,
@@ -343,9 +343,9 @@
       "id": "lowerPlatform",
       "type": "platform",
       "pos": {
-        "x": 0.455,
+        "x": 0.995,
         "y": 0,
-        "z": -3.045
+        "z": -5.053
       },
       "width": 0.95,
       "depth": 0.72,
@@ -394,9 +394,9 @@
       "id": "upperPlatform",
       "type": "platform",
       "pos": {
-        "x": -1.334,
-        "y": 0,
-        "z": -3.06
+        "x": -0.632,
+        "y": -0.15,
+        "z": -5.03
       },
       "width": 0.95,
       "depth": 0.72,
@@ -512,9 +512,9 @@
       "id": "hamper",
       "type": "hamper",
       "pos": {
-        "x": 2.719,
+        "x": 1.366,
         "y": 0,
-        "z": 0.863
+        "z": 2.006
       },
       "outerHalfX": 0.34,
       "outerHalfZ": 0.34,
@@ -938,9 +938,9 @@
       "id": "beanbag",
       "type": "beanbag",
       "pos": {
-        "x": -5.003,
+        "x": -0.016,
         "y": 0,
-        "z": 1.498
+        "z": 1.927
       },
       "visible": true,
       "specialFlags": {},
@@ -969,8 +969,8 @@
         "blockers": []
       },
       "radius": 0.52,
-      "rotQuarterTurns": 0,
-      "rotYDeg": 0,
+      "rotQuarterTurns": 2,
+      "rotYDeg": 180,
       "editorLocked": false,
       "tint": "",
       "name": "",
@@ -1547,6 +1547,248 @@
         "blockerOffsets": [],
         "supports": [],
         "blockers": []
+      }
+    },
+    {
+      "id": "plant1",
+      "type": "plant",
+      "pos": { "x": -5.5, "y": 0.055, "z": 1.5 },
+      "scale": 2.8,
+      "visible": true,
+      "specialFlags": {},
+      "surface": {
+        "enabled": false,
+        "shape": "rect",
+        "width": null,
+        "depth": null,
+        "radius": null,
+        "offsetX": 0,
+        "offsetZ": 0,
+        "flags": {
+          "randomPatrol": false,
+          "manualPatrol": true,
+          "allowCatSpawn": false,
+          "allowTrashSpawn": false,
+          "allowLaundrySpawn": false,
+          "allowCatnip": true
+        },
+        "special": {
+          "type": "plant"
+        },
+        "supportOffsets": [],
+        "blockerOffsets": [],
+        "supports": [],
+        "blockers": []
+      },
+      "potColor": "",
+      "leafColor": "",
+      "rotQuarterTurns": 0,
+      "editorLocked": false,
+      "tint": "",
+      "name": "",
+      "obstacle": {
+        "enabled": false,
+        "mode": "soft",
+        "navPad": 0.03,
+        "steerPad": 0.01,
+        "collisionPad": 0,
+        "jumpIgnoreSurfaceIds": []
+      }
+    },
+    {
+      "id": "plant2",
+      "type": "plant",
+      "pos": {
+        "x": 4.2,
+        "y": 0.055,
+        "z": 1.5
+      },
+      "visible": true,
+      "specialFlags": {},
+      "surface": {
+        "enabled": false,
+        "shape": "rect",
+        "width": null,
+        "depth": null,
+        "radius": null,
+        "offsetX": 0,
+        "offsetZ": 0,
+        "flags": {
+          "randomPatrol": false,
+          "manualPatrol": true,
+          "allowCatSpawn": false,
+          "allowTrashSpawn": false,
+          "allowLaundrySpawn": false,
+          "allowCatnip": true
+        },
+        "special": {
+          "type": "plant"
+        },
+        "supportOffsets": [],
+        "blockerOffsets": [],
+        "supports": [],
+        "blockers": []
+      },
+      "potColor": "",
+      "leafColor": "",
+      "rotQuarterTurns": 0,
+      "editorLocked": false,
+      "tint": "",
+      "name": "",
+      "obstacle": {
+        "enabled": false,
+        "mode": "soft",
+        "navPad": 0.03,
+        "steerPad": 0.01,
+        "collisionPad": 0,
+        "jumpIgnoreSurfaceIds": []
+      }
+    },
+    {
+      "id": "lamp1",
+      "type": "lamp",
+      "pos": {
+        "x": -1.402,
+        "y": 0.055,
+        "z": 1.841
+      },
+      "visible": true,
+      "specialFlags": {},
+      "surface": {
+        "enabled": false,
+        "shape": "rect",
+        "width": null,
+        "depth": null,
+        "radius": null,
+        "offsetX": 0,
+        "offsetZ": 0,
+        "flags": {
+          "randomPatrol": false,
+          "manualPatrol": true,
+          "allowCatSpawn": false,
+          "allowTrashSpawn": false,
+          "allowLaundrySpawn": false,
+          "allowCatnip": true
+        },
+        "special": {
+          "type": "lamp"
+        },
+        "supportOffsets": [],
+        "blockerOffsets": [],
+        "supports": [],
+        "blockers": []
+      },
+      "rotQuarterTurns": 0,
+      "editorLocked": false,
+      "tint": "",
+      "name": "",
+      "obstacle": {
+        "enabled": false,
+        "mode": "soft",
+        "navPad": 0.03,
+        "steerPad": 0.01,
+        "collisionPad": 0,
+        "jumpIgnoreSurfaceIds": []
+      }
+    },
+    {
+      "id": "poster1",
+      "type": "poster",
+      "pos": {
+        "x": -5.8,
+        "y": 1.4,
+        "z": -2.5
+      },
+      "visible": true,
+      "specialFlags": {},
+      "surface": {
+        "enabled": false,
+        "shape": "rect",
+        "width": null,
+        "depth": null,
+        "radius": null,
+        "offsetX": 0,
+        "offsetZ": 0,
+        "flags": {
+          "randomPatrol": false,
+          "manualPatrol": true,
+          "allowCatSpawn": false,
+          "allowTrashSpawn": false,
+          "allowLaundrySpawn": false,
+          "allowCatnip": true
+        },
+        "special": {
+          "type": "poster"
+        },
+        "supportOffsets": [],
+        "blockerOffsets": [],
+        "supports": [],
+        "blockers": []
+      },
+      "width": 0.7,
+      "height": 0.9,
+      "colorIndex": 0,
+      "rotQuarterTurns": 1,
+      "editorLocked": false,
+      "tint": "",
+      "name": "",
+      "obstacle": {
+        "enabled": false,
+        "mode": "soft",
+        "navPad": 0.03,
+        "steerPad": 0.01,
+        "collisionPad": 0,
+        "jumpIgnoreSurfaceIds": []
+      }
+    },
+    {
+      "id": "poster2",
+      "type": "poster",
+      "pos": {
+        "x": -5.8,
+        "y": 1.4,
+        "z": -0.8
+      },
+      "visible": true,
+      "specialFlags": {},
+      "surface": {
+        "enabled": false,
+        "shape": "rect",
+        "width": null,
+        "depth": null,
+        "radius": null,
+        "offsetX": 0,
+        "offsetZ": 0,
+        "flags": {
+          "randomPatrol": false,
+          "manualPatrol": true,
+          "allowCatSpawn": false,
+          "allowTrashSpawn": false,
+          "allowLaundrySpawn": false,
+          "allowCatnip": true
+        },
+        "special": {
+          "type": "poster"
+        },
+        "supportOffsets": [],
+        "blockerOffsets": [],
+        "supports": [],
+        "blockers": []
+      },
+      "width": 0.55,
+      "height": 0.7,
+      "colorIndex": 2,
+      "rotQuarterTurns": 1,
+      "editorLocked": false,
+      "tint": "",
+      "name": "",
+      "obstacle": {
+        "enabled": false,
+        "mode": "soft",
+        "navPad": 0.03,
+        "steerPad": 0.01,
+        "collisionPad": 0,
+        "jumpIgnoreSurfaceIds": []
       }
     }
   ]

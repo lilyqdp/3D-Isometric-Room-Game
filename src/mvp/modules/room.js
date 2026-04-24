@@ -808,6 +808,196 @@ export function makeBookcase(scene, bookcase) {
   tagRoomObject(group, bookcase);
   scene.add(group);
 }
+export function makePlant(scene, plant) {
+  const group = new THREE.Group();
+  group.position.copy(plant.pos);
+  const s = plant.scale || 1.0;
+  group.scale.set(s, s, s);
+
+  // Pot
+  const potMat = new THREE.MeshStandardMaterial({ color: plant.potColor || 0xc87941, roughness: 0.85 });
+  const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.1, 0.22, 10), potMat);
+  pot.position.set(0, 0.11, 0);
+  group.add(pot);
+
+  // Soil top
+  const soilMat = new THREE.MeshStandardMaterial({ color: 0x5a3a1a, roughness: 0.98 });
+  const soil = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 0.03, 10), soilMat);
+  soil.position.set(0, 0.235, 0);
+  group.add(soil);
+
+  // Leaves — several boxes at angles
+  const leafMat = new THREE.MeshStandardMaterial({ color: plant.leafColor || 0x4a8c3f, roughness: 0.9 });
+  const leafAngles = [0, 0.9, 1.8, 2.7, 3.6, 4.5];
+  for (let i = 0; i < leafAngles.length; i++) {
+    const leaf = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.32, 0.05), leafMat);
+    const angle = leafAngles[i];
+    const radius = 0.08;
+    leaf.position.set(Math.sin(angle) * radius, 0.42 + (i % 2) * 0.06, Math.cos(angle) * radius);
+    leaf.rotation.z = Math.sin(angle) * 0.5;
+    leaf.rotation.x = Math.cos(angle) * 0.3;
+    group.add(leaf);
+  }
+
+  // Center stem
+  const stemMat = new THREE.MeshStandardMaterial({ color: 0x3a6e2a, roughness: 0.9 });
+  const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.022, 0.22, 6), stemMat);
+  stem.position.set(0, 0.35, 0);
+  group.add(stem);
+
+  tagRoomObject(group, plant);
+  scene.add(group);
+}
+
+export function makeLamp(scene, lamp) {
+  const group = new THREE.Group();
+  group.position.copy(lamp.pos);
+
+  // Base
+  const baseMat = new THREE.MeshStandardMaterial({ color: 0x8a7055, roughness: 0.7, metalness: 0.2 });
+  const base = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.22, 0.06, 12), baseMat);
+  base.position.set(0, 0.03, 0);
+  group.add(base);
+
+  // Pole
+  const poleMat = new THREE.MeshStandardMaterial({ color: 0x9a8060, roughness: 0.6, metalness: 0.3 });
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 1.6, 8), poleMat);
+  pole.position.set(0, 0.86, 0);
+  group.add(pole);
+
+  // Shade outer
+  const shadeMat = new THREE.MeshStandardMaterial({ color: 0xf5e6c8, roughness: 0.88 });
+  const shade = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.18, 0.34, 12), shadeMat);
+  shade.position.set(0, 1.76, 0);
+  group.add(shade);
+
+  // Shade inner — warm glow color
+  const glowMat = new THREE.MeshStandardMaterial({ color: 0xffe4a0, roughness: 0.95, emissive: 0xffcc44, emissiveIntensity: 0.18 });
+  const glowInner = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.16, 0.32, 12), glowMat);
+  glowInner.position.set(0, 1.76, 0);
+  group.add(glowInner);
+
+  // Finial (top cap)
+  const finial = new THREE.Mesh(new THREE.SphereGeometry(0.04, 8, 8), poleMat);
+  finial.position.set(0, 1.96, 0);
+  group.add(finial);
+
+  tagRoomObject(group, lamp);
+  scene.add(group);
+}
+
+export function makePoster(scene, poster) {
+  const group = new THREE.Group();
+  group.position.copy(poster.pos);
+  group.rotation.y = (poster.rotQuarterTurns || 0) * Math.PI * 0.5;
+
+  const w = poster.width || 0.7;
+  const h = poster.height || 0.9;
+
+  // Frame
+  const frameMat = new THREE.MeshStandardMaterial({ color: 0x2a2218, roughness: 0.8 });
+  const frame = new THREE.Mesh(new THREE.BoxGeometry(w + 0.06, h + 0.06, 0.03), frameMat);
+  group.add(frame);
+
+  const designs = [
+    // Design 0: cream bg, big blue blobs (Matisse style)
+    () => {
+      const bg = new THREE.Mesh(new THREE.BoxGeometry(w, h, 0.02), new THREE.MeshStandardMaterial({ color: 0xf2ede6, roughness: 0.95 }));
+      bg.position.set(0, 0, 0.01);
+      group.add(bg);
+      const blobMat = new THREE.MeshStandardMaterial({ color: 0x2a5fd4, roughness: 0.9 });
+      const blobs = [
+        [w*0.18, h*0.28, w*0.28, h*0.22],
+        [-w*0.22, h*0.1, w*0.32, h*0.18],
+        [w*0.3, -h*0.12, w*0.18, h*0.26],
+        [-w*0.28, -h*0.25, w*0.24, h*0.2],
+        [w*0.05, -h*0.38, w*0.3, h*0.16],
+      ];
+      for (const [bx, by, bw, bh] of blobs) {
+        const blob = new THREE.Mesh(new THREE.BoxGeometry(bw, bh, 0.015), blobMat);
+        blob.position.set(bx, by, 0.022);
+        blob.rotation.z = (Math.random() - 0.5) * 0.4;
+        group.add(blob);
+      }
+    },
+    // Design 1: blue bg, cream geometric shapes
+    () => {
+      const bg = new THREE.Mesh(new THREE.BoxGeometry(w, h, 0.02), new THREE.MeshStandardMaterial({ color: 0x1a4a8a, roughness: 0.95 }));
+      bg.position.set(0, 0, 0.01);
+      group.add(bg);
+      const shapeMat = new THREE.MeshStandardMaterial({ color: 0xf2ede6, roughness: 0.9 });
+      // Large circle
+      const circle = new THREE.Mesh(new THREE.CylinderGeometry(h*0.25, h*0.25, 0.015, 20), shapeMat);
+      circle.rotation.x = Math.PI * 0.5;
+      circle.position.set(-w*0.1, h*0.15, 0.022);
+      group.add(circle);
+      // Small circle
+      const circle2 = new THREE.Mesh(new THREE.CylinderGeometry(h*0.1, h*0.1, 0.015, 20), new THREE.MeshStandardMaterial({ color: 0x6baed6, roughness: 0.9 }));
+      circle2.rotation.x = Math.PI * 0.5;
+      circle2.position.set(w*0.25, -h*0.05, 0.022);
+      group.add(circle2);
+      // Wavy bars
+      for (let i = 0; i < 4; i++) {
+        const bar = new THREE.Mesh(new THREE.BoxGeometry(w*0.7, 0.03, 0.015), shapeMat);
+        bar.position.set(0, -h*0.28 - i*0.06, 0.022);
+        bar.rotation.z = (i % 2 === 0 ? 0.04 : -0.04);
+        group.add(bar);
+      }
+    },
+    // Design 2: light blue bg, dark blue abstract leaf shapes
+    () => {
+      const bg = new THREE.Mesh(new THREE.BoxGeometry(w, h, 0.02), new THREE.MeshStandardMaterial({ color: 0xc6dff5, roughness: 0.95 }));
+      bg.position.set(0, 0, 0.01);
+      group.add(bg);
+      const darkMat = new THREE.MeshStandardMaterial({ color: 0x08519c, roughness: 0.9 });
+      const midMat = new THREE.MeshStandardMaterial({ color: 0x3182bd, roughness: 0.9 });
+      // Stem
+      const stem = new THREE.Mesh(new THREE.BoxGeometry(0.03, h*0.6, 0.015), darkMat);
+      stem.position.set(0, -h*0.1, 0.022);
+      group.add(stem);
+      // Leaf shapes
+      const leafData = [[-w*0.18, h*0.1, 0.3], [w*0.2, h*0.22, -0.3], [-w*0.22, h*0.3, 0.5], [w*0.15, h*0.02, -0.5]];
+      for (const [lx, ly, rot] of leafData) {
+        const leaf = new THREE.Mesh(new THREE.BoxGeometry(w*0.28, h*0.16, 0.015), midMat);
+        leaf.position.set(lx, ly, 0.022);
+        leaf.rotation.z = rot;
+        group.add(leaf);
+      }
+      // Dots
+      for (let i = 0; i < 5; i++) {
+        const dot = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.015, 10), darkMat);
+        dot.rotation.x = Math.PI * 0.5;
+        dot.position.set((i - 2) * w * 0.18, -h*0.38, 0.022);
+        group.add(dot);
+      }
+    },
+    // Design 3: cream bg, bold blue diagonal stripes + circle
+    () => {
+      const bg = new THREE.Mesh(new THREE.BoxGeometry(w, h, 0.02), new THREE.MeshStandardMaterial({ color: 0xf5f0e8, roughness: 0.95 }));
+      bg.position.set(0, 0, 0.01);
+      group.add(bg);
+      const stripeMat = new THREE.MeshStandardMaterial({ color: 0x2c6e9e, roughness: 0.9 });
+      for (let i = 0; i < 5; i++) {
+        const stripe = new THREE.Mesh(new THREE.BoxGeometry(w*1.4, 0.055, 0.015), stripeMat);
+        stripe.position.set(0, -h*0.3 + i * h*0.16, 0.022);
+        stripe.rotation.z = -0.35;
+        group.add(stripe);
+      }
+      const circleMat = new THREE.MeshStandardMaterial({ color: 0xf5f0e8, roughness: 0.9 });
+      const circleBg = new THREE.Mesh(new THREE.CylinderGeometry(h*0.22, h*0.22, 0.018, 20), circleMat);
+      circleBg.rotation.x = Math.PI * 0.5;
+      circleBg.position.set(0, h*0.05, 0.026);
+      group.add(circleBg);
+    },
+  ];
+
+  const designIdx = (poster.colorIndex || 0) % designs.length;
+  designs[designIdx]();
+
+  tagRoomObject(group, poster);
+  scene.add(group);
+}
+
 export function makeCurtains(scene, windowSill) {
   if (!windowSill) return;
 
@@ -1686,6 +1876,15 @@ export function buildRoomSceneFromLayout({
         break;
       case "bookcase":
         makeBookcase(scene, object);
+        break;
+      case "plant":
+        makePlant(scene, object);
+        break;
+      case "lamp":
+        makeLamp(scene, object);
+        break;
+      case "poster":
+        makePoster(scene, object);
         break;
       case "desk":
         makeDesk(scene, object);

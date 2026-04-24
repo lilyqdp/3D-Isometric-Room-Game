@@ -361,6 +361,9 @@ const SUPPORTED_ROOM_OBJECT_TYPES = new Set([
   "bookcase",
   "fishtank",
   "beanbag",
+  "plant",
+  "lamp",
+  "poster",
 ]);
 
 function isSupportedRoomObjectType(type) {
@@ -549,6 +552,9 @@ function objectSupportsObstacleSettings(object) {
     "bookcase",
     "fishtank",
     "beanbag",
+    "plant",
+    "lamp",
+    "poster",
   ].includes(object.type);
 }
 
@@ -567,6 +573,9 @@ function objectSupportsGenericObstacle(object) {
     "bookcase",
     "fishtank",
     "beanbag",
+    "plant",
+    "lamp",
+    "poster",
   ].includes(object.type);
 }
 
@@ -900,7 +909,7 @@ function getLayoutObjectCenterY(object) {
 
 function objectCanSupportSurface(object) {
   if (!object) return false;
-  if (["floor", "desk", "chair", "shelf", "platform", "windowSill", "model", "hamper", "trashCan", "bed", "bedsideTable", "rug", "wardrobe", "bookcase", "fishtank","beanbag"].includes(object.type)) return true;
+  if (["floor", "desk", "chair", "shelf", "platform", "windowSill", "model", "hamper", "trashCan", "bed", "bedsideTable", "rug", "wardrobe", "bookcase", "fishtank","beanbag", "plant", "lamp", "poster"].includes(object.type)) return true;
   if (object.type === "primitive") return object.shapeKind !== "sphere";
   return false;
 }
@@ -2115,7 +2124,7 @@ export function duplicateRoomObject(THREE, layout, objectId, nextId, options = {
   const source = layout?.objectsById?.[objectId] || null;
   const candidateId = String(nextId || "").trim();
   if (!source || !candidateId || layout?.objectsById?.[candidateId]) return null;
-  if (!["chair", "shelf", "platform", "primitive", "model", "bed", "bedsideTable", "rug", "wardrobe", "bookcase"].includes(source.type)) return null;
+  if (!["chair", "shelf", "platform", "primitive", "model", "bed", "bedsideTable", "rug", "wardrobe", "bookcase", "plant", "lamp", "poster"].includes(source.type)) return null;
 
   const clone = instantiateRoomObject(THREE, toSerializableValue(source), createDefaultRoomLayout(THREE));
   clone.id = candidateId;
