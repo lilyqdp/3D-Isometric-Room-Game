@@ -1,9 +1,9 @@
 {
   "roomBounds": {
-    "minX": -7,
-    "maxX": 5,
-    "minZ": -5.5,
-    "maxZ": 3.5,
+    "minX": -4,
+    "maxX": 4,
+    "minZ": -5,
+    "maxZ": 3,
     "floorY": 0
   },
   "targetBounds": {
@@ -61,28 +61,28 @@
       "id": "desk",
       "type": "desk",
       "pos": {
-        "x": 0.603,
+        "x": -0.514,
         "y": 0,
-        "z": -4.71
+        "z": -4.225
       },
       "sizeX": 1.95,
       "sizeZ": 1.55,
       "topY": 0.95,
       "rotQuarterTurns": 0,
       "approach": {
-        "x": 2.203,
+        "x": 1.086,
         "y": 0,
-        "z": -3.91
+        "z": -3.425
       },
       "perch": {
-        "x": 1.103,
+        "x": -0.014,
         "y": 0,
-        "z": -4.41
+        "z": -3.925
       },
       "cup": {
-        "x": -0.232,
+        "x": -1.349,
         "y": 0,
-        "z": -4.338
+        "z": -3.853
       },
       "editorLocked": false,
       "tint": "",
@@ -174,9 +174,9 @@
       "id": "chair",
       "type": "chair",
       "pos": {
-        "x": 0.455,
+        "x": -0.458,
         "y": 0,
-        "z": -3.702
+        "z": -3.513
       },
       "sizeX": 0.92,
       "sizeZ": 0.86,
@@ -291,9 +291,9 @@
       "id": "hoverShelf",
       "type": "platform",
       "pos": {
-        "x": 0.374,
-        "y": -0.3,
-        "z": -5.05
+        "x": -1.584,
+        "y": -0.55,
+        "z": -4.471
       },
       "width": 1.25,
       "depth": 0.9,
@@ -343,9 +343,9 @@
       "id": "lowerPlatform",
       "type": "platform",
       "pos": {
-        "x": 0.995,
+        "x": 0.17,
         "y": 0,
-        "z": -5.053
+        "z": -4.545
       },
       "width": 0.95,
       "depth": 0.72,
@@ -394,9 +394,9 @@
       "id": "upperPlatform",
       "type": "platform",
       "pos": {
-        "x": -0.632,
-        "y": -0.15,
-        "z": -5.03
+        "x": -2.705,
+        "y": -0.8,
+        "z": -4.364
       },
       "width": 0.95,
       "depth": 0.72,
@@ -445,9 +445,9 @@
       "id": "windowSill",
       "type": "windowSill",
       "pos": {
-        "x": 3.111,
+        "x": 2.247,
         "y": 0,
-        "z": -4.917
+        "z": -4.698
       },
       "width": 2.1,
       "depth": 0.6,
@@ -459,9 +459,9 @@
       "openingCenterY": 2,
       "openDuration": 20,
       "sitPoint": {
-        "x": 3.111,
+        "x": 2.247,
         "y": 0,
-        "z": -4.917
+        "z": -4.698
       },
       "outsideYaw": 3.141592653589793,
       "rotQuarterTurns": 0,
@@ -512,9 +512,9 @@
       "id": "hamper",
       "type": "hamper",
       "pos": {
-        "x": 1.366,
+        "x": -1.257,
         "y": 0,
-        "z": 2.006
+        "z": 2.567
       },
       "outerHalfX": 0.34,
       "outerHalfZ": 0.34,
@@ -569,9 +569,9 @@
       "id": "trashCan",
       "type": "trashCan",
       "pos": {
-        "x": -1.219,
+        "x": -2.803,
         "y": 0,
-        "z": -4.717
+        "z": -4.48
       },
       "outerRadius": 0.52,
       "radius": 0.5,
@@ -624,9 +624,9 @@
       "id": "fishtank",
       "type": "fishtank",
       "pos": {
-        "x": -1.595,
+        "x": 1.167,
         "y": 0,
-        "z": -3.061
+        "z": 2.466
       },
       "width": 1.3,
       "depth": 0.85,
@@ -668,17 +668,17 @@
         "jumpIgnoreSurfaceIds": []
       },
       "visible": true,
-      "rotQuarterTurns": 3,
-      "rotYDeg": 270,
+      "rotQuarterTurns": 2,
+      "rotYDeg": 180,
       "specialFlags": {}
     },
     {
       "id": "bed",
       "type": "bed",
       "pos": {
-        "x": 3.05,
+        "x": 2.079,
         "y": 0,
-        "z": -3.394
+        "z": -3.3
       },
       "visible": true,
       "specialFlags": {},
@@ -729,9 +729,9 @@
       "id": "bedsideTable",
       "type": "bedsideTable",
       "pos": {
-        "x": 4.573,
+        "x": 3.575,
         "y": 0,
-        "z": -4.75
+        "z": -4.426
       },
       "visible": true,
       "specialFlags": {},
@@ -780,9 +780,9 @@
       "id": "rug",
       "type": "rug",
       "pos": {
-        "x": 0.446,
+        "x": -0.869,
         "y": 0.035,
-        "z": -1.184
+        "z": -0.644
       },
       "visible": true,
       "specialFlags": {},
@@ -834,9 +834,9 @@
       "id": "wardrobe",
       "type": "wardrobe",
       "pos": {
-        "x": -1.605,
+        "x": -3.473,
         "y": 0,
-        "z": 0.345
+        "z": 1.089
       },
       "visible": true,
       "specialFlags": {},
@@ -886,9 +886,9 @@
       "id": "bookcase",
       "type": "bookcase",
       "pos": {
-        "x": -1.352,
+        "x": -3.612,
         "y": 0,
-        "z": -1.226
+        "z": -3.369
       },
       "visible": true,
       "specialFlags": {},
@@ -938,9 +938,9 @@
       "id": "beanbag",
       "type": "beanbag",
       "pos": {
-        "x": -0.016,
+        "x": -3.216,
         "y": 0,
-        "z": 1.927
+        "z": -1.896
       },
       "visible": true,
       "specialFlags": {},
@@ -969,8 +969,8 @@
         "blockers": []
       },
       "radius": 0.52,
-      "rotQuarterTurns": 2,
-      "rotYDeg": 180,
+      "rotQuarterTurns": 1,
+      "rotYDeg": 90,
       "editorLocked": false,
       "tint": "",
       "name": "",
@@ -1552,18 +1552,15 @@
     {
       "id": "plant1",
       "type": "plant",
-      "pos": { "x": -5.5, "y": 0.055, "z": 1.5 },
-      "scale": 2.8,
+      "pos": {
+        "x": -3.28,
+        "y": 0.055,
+        "z": -0.341
+      },
       "visible": true,
       "specialFlags": {},
       "surface": {
         "enabled": false,
-        "shape": "rect",
-        "width": null,
-        "depth": null,
-        "radius": null,
-        "offsetX": 0,
-        "offsetZ": 0,
         "flags": {
           "randomPatrol": false,
           "manualPatrol": true,
@@ -1577,9 +1574,16 @@
         },
         "supportOffsets": [],
         "blockerOffsets": [],
+        "shape": "rect",
+        "width": null,
+        "depth": null,
+        "radius": null,
+        "offsetX": 0,
+        "offsetZ": 0,
         "supports": [],
         "blockers": []
       },
+      "scale": 2.8,
       "potColor": "",
       "leafColor": "",
       "rotQuarterTurns": 0,
@@ -1599,20 +1603,14 @@
       "id": "plant2",
       "type": "plant",
       "pos": {
-        "x": 4.2,
-        "y": 0.055,
-        "z": 1.5
+        "x": 3.5,
+        "y": 0.7,
+        "z": -4.369
       },
       "visible": true,
       "specialFlags": {},
       "surface": {
         "enabled": false,
-        "shape": "rect",
-        "width": null,
-        "depth": null,
-        "radius": null,
-        "offsetX": 0,
-        "offsetZ": 0,
         "flags": {
           "randomPatrol": false,
           "manualPatrol": true,
@@ -1626,6 +1624,12 @@
         },
         "supportOffsets": [],
         "blockerOffsets": [],
+        "shape": "rect",
+        "width": null,
+        "depth": null,
+        "radius": null,
+        "offsetX": 0.5,
+        "offsetZ": 0,
         "supports": [],
         "blockers": []
       },
@@ -1648,20 +1652,14 @@
       "id": "lamp1",
       "type": "lamp",
       "pos": {
-        "x": -1.402,
+        "x": -3.5,
         "y": 0.055,
-        "z": 1.841
+        "z": 2.5
       },
       "visible": true,
       "specialFlags": {},
       "surface": {
         "enabled": false,
-        "shape": "rect",
-        "width": null,
-        "depth": null,
-        "radius": null,
-        "offsetX": 0,
-        "offsetZ": 0,
         "flags": {
           "randomPatrol": false,
           "manualPatrol": true,
@@ -1675,6 +1673,12 @@
         },
         "supportOffsets": [],
         "blockerOffsets": [],
+        "shape": "rect",
+        "width": null,
+        "depth": null,
+        "radius": null,
+        "offsetX": 0,
+        "offsetZ": 0,
         "supports": [],
         "blockers": []
       },
@@ -1695,20 +1699,14 @@
       "id": "poster1",
       "type": "poster",
       "pos": {
-        "x": -5.8,
-        "y": 1.4,
-        "z": -2.5
+        "x": -3.5,
+        "y": 1.55,
+        "z": -1.828
       },
       "visible": true,
       "specialFlags": {},
       "surface": {
         "enabled": false,
-        "shape": "rect",
-        "width": null,
-        "depth": null,
-        "radius": null,
-        "offsetX": 0,
-        "offsetZ": 0,
         "flags": {
           "randomPatrol": false,
           "manualPatrol": true,
@@ -1722,6 +1720,12 @@
         },
         "supportOffsets": [],
         "blockerOffsets": [],
+        "shape": "rect",
+        "width": null,
+        "depth": null,
+        "radius": null,
+        "offsetX": 0,
+        "offsetZ": 0,
         "supports": [],
         "blockers": []
       },
@@ -1745,20 +1749,14 @@
       "id": "poster2",
       "type": "poster",
       "pos": {
-        "x": -5.8,
-        "y": 1.4,
-        "z": -0.8
+        "x": -3.5,
+        "y": 2.2,
+        "z": -0.4
       },
       "visible": true,
       "specialFlags": {},
       "surface": {
         "enabled": false,
-        "shape": "rect",
-        "width": null,
-        "depth": null,
-        "radius": null,
-        "offsetX": 0,
-        "offsetZ": 0,
         "flags": {
           "randomPatrol": false,
           "manualPatrol": true,
@@ -1772,6 +1770,12 @@
         },
         "supportOffsets": [],
         "blockerOffsets": [],
+        "shape": "rect",
+        "width": null,
+        "depth": null,
+        "radius": null,
+        "offsetX": 0,
+        "offsetZ": 0,
         "supports": [],
         "blockers": []
       },
