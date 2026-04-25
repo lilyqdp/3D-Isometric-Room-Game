@@ -7,6 +7,7 @@ export function createMainDebugCameraRuntime(ctx) {
     debugControlsRuntime,
     game,
     getClockTime,
+    isKeyboardCameraEnabled = () => true,
   } = ctx;
 
   const DEBUG_CAMERA = {
@@ -38,6 +39,16 @@ export function createMainDebugCameraRuntime(ctx) {
     return code in debugCameraInput;
   }
 
+  function canUseKeyboardCamera(event = null) {
+    if (game.state !== "playing") return false;
+    if (!isKeyboardCameraEnabled()) return false;
+    const target = event?.target || null;
+    if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
+      return false;
+    }
+    return true;
+  }
+
   function resetDebugCameraInput() {
     for (const code in debugCameraInput) {
       debugCameraInput[code] = false;
@@ -48,10 +59,9 @@ export function createMainDebugCameraRuntime(ctx) {
     debugRuntime.onKeyDown(event, getClockTime());
     const code = event.code || "";
     if (
-      debugRuntime.isDebugVisible() &&
       !event.repeat &&
       isDebugCameraKey(code) &&
-      !(event.target && (event.target.tagName === "INPUT" || event.target.tagName === "TEXTAREA"))
+      canUseKeyboardCamera(event)
     ) {
       debugCameraInput[code] = true;
       event.preventDefault();
@@ -68,11 +78,11 @@ export function createMainDebugCameraRuntime(ctx) {
     const code = event.code || "";
     if (!isDebugCameraKey(code)) return;
     debugCameraInput[code] = false;
-    if (debugRuntime.isDebugVisible()) event.preventDefault();
+    if (canUseKeyboardCamera(event)) event.preventDefault();
   }
 
   function updateDebugCameraControls(dt) {
-    if (!debugRuntime.isDebugVisible()) {
+    if (game.state !== "playing" || !isKeyboardCameraEnabled()) {
       resetDebugCameraInput();
       return;
     }

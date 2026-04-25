@@ -34,11 +34,33 @@ const editRoomBtn = document.getElementById("editRoomBtn");
 const quitBtn = document.getElementById("quitBtn");
 const replayBtn = document.getElementById("replayBtn");
 const startModeBtn = document.getElementById("startModeBtn");
+const rulesMenuBtn = document.getElementById("rulesMenuBtn");
+const rulesHudBtn = document.getElementById("rulesHudBtn");
+const rulesOverlay = document.getElementById("rulesOverlay");
+const rulesCloseBtn = document.getElementById("rulesCloseBtn");
+const quitConfirmOverlay = document.getElementById("quitConfirmOverlay");
+const quitToMenuBtn = document.getElementById("quitToMenuBtn");
+const quitCancelBtn = document.getElementById("quitCancelBtn");
+const pauseBadge = document.getElementById("pauseBadge");
 
 const hud = document.getElementById("hud");
 
 // Hide HUD until game starts
 hud.style.display = "none";
+let rulesPausedGame = false;
+let quitConfirmPausedGame = false;
+
+function setPaused(paused) {
+  game.paused = !!paused;
+  if (pauseBadge) {
+    pauseBadge.style.display = game.paused && game.state === "playing" ? "block" : "none";
+  }
+}
+
+function togglePaused() {
+  if (game.state !== "playing") return;
+  setPaused(!game.paused);
+}
 
 function launchGameSession() {
   resetGame();
@@ -50,9 +72,42 @@ function launchGameSession() {
 
 function showStartMenu() {
   game.state = "menu";
+  setPaused(false);
   endMenu.classList.add("hidden");
   startMenu.classList.remove("hidden");
   hud.style.display = "none";
+}
+
+function showRules() {
+  rulesPausedGame = game.state === "playing" && !game.paused;
+  if (rulesPausedGame) setPaused(true);
+  rulesOverlay?.classList.remove("hidden");
+}
+
+function hideRules() {
+  rulesOverlay?.classList.add("hidden");
+  if (rulesPausedGame) setPaused(false);
+  rulesPausedGame = false;
+}
+
+function showQuitConfirm() {
+  if (game.state !== "playing") return;
+  quitConfirmPausedGame = !game.paused;
+  if (quitConfirmPausedGame) setPaused(true);
+  quitConfirmOverlay?.classList.remove("hidden");
+}
+
+function hideQuitConfirm() {
+  quitConfirmOverlay?.classList.add("hidden");
+  if (quitConfirmPausedGame) setPaused(false);
+  quitConfirmPausedGame = false;
+}
+
+function quitToMainMenu() {
+  quitConfirmOverlay?.classList.add("hidden");
+  quitConfirmPausedGame = false;
+  resetGame();
+  showStartMenu();
 }
 
 // Play button
@@ -93,6 +148,22 @@ replayBtn.addEventListener("click", () => {
   showStartMenu();
 });
 
+if (rulesMenuBtn) rulesMenuBtn.addEventListener("click", () => showRules());
+if (rulesHudBtn) rulesHudBtn.addEventListener("click", () => showRules());
+if (rulesCloseBtn) rulesCloseBtn.addEventListener("click", () => hideRules());
+if (rulesOverlay) {
+  rulesOverlay.addEventListener("click", (event) => {
+    if (event.target === rulesOverlay) hideRules();
+  });
+}
+if (quitToMenuBtn) quitToMenuBtn.addEventListener("click", () => quitToMainMenu());
+if (quitCancelBtn) quitCancelBtn.addEventListener("click", () => hideQuitConfirm());
+if (quitConfirmOverlay) {
+  quitConfirmOverlay.addEventListener("click", (event) => {
+    if (event.target === quitConfirmOverlay) hideQuitConfirm();
+  });
+}
+
 const sortedStatEl = document.getElementById("sortedStat");
 const endMenuEl = document.getElementById("endMenu");
 const endTitleEl = document.getElementById("endTitle");
@@ -122,8 +193,8 @@ scene.background = new THREE.Color(0xdde8f0);
 
 let aspect = window.innerWidth / window.innerHeight;
 const camera = new THREE.PerspectiveCamera(44, aspect, 0.1, 60);
-camera.position.set(13.5, 11.5, 13.5);
-camera.lookAt(-1.2, 1.4, -1.2);
+camera.position.set(7.75, 6.95, 7.75);
+camera.lookAt(0.35, 1.05, 0.1);
 
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
@@ -131,14 +202,14 @@ controls.dampingFactor = 0.08;
 controls.enableRotate = false;
 controls.enablePan = true;
 controls.enableZoom = true;
-controls.minDistance = 7.5;
+controls.minDistance = 6.2;
 controls.maxDistance = 30;
 controls.mouseButtons = {
   LEFT: THREE.MOUSE.PAN,
   MIDDLE: THREE.MOUSE.DOLLY,
   RIGHT: THREE.MOUSE.PAN,
 };
-controls.target.set(-1.2, 1.4, -1.2);
+controls.target.set(0.35, 1.05, 0.1);
 camera.updateProjectionMatrix();
 
 const hemi = new THREE.HemisphereLight(0xfff4e0, 0xc8b89a, 1.1);
@@ -190,6 +261,7 @@ const {
 const game = {
   state: "menu", // menu | playing | lost | won
   timeScale: 1.0,
+  paused: false,
   endlessMode: false,
   reason: "",
   sorted: 0,
@@ -378,7 +450,7 @@ const { windowSillRuntime } = buildRoomSceneFromLayout({
   trashCanModelCandidates: TRASH_CAN_MODEL_CANDIDATES,
 });
 
-catnipBtn.addEventListener("click", () => {
+function enterCatnipPlacementMode() {
   if (game.state !== "playing") return;
   if (clockTime < (game.windowOpenUntil || 0)) {
     game.placeCatnipMode = false;
@@ -387,15 +459,23 @@ catnipBtn.addEventListener("click", () => {
   if (game.catnip) return;
   if (clockTime < game.catnipCooldownUntil) return;
   game.placeCatnipMode = true;
+}
+
+function openWindowSill() {
+  if (game.state !== "playing") return;
+  if (windowSill?.specialFlags?.windowOpensOnButtonClick === false) return;
+  if (clockTime < game.windowOpenUntil) return;
+  game.placeCatnipMode = false;
+  catnipRuntime.clearCatnip();
+  game.windowOpenUntil = clockTime + windowSill.openDuration;
+}
+
+catnipBtn.addEventListener("click", () => {
+  enterCatnipPlacementMode();
 });
 if (windowBtn) {
   windowBtn.addEventListener("click", () => {
-    if (game.state !== "playing") return;
-    if (windowSill?.specialFlags?.windowOpensOnButtonClick === false) return;
-    if (clockTime < game.windowOpenUntil) return;
-    game.placeCatnipMode = false;
-    catnipRuntime.clearCatnip();
-    game.windowOpenUntil = clockTime + windowSill.openDuration;
+    openWindowSill();
   });
 }
 
@@ -681,6 +761,9 @@ const debugCameraRuntime = createMainDebugCameraRuntime({
   debugControlsRuntime,
   game,
   getClockTime: () => clockTime,
+  isKeyboardCameraEnabled: () =>
+    (!rulesOverlay || rulesOverlay.classList.contains("hidden")) &&
+    (!quitConfirmOverlay || quitConfirmOverlay.classList.contains("hidden")),
 });
 
 window.addEventListener("keydown", debugCameraRuntime.onKeyDown);
@@ -952,6 +1035,7 @@ function updateEndlessSpawning(dt) {
 
 function resetGame() {
   game.state = "menu";
+  setPaused(false);
   game.reason = "";
   game.sorted = 0;
   game.mess = 0;
@@ -1392,17 +1476,22 @@ function updateCat(dt) {
 function lose(reason) {
   if (game.state !== "playing") return;
   game.state = "lost";
+  setPaused(false);
   game.reason = reason;
 }
 
 function win() {
   if (game.state !== "playing") return;
   game.state = "won";
+  setPaused(false);
 }
 
 function updateUI() {
   uiRuntime.updateUI();
-  if (modeStatEl) modeStatEl.textContent = game.endlessMode ? "Endless" : "Casual";
+  if (modeStatEl) {
+    const modeText = game.endlessMode ? "Endless" : "Casual";
+    modeStatEl.textContent = game.paused && game.state === "playing" ? `${modeText} (Paused)` : modeText;
+  }
   if (modeBtnEl) {
     modeBtnEl.textContent = game.endlessMode ? "Switch To Casual" : "Switch To Endless";
     modeBtnEl.style.display = "";
@@ -1494,7 +1583,7 @@ function animate() {
     lastAnimationFrameAt > 0 ? frameStartAt - lastAnimationFrameAt : NaN;
   lastAnimationFrameAt = frameStartAt;
   const frameDt = Math.min(clock.getDelta(), MAX_FRAME_DT);
-  const timeScale = THREE.MathUtils.clamp(game.timeScale, 0, 2);
+  const timeScale = game.paused ? 0 : THREE.MathUtils.clamp(game.timeScale, 0, 2);
   const perfSample = {
     frameIntervalMs,
     frameDtMs: frameDt * 1000,
@@ -1595,9 +1684,44 @@ function animate() {
   requestAnimationFrame(animate);
 }
 window.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && game.placeCatnipMode) {
-    game.placeCatnipMode = false;
-    game.invalidCatnipUntil = 0;
+  const target = e.target;
+  const tagName = typeof target?.tagName === "string" ? target.tagName.toLowerCase() : "";
+  const shortcutBlocked = tagName === "input" || tagName === "textarea" || tagName === "select" || target?.isContentEditable;
+  const rulesOpen = !!rulesOverlay && !rulesOverlay.classList.contains("hidden");
+  const quitConfirmOpen = !!quitConfirmOverlay && !quitConfirmOverlay.classList.contains("hidden");
+  if (e.key === "Escape" && rulesOpen) {
+    hideRules();
+    e.preventDefault();
+    e.stopPropagation();
+    return;
+  }
+  if (e.key === "Escape" && quitConfirmOpen) {
+    hideQuitConfirm();
+    e.preventDefault();
+    e.stopPropagation();
+    return;
+  }
+  if (rulesOpen || quitConfirmOpen) return;
+  if (e.key === "Escape" && game.state === "playing") {
+    showQuitConfirm();
+    e.preventDefault();
+    e.stopPropagation();
+    return;
+  }
+  if (!shortcutBlocked && (e.key || "").toLowerCase() === "p") {
+    togglePaused();
+    e.preventDefault();
+    e.stopPropagation();
+    return;
+  }
+  if (!shortcutBlocked && game.state === "playing" && !game.paused && (e.key || "").toLowerCase() === "c") {
+    enterCatnipPlacementMode();
+    e.preventDefault();
+    e.stopPropagation();
+    return;
+  }
+  if (!shortcutBlocked && game.state === "playing" && !game.paused && e.code === "Space") {
+    openWindowSill();
     e.preventDefault();
     e.stopPropagation();
     return;

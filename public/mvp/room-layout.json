@@ -941,9 +941,9 @@
       "id": "beanbag",
       "type": "beanbag",
       "pos": {
-        "x": -3.216,
+        "x": -3.213,
         "y": 0,
-        "z": -1.896
+        "z": -1.893
       },
       "visible": true,
       "specialFlags": {},
@@ -1556,9 +1556,9 @@
       "id": "plant1",
       "type": "plant",
       "pos": {
-        "x": -3.28,
+        "x": -3.279,
         "y": 0.055,
-        "z": -0.341
+        "z": -0.342
       },
       "visible": true,
       "specialFlags": {},
@@ -1800,7 +1800,7 @@
     },
     {
       "id": "Sphere2",
-      "name": "beanbag_blocker",
+      "name": "plant_blocker",
       "type": "primitive",
       "shapeKind": "sphere",
       "pos": {
@@ -1823,12 +1823,12 @@
         "jumpIgnoreSurfaceIds": []
       },
       "radius": 0.3,
-      "centerY": 0.45,
+      "centerY": 0.35,
       "surface": null
     },
     {
       "id": "Sphere3",
-      "name": "beanbag_blocker",
+      "name": "lamp_blocker",
       "type": "primitive",
       "shapeKind": "sphere",
       "pos": {
@@ -1851,7 +1851,7 @@
         "jumpIgnoreSurfaceIds": []
       },
       "radius": 0.3,
-      "centerY": 0.45,
+      "centerY": 0.35,
       "surface": null
     }
   ]

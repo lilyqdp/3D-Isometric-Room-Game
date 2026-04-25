@@ -31,6 +31,30 @@
         color: #f5f7fa;
       }
 
+      #startMenu button {
+        min-width: 170px;
+      }
+
+      #playBtn {
+        background: #78d17f;
+        color: #102312;
+      }
+
+      #startModeBtn {
+        background: #8ec7de;
+        color: #0f2430;
+      }
+
+      #rulesMenuBtn {
+        background: #f0d36d;
+        color: #2b2105;
+      }
+
+      #editRoomBtn {
+        background: #c6a4f2;
+        color: #20122f;
+      }
+
       .hidden {
         display: none;
       }
@@ -100,6 +124,7 @@
         margin-top: 8px;
         display: flex;
         gap: 8px;
+        flex-wrap: wrap;
       }
 
       button {
@@ -125,6 +150,13 @@
         color: #2a1a07;
       }
 
+      #rulesHudBtn {
+        width: 32px;
+        padding: 7px 0;
+        background: #d8e2ef;
+        color: #172033;
+      }
+
       #modeBtn {
         background: #8f9cb4;
         color: #101726;
@@ -140,6 +172,115 @@
         font-weight: 800;
         min-height: 18px;
       }
+
+      #pauseBadge {
+        position: fixed;
+        right: 18px;
+        top: 18px;
+        z-index: 9;
+        display: none;
+        padding: 8px 12px;
+        border-radius: 8px;
+        background: rgba(23, 32, 51, 0.86);
+        color: #f5f7fa;
+        font-weight: 800;
+      }
+
+      #rulesDialog {
+        width: min(520px, calc(100vw - 32px));
+        max-height: calc(100vh - 48px);
+        overflow: auto;
+        padding: 20px;
+        border-radius: 10px;
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(240, 246, 252, 0.98));
+        color: #172033;
+        box-shadow: 0 18px 48px rgba(0, 0, 0, 0.34);
+      }
+
+      #rulesDialog h2 {
+        margin: 0 0 10px;
+        color: #102312;
+      }
+
+      #rulesDialog h3 {
+        margin: 16px 0 6px;
+        padding-top: 10px;
+        border-top: 2px solid rgba(23, 32, 51, 0.1);
+        font-size: 15px;
+      }
+
+      #rulesDialog h3:nth-of-type(1) {
+        color: #2f8f47;
+      }
+
+      #rulesDialog h3:nth-of-type(2) {
+        color: #1d6f92;
+      }
+
+      #rulesDialog h3:nth-of-type(3) {
+        color: #8a5a00;
+      }
+
+      #rulesDialog h3:nth-of-type(4) {
+        color: #5d4aa8;
+      }
+
+      #rulesDialog p,
+      #rulesDialog li {
+        font-size: 14px;
+        line-height: 1.45;
+      }
+
+      #rulesDialog ul {
+        margin: 6px 0 0;
+        padding-left: 20px;
+      }
+
+      #rulesDialog li::marker {
+        color: #2f8f47;
+      }
+
+      #rulesCloseBtn {
+        margin-top: 14px;
+        background: #24364f;
+        color: #f5f7fa;
+      }
+
+      #quitConfirmDialog {
+        width: min(420px, calc(100vw - 32px));
+        padding: 20px;
+        border-radius: 10px;
+        background: rgba(245, 247, 250, 0.96);
+        color: #172033;
+        box-shadow: 0 18px 48px rgba(0, 0, 0, 0.34);
+        text-align: center;
+      }
+
+      #quitConfirmDialog h2 {
+        margin: 0 0 8px;
+      }
+
+      #quitConfirmDialog p {
+        margin: 0 0 14px;
+        line-height: 1.4;
+      }
+
+      #quitConfirmButtons {
+        display: flex;
+        justify-content: center;
+        gap: 10px;
+      }
+
+      #quitToMenuBtn {
+        background: #d28888;
+        color: #251010;
+      }
+
+      #quitCancelBtn {
+        background: #8f9cb4;
+        color: #101726;
+      }
     </style>
   </head>
 
@@ -149,8 +290,9 @@
     <div id="startMenu" class="overlay">
       <h1>Cat Cleanup</h1>
       <button id="playBtn" type="button">Play</button>
-      <button id="editRoomBtn" type="button">Room Editor</button>
       <button id="startModeBtn" type="button">Mode: Casual</button>
+      <button id="rulesMenuBtn" type="button">Rules</button>
+      <button id="editRoomBtn" type="button">Room Editor</button>
       <button id="quitBtn" type="button">Quit</button>
     </div>
     
@@ -162,7 +304,63 @@
       <button id="replayBtn" type="button">Replay</button>
     </div>
 
+    <!-- QUIT CONFIRM -->
+
+    <div id="quitConfirmOverlay" class="overlay hidden" role="dialog" aria-modal="true" aria-labelledby="quitConfirmTitle">
+      <div id="quitConfirmDialog">
+        <h2 id="quitConfirmTitle">Quit to main menu?</h2>
+        <p>Your current run will be ended.</p>
+        <div id="quitConfirmButtons">
+          <button id="quitToMenuBtn" type="button">Quit</button>
+          <button id="quitCancelBtn" type="button">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- RULES -->
+
+    <div id="rulesOverlay" class="overlay hidden" role="dialog" aria-modal="true" aria-labelledby="rulesTitle">
+      <div id="rulesDialog">
+        <h2 id="rulesTitle">Rules</h2>
+
+        <h3>Goal</h3>
+        <ul>
+          <li>Clean the room by dragging laundry into the hamper and trash into the trash can.</li>
+          <li>Keep the cat from causing trouble while you sort everything.</li>
+          <li>If the cup falls and breaks, you lose.</li>
+        </ul>
+
+        <h3>Modes</h3>
+        <ul>
+          <li>Casual mode starts with a fixed mess. Sort all items to win.</li>
+          <li>Endless mode keeps spawning new items. Clean as many as you can before the mess meter fills.</li>
+        </ul>
+
+        <h3>Tools</h3>
+        <ul>
+          <li>Catnip sends the cat to a chosen reachable spot and distracts it briefly after it arrives.</li>
+          <li>The window distracts the cat at the window sill and takes priority over catnip.</li>
+          <li>Use these distractions to buy time when the cat is heading toward the cup or blocking cleanup.</li>
+        </ul>
+
+        <h3>Controls</h3>
+        <ul>
+          <li>Drag with the mouse to pan the camera and scroll to zoom.</li>
+          <li>Use W, A, S, and D to move the camera during gameplay.</li>
+          <li>Use the arrow keys to rotate and tilt the camera during gameplay.</li>
+          <li>Press C to start placing catnip.</li>
+          <li>Press Space to open the window.</li>
+          <li>Press P to pause or resume the game.</li>
+          <li>Press Esc to close this panel or quit to the main menu.</li>
+        </ul>
+
+        <button id="rulesCloseBtn" type="button">Close</button>
+      </div>
+    </div>
+
     <!-- HUD -->
+
+    <div id="pauseBadge">Paused</div>
 
     <div id="hud">
       <b class="title">MVP Room Slice</b>
@@ -217,6 +415,7 @@
         <button id="windowBtn" type="button">Open Window</button>
         <button id="restartBtn" type="button">Restart</button>
         <button id="modeBtn" type="button">Switch To Casual</button>
+        <button id="rulesHudBtn" type="button" aria-label="Rules" title="Rules">?</button>
         <button id="debugBtn" type="button">Debug: Off (B)</button>
       </div>
 

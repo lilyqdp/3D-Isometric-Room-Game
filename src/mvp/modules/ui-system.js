@@ -60,7 +60,9 @@ export function createUIRuntime(ctx) {
 
     if (game.state === "lost") {
       endMenuEl.classList.remove("hidden");
-      endTitleEl.textContent = `You Lost - ${game.reason}`;
+      endTitleEl.textContent = game.endlessMode
+        ? `You Lost - ${game.reason} Cleaned: ${game.sorted}`
+        : `You Lost - ${game.reason}`;
       document.getElementById("hud").style.display = "none";
     } else if (game.state === "won") {
       endMenuEl.classList.remove("hidden");
