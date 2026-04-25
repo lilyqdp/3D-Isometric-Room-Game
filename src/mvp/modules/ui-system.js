@@ -18,7 +18,7 @@ export function createUIRuntime(ctx) {
 
   function updateUI() {
     const clockTime = getClockTime();
-    sortedStatEl.textContent = `${game.sorted} / ${game.total}`;
+    sortedStatEl.textContent = game.endlessMode ? String(game.sorted || 0) : `${game.sorted} / ${game.total}`;
     catStateStatEl.textContent = cat.status;
 
     if (cup.broken) cupStatEl.textContent = "Broken";
@@ -47,21 +47,30 @@ export function createUIRuntime(ctx) {
         windowStatEl.textContent = "Disabled";
       } else if (clockTime < (game.windowOpenUntil || 0)) {
         windowStatEl.textContent = `Open (${Math.max(0, Math.ceil(game.windowOpenUntil - clockTime))}s)`;
+      } else if (clockTime < (game.windowCooldownUntil || 0)) {
+        windowStatEl.textContent = `Cooldown (${Math.max(0, Math.ceil(game.windowCooldownUntil - clockTime))}s)`;
       } else {
         windowStatEl.textContent = "Closed";
       }
     }
     if (windowBtnEl) {
       const active = clockTime < (game.windowOpenUntil || 0);
+      const coolingDown = !active && clockTime < (game.windowCooldownUntil || 0);
       const enabled = windowSill?.specialFlags?.windowOpensOnButtonClick !== false;
-      windowBtnEl.textContent = !enabled ? "Window Disabled" : active ? "Window Open" : "Open Window";
-      windowBtnEl.disabled = active || !enabled;
+      windowBtnEl.textContent = !enabled
+        ? "Window Disabled"
+        : active
+          ? "Window Open"
+          : coolingDown
+            ? `Window ${Math.max(0, Math.ceil(game.windowCooldownUntil - clockTime))}s`
+            : "Open Window";
+      windowBtnEl.disabled = active || coolingDown || !enabled;
     }
 
     if (game.state === "lost") {
       endMenuEl.classList.remove("hidden");
       endTitleEl.textContent = game.endlessMode
-        ? `You Lost - ${game.reason} Cleaned: ${game.sorted}`
+        ? `You Lost - ${game.reason} Items sorted: ${game.sorted}`
         : `You Lost - ${game.reason}`;
       document.getElementById("hud").style.display = "none";
     } else if (game.state === "won") {

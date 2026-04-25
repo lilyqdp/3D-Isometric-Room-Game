@@ -39,6 +39,8 @@ const rulesHudBtn = document.getElementById("rulesHudBtn");
 const rulesOverlay = document.getElementById("rulesOverlay");
 const rulesCloseBtn = document.getElementById("rulesCloseBtn");
 const quitConfirmOverlay = document.getElementById("quitConfirmOverlay");
+const quitConfirmTitle = document.getElementById("quitConfirmTitle");
+const quitConfirmMessage = document.getElementById("quitConfirmMessage");
 const quitToMenuBtn = document.getElementById("quitToMenuBtn");
 const quitCancelBtn = document.getElementById("quitCancelBtn");
 const pauseBadge = document.getElementById("pauseBadge");
@@ -49,9 +51,14 @@ const hud = document.getElementById("hud");
 hud.style.display = "none";
 let rulesPausedGame = false;
 let quitConfirmPausedGame = false;
+let confirmAction = "quit";
 
 function setPaused(paused) {
   game.paused = !!paused;
+  if (game.paused) {
+    game.placeCatnipMode = false;
+    pickupsRuntime?.resetInteraction?.();
+  }
   if (pauseBadge) {
     pauseBadge.style.display = game.paused && game.state === "playing" ? "block" : "none";
   }
@@ -90,8 +97,21 @@ function hideRules() {
   rulesPausedGame = false;
 }
 
-function showQuitConfirm() {
+function showRunEndConfirm(action = "quit") {
   if (game.state !== "playing") return;
+  confirmAction = action === "restart" ? "restart" : "quit";
+  if (quitConfirmTitle) {
+    quitConfirmTitle.textContent = confirmAction === "restart" ? "Restart run?" : "Quit to main menu?";
+  }
+  if (quitConfirmMessage) {
+    quitConfirmMessage.textContent =
+      confirmAction === "restart"
+        ? "Your current run will be reset."
+        : "Your current run will be ended.";
+  }
+  if (quitToMenuBtn) {
+    quitToMenuBtn.textContent = confirmAction === "restart" ? "Restart" : "Quit";
+  }
   quitConfirmPausedGame = !game.paused;
   if (quitConfirmPausedGame) setPaused(true);
   quitConfirmOverlay?.classList.remove("hidden");
@@ -103,9 +123,20 @@ function hideQuitConfirm() {
   quitConfirmPausedGame = false;
 }
 
-function quitToMainMenu() {
+function restartRun() {
   quitConfirmOverlay?.classList.add("hidden");
   quitConfirmPausedGame = false;
+  resetGame();
+  game.state = "playing";
+}
+
+function confirmRunEndAction() {
+  quitConfirmOverlay?.classList.add("hidden");
+  quitConfirmPausedGame = false;
+  if (confirmAction === "restart") {
+    restartRun();
+    return;
+  }
   resetGame();
   showStartMenu();
 }
@@ -156,7 +187,7 @@ if (rulesOverlay) {
     if (event.target === rulesOverlay) hideRules();
   });
 }
-if (quitToMenuBtn) quitToMenuBtn.addEventListener("click", () => quitToMainMenu());
+if (quitToMenuBtn) quitToMenuBtn.addEventListener("click", () => confirmRunEndAction());
 if (quitCancelBtn) quitCancelBtn.addEventListener("click", () => hideQuitConfirm());
 if (quitConfirmOverlay) {
   quitConfirmOverlay.addEventListener("click", (event) => {
@@ -174,6 +205,7 @@ const windowStatEl = document.getElementById("windowStat");
 const resultEl = document.getElementById("result");
 const catnipBtn = document.getElementById("catnipBtn");
 const windowBtn = document.getElementById("windowBtn");
+const pauseBtn = document.getElementById("pauseBtn");
 const restartBtn = document.getElementById("restartBtn");
 const modeBtnEl = document.getElementById("modeBtn");
 const debugBtnEl = document.getElementById("debugBtn");
@@ -277,6 +309,7 @@ const game = {
   placeCatnipMode: false,
   invalidCatnipUntil: 0,
   windowOpenUntil: 0,
+  windowCooldownUntil: 0,
 };
 
 const pickups = [];
@@ -452,6 +485,7 @@ const { windowSillRuntime } = buildRoomSceneFromLayout({
 
 function enterCatnipPlacementMode() {
   if (game.state !== "playing") return;
+  if (game.paused) return;
   if (clockTime < (game.windowOpenUntil || 0)) {
     game.placeCatnipMode = false;
     return;
@@ -463,11 +497,15 @@ function enterCatnipPlacementMode() {
 
 function openWindowSill() {
   if (game.state !== "playing") return;
+  if (game.paused) return;
   if (windowSill?.specialFlags?.windowOpensOnButtonClick === false) return;
   if (clockTime < game.windowOpenUntil) return;
+  if (clockTime < (game.windowCooldownUntil || 0)) return;
   game.placeCatnipMode = false;
   catnipRuntime.clearCatnip();
-  game.windowOpenUntil = clockTime + windowSill.openDuration;
+  const openUntil = clockTime + windowSill.openDuration;
+  game.windowOpenUntil = openUntil;
+  game.windowCooldownUntil = openUntil + 10;
 }
 
 catnipBtn.addEventListener("click", () => {
@@ -480,12 +518,9 @@ if (windowBtn) {
 }
 
 restartBtn.addEventListener("click", () => {
-  game.state = "menu";
-  requestAnimationFrame(() => {
-    resetGame();
-    game.state = "playing";
-  });
+  showRunEndConfirm("restart");
 });
+if (pauseBtn) pauseBtn.addEventListener("click", () => togglePaused());
 if (modeBtnEl) {
   modeBtnEl.addEventListener("click", () => {
     game.state = "menu";
@@ -1048,6 +1083,7 @@ function resetGame() {
   game.catnipNoRouteUntil = 0;
   game.invalidCatnipUntil = 0;
   game.windowOpenUntil = 0;
+  game.windowCooldownUntil = 0;
   catnipRuntime.clearCatnip();
   windowSillRuntime.setOpenAmount(0);
 
@@ -1331,6 +1367,10 @@ function onPointerDown(event) {
       phase = "not-playing";
       return;
     }
+    if (game.paused) {
+      phase = "paused";
+      return;
+    }
     setMouseFromEvent(event);
 
     if (event.button === 2 && debugRuntime.isDebugVisible()) {
@@ -1369,10 +1409,15 @@ function onCanvasContextMenu(event) {
 
 function onPointerMove(event) {
   setMouseFromEvent(event);
+  if (game.paused) return;
   pickupsRuntime.onPointerMove(event);
 }
 
 function onPointerUp() {
+  if (game.paused) {
+    pickupsRuntime.resetInteraction();
+    return;
+  }
   pickupsRuntime.onPointerUp();
 }
 
@@ -1496,8 +1541,40 @@ function updateUI() {
     modeBtnEl.textContent = game.endlessMode ? "Switch To Casual" : "Switch To Endless";
     modeBtnEl.style.display = "";
   }
-  if (catnipBtn) catnipBtn.style.display = "";
-  if (windowBtn) windowBtn.style.display = "";
+  if (catnipBtn) {
+    const windowActive = clockTime < (game.windowOpenUntil || 0);
+    const cooldown = Math.max(0, Math.ceil((game.catnipCooldownUntil || 0) - clockTime));
+    catnipBtn.style.display = "";
+    catnipBtn.disabled = game.paused || windowActive || !!game.catnip || cooldown > 0;
+    if (game.paused) catnipBtn.textContent = "Catnip (C)";
+    else if (windowActive) catnipBtn.textContent = "Window Active";
+    else if (game.placeCatnipMode) catnipBtn.textContent = "Placing...";
+    else if (game.catnip) catnipBtn.textContent = "Catnip Placed";
+    else if (cooldown > 0) catnipBtn.textContent = `Catnip ${cooldown}s`;
+    else catnipBtn.textContent = "Catnip (C)";
+    if (windowActive || cooldown > 0) catnipBtn.style.background = "#4f6f55";
+    else if (game.catnip || game.placeCatnipMode) catnipBtn.style.background = "#a8e3ae";
+    else catnipBtn.style.background = "";
+  }
+  if (windowBtn) {
+    const windowActive = clockTime < (game.windowOpenUntil || 0);
+    const windowCooldown = Math.max(0, Math.ceil((game.windowCooldownUntil || 0) - clockTime));
+    const coolingDown = !windowActive && windowCooldown > 0;
+    const windowEnabled = windowSill?.specialFlags?.windowOpensOnButtonClick !== false;
+    windowBtn.style.display = "";
+    windowBtn.disabled = game.paused || windowActive || coolingDown || !windowEnabled;
+    if (!windowEnabled) windowBtn.textContent = "Window Disabled";
+    else if (windowActive) windowBtn.textContent = "Window Open";
+    else if (coolingDown) windowBtn.textContent = `Window ${windowCooldown}s`;
+    else windowBtn.textContent = "Window (Space)";
+    if (windowActive) windowBtn.style.background = "#bdeeff";
+    else if (coolingDown) windowBtn.style.background = "#617386";
+    else windowBtn.style.background = "";
+  }
+  if (pauseBtn) {
+    pauseBtn.textContent = game.paused ? "Resume (P)" : "Pause (P)";
+    pauseBtn.style.display = "";
+  }
   if (messMeterWrapEl) messMeterWrapEl.style.display = "";
   if (restartBtn) restartBtn.textContent = "Restart";
   if (resultEl) resultEl.textContent = "";
@@ -1703,7 +1780,7 @@ window.addEventListener("keydown", (e) => {
   }
   if (rulesOpen || quitConfirmOpen) return;
   if (e.key === "Escape" && game.state === "playing") {
-    showQuitConfirm();
+    showRunEndConfirm("quit");
     e.preventDefault();
     e.stopPropagation();
     return;

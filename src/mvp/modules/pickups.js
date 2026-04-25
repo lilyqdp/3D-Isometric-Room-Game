@@ -1055,6 +1055,12 @@ export function createPickupsRuntime(ctx) {
   }
 
   function resetInteraction() {
+    if (dragState?.pickup) {
+      const pickup = dragState.pickup;
+      setPickupBodyMode(pickup, CANNON.Body.DYNAMIC);
+      pickup.body.wakeUp();
+      startPickupDrop(pickup);
+    }
     dragState = null;
     resetDragHoverState();
     controls.enabled = true;

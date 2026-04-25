@@ -157,9 +157,14 @@
         color: #172033;
       }
 
-      #modeBtn {
+      #pauseBtn {
         background: #8f9cb4;
         color: #101726;
+      }
+
+      #modeBtn {
+        background: #a88ad8;
+        color: #1e1230;
       }
 
       #windowBtn {
@@ -281,6 +286,10 @@
         background: #8f9cb4;
         color: #101726;
       }
+
+      button:disabled {
+        cursor: default;
+      }
     </style>
   </head>
 
@@ -306,10 +315,10 @@
 
     <!-- QUIT CONFIRM -->
 
-    <div id="quitConfirmOverlay" class="overlay hidden" role="dialog" aria-modal="true" aria-labelledby="quitConfirmTitle">
-      <div id="quitConfirmDialog">
-        <h2 id="quitConfirmTitle">Quit to main menu?</h2>
-        <p>Your current run will be ended.</p>
+      <div id="quitConfirmOverlay" class="overlay hidden" role="dialog" aria-modal="true" aria-labelledby="quitConfirmTitle">
+        <div id="quitConfirmDialog">
+          <h2 id="quitConfirmTitle">Quit to main menu?</h2>
+        <p id="quitConfirmMessage">Your current run will be ended.</p>
         <div id="quitConfirmButtons">
           <button id="quitToMenuBtn" type="button">Quit</button>
           <button id="quitCancelBtn" type="button">Cancel</button>
@@ -413,6 +422,7 @@
       <div id="hudButtons">
         <button id="catnipBtn" type="button">Place Catnip</button>
         <button id="windowBtn" type="button">Open Window</button>
+        <button id="pauseBtn" type="button">Pause</button>
         <button id="restartBtn" type="button">Restart</button>
         <button id="modeBtn" type="button">Switch To Casual</button>
         <button id="rulesHudBtn" type="button" aria-label="Rules" title="Rules">?</button>
