@@ -579,6 +579,7 @@ const catnipRuntime = createCatnipRuntime({
   bestDeskJumpAnchor: navRuntime.bestDeskJumpAnchor,
   bestSurfaceJumpAnchor: navRuntime.bestSurfaceJumpAnchor,
   computeSurfaceJumpTargets: navRuntime.computeSurfaceJumpTargets,
+  findSurfacePath: navRuntime.findSurfacePath,
   getSurfaceDefs,
   getSurfaceById,
   getClockTime: () => clockTime,

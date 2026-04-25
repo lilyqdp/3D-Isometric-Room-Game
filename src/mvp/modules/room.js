@@ -23,6 +23,13 @@ function tagRoomObject(node, object) {
   return node;
 }
 
+function tagCatnipIgnoredRoomWall(mesh) {
+  if (!mesh?.userData) mesh.userData = {};
+  mesh.userData.ignoreCatnipPlacement = true;
+  mesh.userData.roomObjectType = mesh.userData.roomObjectType || "roomWall";
+  return mesh;
+}
+
 function getObjectRotation(object) {
   return getObjectRotationRadians(object);
 }
@@ -333,6 +340,7 @@ export function makeRoomCorner(scene, options = {}) {
     if (w <= 0.02 || h <= 0.02) return;
     const piece = new THREE.Mesh(new THREE.BoxGeometry(w, h, wallThickness), wallMat);
     piece.position.set((minX + maxX) * 0.5, (minY + maxY) * 0.5, wallCenterZ);
+    tagCatnipIgnoredRoomWall(piece);
     scene.add(piece);
   };
 
@@ -368,27 +376,33 @@ export function makeRoomCorner(scene, options = {}) {
     const revealT = 0.03;
     const revealLeft = new THREE.Mesh(new THREE.BoxGeometry(revealT, openMaxY - openMinY, wallThickness), revealMat);
     revealLeft.position.set(openMinX + revealT * 0.5, (openMinY + openMaxY) * 0.5, wallCenterZ);
+    tagCatnipIgnoredRoomWall(revealLeft);
     scene.add(revealLeft);
 
     const revealRight = new THREE.Mesh(new THREE.BoxGeometry(revealT, openMaxY - openMinY, wallThickness), revealMat);
     revealRight.position.set(openMaxX - revealT * 0.5, (openMinY + openMaxY) * 0.5, wallCenterZ);
+    tagCatnipIgnoredRoomWall(revealRight);
     scene.add(revealRight);
 
     const revealTop = new THREE.Mesh(new THREE.BoxGeometry(openMaxX - openMinX, revealT, wallThickness), revealMat);
     revealTop.position.set((openMinX + openMaxX) * 0.5, openMaxY - revealT * 0.5, wallCenterZ);
+    tagCatnipIgnoredRoomWall(revealTop);
     scene.add(revealTop);
 
     const revealBottom = new THREE.Mesh(new THREE.BoxGeometry(openMaxX - openMinX, revealT, wallThickness), revealMat);
     revealBottom.position.set((openMinX + openMaxX) * 0.5, openMinY + revealT * 0.5, wallCenterZ);
+    tagCatnipIgnoredRoomWall(revealBottom);
     scene.add(revealBottom);
   } else {
     const backWall = new THREE.Mesh(new THREE.BoxGeometry(wallWidth, wallHeight, wallThickness), wallMat);
     backWall.position.set(wallCenterX, wallCenterY, wallCenterZ);
+    tagCatnipIgnoredRoomWall(backWall);
     scene.add(backWall);
   }
 
   const leftWall = new THREE.Mesh(new THREE.BoxGeometry(0.2, 3.2, floorDepth), wallMat);
   leftWall.position.set(Number.isFinite(Number(bounds?.minX)) ? Number(bounds.minX) : -8, 1.6, floorCenterZ);
+  tagCatnipIgnoredRoomWall(leftWall);
   scene.add(leftWall);
 }
 

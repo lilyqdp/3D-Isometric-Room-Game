@@ -36,8 +36,15 @@ export function buildWeightedJumpGraph(THREE, floorY, surfaceRegistry, jumpLinks
     link.toNodeId = link.anchorNodeId;
     addNode(latchId, new THREE.Vector3(link.jumpFrom.x, floorY, link.jumpFrom.z), link.fromSurfaceId, "latch");
 
+    const fromSurface = surfaceRegistry.byId?.get
+      ? surfaceRegistry.byId.get(link.fromSurfaceId)
+      : surfaceRegistry.surfaces.find((surface) => surface?.id === link.fromSurfaceId);
+    const sourceAnchors =
+      Array.isArray(fromSurface?.anchors) && fromSurface.anchors.length
+        ? fromSurface.anchors
+        : floorAnchors;
     let nearest = [];
-    for (const anchor of floorAnchors) {
+    for (const anchor of sourceAnchors) {
       const d2 = anchor.inner.distanceToSquared(link.jumpFrom);
       nearest.push({ nodeId: anchor.nodeId, d2 });
     }
