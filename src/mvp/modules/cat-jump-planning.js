@@ -239,6 +239,45 @@ export function createCatJumpPlanningRuntime(ctx) {
     );
   }
 
+  function clampPointToJumpSurfaceInner(surface, point, pad = 0) {
+    if (!surface || !point) return point?.clone ? point.clone() : null;
+    const shape = String(surface?.shape || "rect").toLowerCase();
+    const y = Number.isFinite(surface.y) ? surface.y : Number(point.y || 0);
+    const safePad = Math.max(0, Number(pad) || 0);
+    if (shape === "circle") {
+      const cx = Number(surface.centerX ?? surface.cx ?? 0);
+      const cz = Number(surface.centerZ ?? surface.cz ?? 0);
+      const radius = Math.max(0.02, Number(surface.innerRadius ?? surface.radius ?? 0) - safePad);
+      const dx = Number(point.x || 0) - cx;
+      const dz = Number(point.z || 0) - cz;
+      const dist = Math.hypot(dx, dz);
+      if (dist <= radius) return new THREE.Vector3(Number(point.x || 0), y, Number(point.z || 0));
+      if (dist <= 1e-6) return new THREE.Vector3(cx + radius, y, cz);
+      const scale = radius / dist;
+      return new THREE.Vector3(cx + dx * scale, y, cz + dz * scale);
+    }
+    if (shape === "obb") {
+      const centerX = Number(surface.centerX ?? surface.cx ?? 0);
+      const centerZ = Number(surface.centerZ ?? surface.cz ?? 0);
+      const yaw = Number(surface.yaw || 0);
+      const inner = surface.innerRect || { hx: 0, hz: 0 };
+      const local = rotateOffsetXZ(Number(point.x || 0) - centerX, Number(point.z || 0) - centerZ, -yaw);
+      const hx = Math.max(0.02, Number(inner.hx || 0) - safePad);
+      const hz = Math.max(0.02, Number(inner.hz || 0) - safePad);
+      const clampedLocalX = THREE.MathUtils.clamp(local.dx, -hx, hx);
+      const clampedLocalZ = THREE.MathUtils.clamp(local.dz, -hz, hz);
+      const rotated = rotateOffsetXZ(clampedLocalX, clampedLocalZ, yaw);
+      return new THREE.Vector3(centerX + rotated.dx, y, centerZ + rotated.dz);
+    }
+    const inner = surface.inner || surface.outer;
+    if (!inner) return new THREE.Vector3(Number(point.x || 0), y, Number(point.z || 0));
+    return new THREE.Vector3(
+      THREE.MathUtils.clamp(Number(point.x || 0), inner.minX + safePad, inner.maxX - safePad),
+      y,
+      THREE.MathUtils.clamp(Number(point.z || 0), inner.minZ + safePad, inner.maxZ - safePad)
+    );
+  }
+
   function finalizeAnchors(surface, anchors) {
     const inner = surface.inner || surface.outer;
     const cx = ((inner?.minX ?? 0) + (inner?.maxX ?? 0)) * 0.5;
@@ -1463,8 +1502,12 @@ export function createCatJumpPlanningRuntime(ctx) {
       return groundPathCost(from, to, dynamicObstacles, clearance);
     }
     const surfaceObstacles = filterObstaclesForSurfaceTraversal(dynamicObstacles, sourceSurfaceId);
-    const fromOnSurface = new THREE.Vector3(from.x, sourceY, from.z);
-    const toOnSurface = new THREE.Vector3(to.x, sourceY, to.z);
+    const fromOnSurface =
+      clampPointToJumpSurfaceInner(sourceSurface, new THREE.Vector3(from.x, sourceY, from.z), 0.012) ||
+      new THREE.Vector3(from.x, sourceY, from.z);
+    const toOnSurface =
+      clampPointToJumpSurfaceInner(sourceSurface, new THREE.Vector3(to.x, sourceY, to.z), 0.006) ||
+      new THREE.Vector3(to.x, sourceY, to.z);
     if (hasClearTravelLine(fromOnSurface, toOnSurface, surfaceObstacles, clearance, sourceY, "plan", { supportSurfaceId: sourceSurfaceId })) {
       return fromOnSurface.distanceTo(toOnSurface);
     }
@@ -1642,13 +1685,7 @@ export function createCatJumpPlanningRuntime(ctx) {
       jumpTiers.push(sourceDynamicMinJumps, ...rest);
     }
 
-    const strictMinJumpTier =
-      Number.isFinite(sourceDynamicMinJumps) && sourceDynamicMinJumps > 0
-        ? sourceDynamicMinJumps
-        : null;
-
     for (const tier of jumpTiers) {
-      if (strictMinJumpTier != null && tier !== strictMinJumpTier) continue;
       const tierCandidates = candidates.filter((c) => {
         const candidateTier = Number.isFinite(c.totalDynamicJumps) ? c.totalDynamicJumps : c.totalJumps;
         return candidateTier === tier;

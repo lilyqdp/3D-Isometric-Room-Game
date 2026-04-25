@@ -214,15 +214,20 @@ export function updateCatStateMachineRuntime(ctx, dt) {
     if (!windowSill) return false;
     const windowSurfaceId = String(windowSill.id || "windowSill");
     const windowY = Math.max(0.02, Number(windowSill.surfaceY || 0) + 0.02);
-    const trackedSurfaceId = normalizeSurfaceId(getCurrentCatSurfaceId() || getTrackedCatSurfaceId());
-    if (trackedSurfaceId === windowSurfaceId && Math.abs((cat.group.position.y || 0) - windowY) <= 0.16) {
+    const yClose = Math.abs((cat.group.position.y || 0) - windowY) <= 0.16;
+    const windowSurface = getNonFloorSurfaceById(windowSurfaceId);
+    const onWindowSillXZ = windowSurface
+      ? getSurfacePlanarGap(windowSurface, cat.pos.x, cat.pos.z, 0) <= 0.035
+      : true;
+    const trackedSurfaceId = normalizeSurfaceId(getTrackedCatSurfaceId());
+    if (trackedSurfaceId === windowSurfaceId && yClose && onWindowSillXZ) {
       return true;
     }
     const sitPoint = windowSill.sitPoint;
     if (!sitPoint) return false;
     const dx = Number(sitPoint.x || 0) - cat.pos.x;
     const dz = Number(sitPoint.z || 0) - cat.pos.z;
-    return dx * dx + dz * dz <= 0.22 * 0.22 && Math.abs((cat.group.position.y || 0) - windowY) <= 0.16;
+    return dx * dx + dz * dz <= 0.22 * 0.22 && yClose;
   }
 
   function markCatSurfaceId(surfaceId, authority = "state-machine", stickySeconds = 0.9) {
@@ -1798,6 +1803,7 @@ export function updateCatStateMachineRuntime(ctx, dt) {
     if (!intent?.finalPoint) return false;
     const reason = String(opts?.reason || "route-refresh");
     const finalSurfaceId = String(intent.finalSurfaceId || "floor");
+    const sourceSurfaceId = opts?.sourceSurfaceId ? normalizeSurfaceId(opts.sourceSurfaceId) : "";
     const finalPoint = intent.finalPoint.clone ? intent.finalPoint.clone() : new THREE.Vector3(
       Number(intent.finalPoint.x || 0),
       Number(intent.finalPoint.y || 0),
@@ -1810,11 +1816,13 @@ export function updateCatStateMachineRuntime(ctx, dt) {
       targetY: finalPoint.y,
       targetZ: finalPoint.z,
       source: intent.source || "",
+      sourceSurfaceId,
       forceReplan: opts?.forceReplan ? 1 : 0,
     });
     const ok = requestSharedMoveRoute(finalSurfaceId, finalPoint, intent.sitSeconds, {
       source: intent.source,
       forceReplan: !!opts?.forceReplan,
+      ...(sourceSurfaceId ? { sourceSurfaceId } : {}),
     });
     recordRoutePlannerEvent(ok ? "route-refresh-queued" : "route-refresh-failed", {
       reason,
@@ -1823,8 +1831,126 @@ export function updateCatStateMachineRuntime(ctx, dt) {
       targetY: finalPoint.y,
       targetZ: finalPoint.z,
       source: intent.source || "",
+      sourceSurfaceId,
     });
     return ok;
+  }
+
+  function canUseFloorLandingForFinalTarget(landingPoint, finalPoint) {
+    if (!landingPoint || !finalPoint) return false;
+    if (landingPoint.distanceToSquared(finalPoint) <= 0.14 * 0.14) return true;
+    return canReachGroundTargetMemo(
+      new THREE.Vector3(landingPoint.x, 0, landingPoint.z),
+      new THREE.Vector3(finalPoint.x, 0, finalPoint.z),
+      true,
+      NAV_REACHABILITY_OPTIONS,
+      "floor-hop-final"
+    );
+  }
+
+  function queueIntermediateHopTowardFinalSurface({
+    sourceSurfaceId,
+    finalSurfaceId,
+    finalRoutePoint,
+    fromPoint,
+    sourceY,
+    routeSource,
+    sitSeconds,
+    preserveExactTarget,
+    avoidSurfaceIds,
+  }) {
+    if (!sourceSurfaceId || !finalSurfaceId || !finalRoutePoint || !fromPoint) return false;
+    const surfaces =
+      typeof getSurfaceDefs === "function"
+        ? getSurfaceDefs({ includeFloor: false })
+        : [];
+    const candidates = [];
+
+    for (const surface of surfaces) {
+      if (!surface?.id) continue;
+      const nextSurfaceId = normalizeSurfaceId(surface.id);
+      if (!nextSurfaceId || nextSurfaceId === sourceSurfaceId || nextSurfaceId === finalSurfaceId) continue;
+      const remainingPath =
+        typeof findSurfacePath === "function"
+          ? findSurfacePath(finalSurfaceId, nextSurfaceId, avoidSurfaceIds)
+          : null;
+      if (!Array.isArray(remainingPath) || remainingPath.length < 2) continue;
+
+      const desiredNextPoint =
+        makeRoutePointForSurface(nextSurfaceId, finalRoutePoint) ||
+        new THREE.Vector3(
+          (Number(surface.minX) + Number(surface.maxX)) * 0.5,
+          Number.isFinite(surface.y) ? Number(surface.y) : Math.max(0.02, sourceY),
+          (Number(surface.minZ) + Number(surface.maxZ)) * 0.5
+        );
+      const targetCandidates = buildSurfaceTargetCandidates(nextSurfaceId, desiredNextPoint, 0.05);
+      if (!targetCandidates.length) targetCandidates.push(desiredNextPoint.clone());
+
+      for (let candidateIndex = 0; candidateIndex < Math.min(6, targetCandidates.length); candidateIndex += 1) {
+        const candidatePoint = targetCandidates[candidateIndex];
+        const nextHopTarget = new THREE.Vector3(candidatePoint.x, 0, candidatePoint.z);
+        const jumpAnchor =
+          typeof bestSurfaceJumpAnchor === "function"
+            ? bestSurfaceJumpAnchor(nextSurfaceId, fromPoint, nextHopTarget, sourceSurfaceId, avoidSurfaceIds)
+            : null;
+        const jumpTargets =
+          jumpAnchor && typeof computeSurfaceJumpTargets === "function"
+            ? computeSurfaceJumpTargets(nextSurfaceId, jumpAnchor, nextHopTarget, sourceSurfaceId, avoidSurfaceIds)
+            : null;
+        const hopSurfaceId = normalizeSurfaceId(jumpTargets?.surfaceId || nextSurfaceId);
+        if (!jumpTargets?.top || hopSurfaceId !== nextSurfaceId) continue;
+
+        const hopSurface = getNonFloorSurfaceById(hopSurfaceId);
+        const hopY = Number.isFinite(hopSurface?.y)
+          ? hopSurface.y
+          : Math.max(0.02, Number(jumpTargets.top.y || desiredNextPoint.y || sourceY));
+        const hopPoint = new THREE.Vector3(jumpTargets.top.x, hopY, jumpTargets.top.z);
+        candidates.push({
+          surfaceId: hopSurfaceId,
+          point: hopPoint,
+          jumpAnchor,
+          jumpLanding: jumpTargets.top,
+          pathLen: remainingPath.length,
+          candidateIndex,
+          score:
+            remainingPath.length * 4 +
+            hopPoint.distanceTo(finalRoutePoint) * 0.25 +
+            jumpAnchor.distanceTo(fromPoint) * 0.45,
+        });
+      }
+    }
+
+    candidates.sort((a, b) => a.score - b.score);
+    for (const candidate of candidates) {
+      const queued = queuePatrolMoveTarget(
+        {
+          surfaceId: candidate.surfaceId,
+          point: candidate.point,
+          finalSurfaceId,
+          finalPoint: finalRoutePoint.clone(),
+          exactTarget: preserveExactTarget && candidate.surfaceId === finalSurfaceId,
+          jumpAnchor: candidate.jumpAnchor,
+          jumpLanding: candidate.jumpLanding,
+          directJump: sourceSurfaceId !== FLOOR_SURFACE_ID,
+          sourceSurfaceId,
+          source: routeSource,
+        },
+        sitSeconds
+      );
+      if (!queued) continue;
+      recordSurfaceHop(sourceSurfaceId, candidate.surfaceId);
+      recordRoutePlannerEvent("route-plan-queued-intermediate-hop", {
+        sourceSurfaceId,
+        finalSurfaceId: String(finalSurfaceId),
+        hopSurfaceId: candidate.surfaceId,
+        hopX: candidate.point.x,
+        hopZ: candidate.point.z,
+        pathLen: candidate.pathLen,
+      });
+      return true;
+    }
+
+    return false;
   }
 
   function planElevatedHopToFinalTarget(finalSurfaceId, finalPoint, sitSeconds = 0, opts = null) {
@@ -1931,6 +2057,7 @@ export function updateCatStateMachineRuntime(ctx, dt) {
       let hopFloorPoint =
         makeRoutePointForSurface(FLOOR_SURFACE_ID, finalRoutePoint) ||
         new THREE.Vector3(finalRoutePoint.x, 0, finalRoutePoint.z);
+      let hasUsableFloorHopPoint = sourceSurfaceId === FLOOR_SURFACE_ID;
       if (
         sourceSurfaceId !== FLOOR_SURFACE_ID &&
         typeof computeSurfaceJumpDownTargets === "function"
@@ -1948,7 +2075,37 @@ export function updateCatStateMachineRuntime(ctx, dt) {
             null,
             FLOOR_SURFACE_ID
           );
-        if (!jumpDownPlan?.jumpFrom) {
+        if (jumpDownPlan?.jumpFrom) {
+          const plannedFloorPoint =
+            makeRoutePointForSurface(FLOOR_SURFACE_ID, jumpDownPlan.jumpFrom) ||
+            new THREE.Vector3(jumpDownPlan.jumpFrom.x, 0, jumpDownPlan.jumpFrom.z);
+          if (canUseFloorLandingForFinalTarget(plannedFloorPoint, finalRoutePoint)) {
+            hopFloorPoint = plannedFloorPoint;
+            hasUsableFloorHopPoint = true;
+          } else {
+            recordRoutePlannerEvent("route-plan-reject-floor-landing-path", {
+              sourceSurfaceId,
+              finalSurfaceId: String(finalSurfaceId),
+              landingX: plannedFloorPoint.x,
+              landingZ: plannedFloorPoint.z,
+              targetX: finalRoutePoint.x,
+              targetZ: finalRoutePoint.z,
+            });
+          }
+        }
+        if (!hasUsableFloorHopPoint) {
+          const queuedIntermediate = queueIntermediateHopTowardFinalSurface({
+            sourceSurfaceId,
+            finalSurfaceId,
+            finalRoutePoint,
+            fromPoint,
+            sourceY,
+            routeSource,
+            sitSeconds,
+            preserveExactTarget,
+            avoidSurfaceIds,
+          });
+          if (queuedIntermediate) return true;
           recordRoutePlannerEvent("route-plan-fail-no-floor-landing", {
             sourceSurfaceId,
             finalSurfaceId: String(finalSurfaceId),
@@ -1956,15 +2113,12 @@ export function updateCatStateMachineRuntime(ctx, dt) {
           });
           return false;
         }
-        hopFloorPoint =
-          makeRoutePointForSurface(FLOOR_SURFACE_ID, jumpDownPlan.jumpFrom) ||
-          new THREE.Vector3(jumpDownPlan.jumpFrom.x, 0, jumpDownPlan.jumpFrom.z);
       }
       const queued = queuePatrolMoveTarget(
         {
           surfaceId: FLOOR_SURFACE_ID,
-          point: hopFloorPoint.clone(),
-          floorPoint: hopFloorPoint.clone(),
+          point: finalRoutePoint.clone(),
+          floorPoint: finalRoutePoint.clone(),
           finalSurfaceId,
           finalPoint: finalRoutePoint.clone(),
           source: routeSource,
@@ -2407,12 +2561,19 @@ export function updateCatStateMachineRuntime(ctx, dt) {
       const finalReached = hasReachedTrueFinalDestination(route, finalSurfaceId, route.finalTarget, 0.12);
       if (!finalReached) {
         const intent = getRoutePlanningIntent(route);
+        const arrivalId = normalizeSurfaceId(arrivalSurfaceId || route.surfaceId || FLOOR_SURFACE_ID);
+        const continuingFromIntermediateSurface = arrivalId && arrivalId !== finalSurfaceId;
+        if (continuingFromIntermediateSurface) {
+          markCatSurfaceId(arrivalId, "route-intermediate-arrival", 0.8);
+          setAuthoritativeCatSurfaceId(arrivalId, "route-intermediate-arrival", 0.8);
+        }
         if (
           intent && requestFreshRouteFromIntent(intent, {
-            reason: arrivalSurfaceId && normalizeSurfaceId(arrivalSurfaceId) !== finalSurfaceId
+            reason: continuingFromIntermediateSurface
               ? "continue-from-hop-to-final-surface"
               : "continue-to-final-surface",
             forceReplan: true,
+            sourceSurfaceId: continuingFromIntermediateSurface ? arrivalId : "",
           })
         ) {
           cat.status = "Re-routing";

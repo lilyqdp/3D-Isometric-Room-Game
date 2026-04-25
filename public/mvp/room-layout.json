@@ -61,28 +61,28 @@
       "id": "desk",
       "type": "desk",
       "pos": {
-        "x": -0.513,
+        "x": -0.507,
         "y": 0,
-        "z": -4.225
+        "z": -4.222
       },
       "sizeX": 1.95,
       "sizeZ": 1.55,
       "topY": 1.05,
       "rotQuarterTurns": 0,
       "approach": {
-        "x": 1.087,
+        "x": 1.093,
         "y": 0,
-        "z": -3.425
+        "z": -3.422
       },
       "perch": {
-        "x": -0.013,
+        "x": -0.007,
         "y": 0,
-        "z": -3.925
+        "z": -3.922
       },
       "cup": {
-        "x": -1.348,
+        "x": -1.342,
         "y": 0,
-        "z": -3.853
+        "z": -3.85
       },
       "editorLocked": false,
       "tint": "",
@@ -92,7 +92,7 @@
       "surface": {
         "enabled": true,
         "flags": {
-          "randomPatrol": true,
+          "randomPatrol": false,
           "manualPatrol": true,
           "allowCatSpawn": false,
           "allowTrashSpawn": false,
@@ -688,7 +688,7 @@
       "surface": {
         "enabled": true,
         "flags": {
-          "randomPatrol": false,
+          "randomPatrol": true,
           "manualPatrol": true,
           "allowCatSpawn": false,
           "allowTrashSpawn": false,
