@@ -95,7 +95,7 @@ document.body.appendChild(renderer.domElement);
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0xd9dce2);
 
-const camera = new THREE.PerspectiveCamera(44, window.innerWidth / window.innerHeight, 0.01, 100);
+const camera = new THREE.PerspectiveCamera(44, window.innerWidth / window.innerHeight, 0.1, 60);
 camera.position.set(13.5, 11.5, 13.5);
 
 const controls = new OrbitControls(camera, renderer.domElement);
