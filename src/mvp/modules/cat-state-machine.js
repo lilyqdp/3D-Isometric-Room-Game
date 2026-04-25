@@ -4,7 +4,7 @@ import { createCatStateMachineDeskRuntime } from "./cat-state-machine-desk.js";
 import { createCatStateMachineGroundBypassRuntime } from "./cat-state-machine-ground-bypass.js";
 import { createCatStateMachineUtilsRuntime } from "./cat-state-machine-utils.js";
 import { FLOOR_SURFACE_ID, catHasFloorContact, catHasNonFloorSurface, isFloorSurfaceId, isNonFloorSurfaceId, normalizeSurfaceId, setCatSurfaceId, targetSurfaceId } from "./surface-ids.js";
-import { clampPointToSurfaceXZ, getSurfaceArea, getSurfaceCenter, samplePointOnSurfaceXZ } from "./surface-shapes.js";
+import { clampPointToSurfaceXZ, getSurfaceArea, getSurfaceCenter, getSurfacePlanarGap, samplePointOnSurfaceXZ } from "./surface-shapes.js";
 
 export function updateCatStateMachineRuntime(ctx, dt) {
   const {
@@ -58,6 +58,9 @@ export function updateCatStateMachineRuntime(ctx, dt) {
   const GROUND_MOVE_SPEED = 0.95;
   const CATNIP_ABORT_BLOCKED_GRACE = 0.45;
   const CATNIP_CUP_SUPPRESS = 2.4;
+  const CATNIP_ARRIVAL_TIMEOUT = 30;
+  const CATNIP_EAT_DURATION = 4;
+  const CATNIP_COOLDOWN_DURATION = 10;
   const CATNIP_RECOVER_DUR = 1.14;
   const CATNIP_IDLE_BLEND_DUR = 0.2;
   const PATROL_NO_ROUTE_CONFIRM = 2;
@@ -159,6 +162,48 @@ export function updateCatStateMachineRuntime(ctx, dt) {
 
   function catHasTrackedNonFloorSurface() {
     return isNonFloorSurfaceId(getTrackedCatSurfaceId());
+  }
+
+  function getPlanningSourceSurfaceId(finalSurfaceId = null) {
+    const y = Number.isFinite(cat.group?.position?.y) ? cat.group.position.y : 0;
+    const trackedSurfaceId = getTrackedCatSurfaceId();
+    const finalId = normalizeSurfaceId(finalSurfaceId || FLOOR_SURFACE_ID);
+
+    if (windowSill && catIsOnWindowSillNow()) {
+      return normalizeSurfaceId(windowSill.id || "windowSill");
+    }
+
+    if (isNonFloorSurfaceId(trackedSurfaceId)) {
+      const trackedSurface = getNonFloorSurfaceById(trackedSurfaceId);
+      if (trackedSurface) {
+        const gap = getSurfacePlanarGap(trackedSurface, cat.pos.x, cat.pos.z, 0);
+        const dy = Math.abs(Number(trackedSurface.y || 0) - y);
+        if (gap <= 0.22 && dy <= 0.36) return trackedSurfaceId;
+      } else if (y > 0.08) {
+        return trackedSurfaceId;
+      }
+    }
+
+    if (y <= 0.12) return FLOOR_SURFACE_ID;
+
+    const surfaces = typeof getSurfaceDefs === "function" ? getSurfaceDefs({ includeFloor: false }) : [];
+    let best = null;
+    let bestScore = Infinity;
+    for (const surface of surfaces) {
+      if (!surface?.id) continue;
+      const surfaceId = normalizeSurfaceId(surface.id);
+      const gap = getSurfacePlanarGap(surface, cat.pos.x, cat.pos.z, 0);
+      const dy = Math.abs(Number(surface.y || 0) - y);
+      if (gap > 0.18 || dy > 0.34) continue;
+      const finalPenalty = surfaceId === finalId ? 0.08 : 0;
+      const score = gap * 2 + dy + finalPenalty;
+      if (score < bestScore) {
+        bestScore = score;
+        best = surfaceId;
+      }
+    }
+
+    return normalizeSurfaceId(best || trackedSurfaceId || FLOOR_SURFACE_ID);
   }
 
   function catIsOnNonFloorSurfaceNow() {
@@ -840,6 +885,13 @@ export function updateCatStateMachineRuntime(ctx, dt) {
     route.jumpOff.set(cat.pos.x, 0, cat.pos.z);
     route.jumpDown.set(cat.pos.x, 0, cat.pos.z);
     syncRouteHeightsFromPoints(route);
+    if (cat.nav.debugDestination?.set) {
+      cat.nav.debugDestination.set(
+        cat.pos.x,
+        Number.isFinite(cat.group?.position?.y) ? cat.group.position.y : 0,
+        cat.pos.z
+      );
+    }
     clearRouteInvalidation();
     syncLegacyScalarsFromRoute(route);
     return route;
@@ -921,6 +973,29 @@ export function updateCatStateMachineRuntime(ctx, dt) {
   }
 
   function abortCatnipRouteAndResumePatrol() {
+    const activeCatnip = game.catnip;
+    const catnipTimeoutAt = Number.isFinite(activeCatnip?.timeoutAt)
+      ? activeCatnip.timeoutAt
+      : (Number(activeCatnip?.placedAt) || clockTime) + CATNIP_ARRIVAL_TIMEOUT;
+    if (activeCatnip && !Number.isFinite(activeCatnip.eatenAt) && clockTime < catnipTimeoutAt) {
+      clearCatnipApproachLock();
+      game.placeCatnipMode = false;
+      game.catnipNoRouteUntil = clockTime + 2.2;
+      cat.nav.catnipPathCheckAt = clockTime + 0.7;
+      cat.nav.catnipUseExactTarget = false;
+      cat.nav.catnipRecoverUntil = 0;
+      cat.nav.catnipIdleBlendUntil = 0;
+      cat.nav.catnipBlockedSince = 0;
+      cat.nav.jumpDownLandingSurfaceId = null;
+      clearNavRoute("catnip-route-wait-timeout");
+      cat.manualPatrolActive = false;
+      clearCatJumpTargets();
+      clearCatNavPath(true);
+      cat.state = "patrol";
+      cat.phaseT = 0;
+      cat.status = "No route to catnip";
+      return;
+    }
     if (game.catnip?.mesh) scene.remove(game.catnip.mesh);
     game.catnip = null;
     clearCatnipApproachLock();
@@ -940,6 +1015,43 @@ export function updateCatStateMachineRuntime(ctx, dt) {
     cat.phaseT = 0;
     cat.status = "No route to catnip";
     if (!setNextPatrolTarget(true)) enterNoPathSit(0.8);
+  }
+
+  function startCatnipCooldown() {
+    game.catnipCooldownUntil = clockTime + CATNIP_COOLDOWN_DURATION;
+  }
+
+  function isCatInJumpFlow() {
+    return (
+      !!cat.jump ||
+      cat.state === "launchUp" ||
+      cat.state === "forepawHook" ||
+      cat.state === "pullUp" ||
+      cat.state === "jumpSettle" ||
+      cat.state === "jumpDown" ||
+      cat.state === "landStop"
+    );
+  }
+
+  function removeCatnipMarkerOnly(reason = "catnip-clear") {
+    if (game.catnip?.mesh) scene.remove(game.catnip.mesh);
+    game.catnip = null;
+    game.placeCatnipMode = false;
+    game.invalidCatnipUntil = 0;
+    game.catnipNoRouteUntil = 0;
+    clearCatnipApproachLock();
+    cat.nav.catnipPathCheckAt = 0;
+    cat.nav.catnipUseExactTarget = false;
+    cat.nav.catnipBlockedSince = 0;
+    const activeRoute = getActiveNavRoute();
+    if (activeRoute && String(activeRoute.source || "") === "catnip" && !isCatInJumpFlow()) {
+      clearNavRoute(reason);
+      clearCatNavPath(true);
+    }
+    const pendingRoute = cat.nav?.pendingSharedRouteRequest;
+    if (pendingRoute && String(pendingRoute.source || "") === "catnip") {
+      cat.nav.pendingSharedRouteRequest = null;
+    }
   }
 
   function isBlockedNavReason(reason) {
@@ -1108,6 +1220,86 @@ export function updateCatStateMachineRuntime(ctx, dt) {
       return true;
     }
     return false;
+  }
+
+  function requestExitCurrentSurfaceToFloor(sourceSurfaceId = null) {
+    const currentSurfaceId = normalizeSurfaceId(sourceSurfaceId || getCurrentCatSurfaceId());
+    if (currentSurfaceId === FLOOR_SURFACE_ID) return false;
+    const fromTopPoint = new THREE.Vector3(
+      cat.pos.x,
+      Math.max(0.02, Number(cat.group.position.y) || 0.02),
+      cat.pos.z
+    );
+    const jumpDownPlan =
+      typeof computeSurfaceJumpDownTargets === "function"
+        ? computeSurfaceJumpDownTargets(currentSurfaceId, fromTopPoint, null, FLOOR_SURFACE_ID)
+        : null;
+    const floorPoint = jumpDownPlan?.jumpFrom
+      ? makeRoutePointForSurface(FLOOR_SURFACE_ID, jumpDownPlan.jumpFrom)
+      : null;
+    if (!floorPoint) return false;
+    floorPoint.y = 0;
+    return requestSharedMoveRoute(FLOOR_SURFACE_ID, floorPoint, 0, {
+      source: "patrol",
+      forceReplan: true,
+      preserveExactTarget: true,
+    });
+  }
+
+  function setNextPatrolTargetFromSurfaceExit(sourceSurfaceId = null) {
+    const currentSurfaceId = normalizeSurfaceId(sourceSurfaceId || getCurrentCatSurfaceId());
+    if (currentSurfaceId === FLOOR_SURFACE_ID) return setNextPatrolTarget(true);
+    const surfaces =
+      typeof getSurfaceDefs === "function"
+        ? getSurfaceDefs({ includeFloor: true, onlyManualPatrol: true })
+        : [];
+    const candidates = [];
+    for (const surface of surfaces) {
+      if (!surface?.id) continue;
+      const surfaceId = normalizeSurfaceId(surface.id);
+      if (!surfaceId || surfaceId === currentSurfaceId || surfaceId === "windowSill") continue;
+      const surfacePath =
+        typeof findSurfacePath === "function"
+          ? findSurfacePath(surfaceId, currentSurfaceId)
+          : null;
+      if (!Array.isArray(surfacePath) || surfacePath.length < 2) continue;
+      const point = sampleRandomPatrolPointOnSurface(surface, cat.pos);
+      if (!point) continue;
+      const pathLen = surfacePath.length;
+      candidates.push({
+        surfaceId,
+        point,
+        pathLen,
+        score:
+          (pathLen <= 2 ? 0 : 5 + pathLen) +
+          (surfaceId === FLOOR_SURFACE_ID ? 2.5 : 0) +
+          (surfaceId === "desk" ? 0.35 : 0) +
+          Math.random(),
+      });
+    }
+    candidates.sort((a, b) => a.score - b.score);
+    for (const candidate of candidates) {
+      const finalPoint = candidate.surfaceId === FLOOR_SURFACE_ID
+        ? new THREE.Vector3(candidate.point.x, 0, candidate.point.z)
+        : candidate.point.clone();
+      if (!requestSharedMoveRoute(candidate.surfaceId, finalPoint, 0, { source: "patrol", forceReplan: true })) continue;
+      cat.patrolTarget.copy(finalPoint);
+      cat.nav.patrolSurfaceId = candidate.surfaceId;
+      cat.nav.debugDestination.set(
+        finalPoint.x,
+        candidate.surfaceId === FLOOR_SURFACE_ID ? 0 : Number(finalPoint.y || 0.02),
+        finalPoint.z
+      );
+      recordRoutePlannerEvent("window-exit-patrol-target", {
+        fromSurfaceId: currentSurfaceId,
+        surfaceId: candidate.surfaceId,
+        pathLen: candidate.pathLen,
+        targetX: finalPoint.x,
+        targetZ: finalPoint.z,
+      });
+      return true;
+    }
+    return requestExitCurrentSurfaceToFloor(currentSurfaceId) || setNextPatrolTarget(false);
   }
 
   function hasStaleElevatedRouteProgress(route = null, idle = 0.58) {
@@ -1419,6 +1611,8 @@ export function updateCatStateMachineRuntime(ctx, dt) {
     clearGroundBypassMode();
 
     const route = ensureNavRoute();
+    route.segments = [];
+    route.segmentIndex = 0;
     route.active = true;
     route.source = String(target?.source || cat.state || "patrol");
     route.surfaceId = surfaceTargetId;
@@ -1430,7 +1624,7 @@ export function updateCatStateMachineRuntime(ctx, dt) {
     route.directJump = !!target?.directJump;
     route.approachSurfaceId =
       route.directJump && cat.group.position.y > 0.08
-        ? String(getCurrentCatSurfaceId() || target?.sourceSurfaceId || route.surfaceId || "floor")
+        ? String(target?.sourceSurfaceId || getPlanningSourceSurfaceId(route.surfaceId) || route.surfaceId || "floor")
         : (targetsNonFloorSurface ? normalizeSurfaceId(target?.sourceSurfaceId || route.surfaceId) : FLOOR_SURFACE_ID);
     route.sitSeconds = sitSeconds;
     route.recoverAt = 0;
@@ -1636,7 +1830,7 @@ export function updateCatStateMachineRuntime(ctx, dt) {
   function planElevatedHopToFinalTarget(finalSurfaceId, finalPoint, sitSeconds = 0, opts = null) {
     if (!finalSurfaceId || !finalPoint) return false;
     const routeSource = String(opts?.source || cat.state || "patrol");
-    const sourceSurfaceId = getCurrentCatSurfaceId();
+    const sourceSurfaceId = normalizeSurfaceId(opts?.sourceSurfaceId || getPlanningSourceSurfaceId(finalSurfaceId));
     traceFunction(
       "planElevatedHopToFinalTarget",
       `src=${sourceSurfaceId || "na"} dst=${String(finalSurfaceId)} target=${Number(finalPoint.x).toFixed(2)},${Number(finalPoint.z).toFixed(2)}`
@@ -1986,6 +2180,10 @@ export function updateCatStateMachineRuntime(ctx, dt) {
     cat.phaseT = 0;
     cat.stateT = 0;
     cat.status = "Eating catnip";
+    if (game.catnip && !Number.isFinite(game.catnip.eatenAt)) {
+      game.catnip.eatenAt = clockTime;
+      game.catnip.expiresAt = clockTime + CATNIP_EAT_DURATION;
+    }
     cat.nav.arrivalHoldUntil = clockTime + ROUTE_FINISH_SETTLE;
     return true;
   }
@@ -1993,6 +2191,10 @@ export function updateCatStateMachineRuntime(ctx, dt) {
   function resumePatrolAfterCatnip() {
     cat.nav.catnipRecoverUntil = 0;
     cat.nav.catnipIdleBlendUntil = 0;
+    if (isCatInJumpFlow()) {
+      cat.status = cat.status || "Jumping";
+      return;
+    }
     const currentSurfaceId = getCurrentCatSurfaceId();
     const onElevatedNow = currentSurfaceId !== "floor" || cat.group.position.y > 0.08;
     if (onElevatedNow) {
@@ -2529,40 +2731,64 @@ export function updateCatStateMachineRuntime(ctx, dt) {
       }
     }
 
-    if (game.catnip && clockTime >= game.catnip.expiresAt) {
-      const expiredCatnip = game.catnip;
-      scene.remove(expiredCatnip.mesh);
-      game.catnip = null;
-      clearCatnipApproachLock();
+    const catnipEatingExpired =
+      game.catnip && Number.isFinite(game.catnip.expiresAt) && clockTime >= game.catnip.expiresAt;
+    const catnipArrivalTimedOut =
+      game.catnip &&
+      !Number.isFinite(game.catnip.eatenAt) &&
+      clockTime >= (
+        Number.isFinite(game.catnip.timeoutAt)
+          ? game.catnip.timeoutAt
+          : (Number(game.catnip.placedAt) || clockTime) + CATNIP_ARRIVAL_TIMEOUT
+      );
+    if (catnipEatingExpired || catnipArrivalTimedOut) {
+      const preserveCatMotion = isCatInJumpFlow();
+      removeCatnipMarkerOnly(catnipEatingExpired ? "catnip-eaten-expired" : "catnip-timeout");
+      startCatnipCooldown();
       cat.nav.suppressCupUntil = clockTime + CATNIP_CUP_SUPPRESS;
       deferDeskApproachRoll(cat.nav.suppressCupUntil + CAT_BEHAVIOR.initialRollDelay);
-
-      const currentSurfaceId = getCurrentCatSurfaceId();
-      const onElevatedNow = currentSurfaceId !== "floor" || cat.group.position.y > 0.08;
-      if (cat.state === "toCatnip" || cat.state === "distracted") {
-        if (cat.state === "distracted") {
-          clearNavRoute("catnip-expired-recover");
+      if (preserveCatMotion) {
+        cat.nav.catnipRecoverUntil = 0;
+        cat.nav.catnipIdleBlendUntil = 0;
+      } else {
+        const currentSurfaceId = getCurrentCatSurfaceId();
+        const onElevatedNow = currentSurfaceId !== "floor" || cat.group.position.y > 0.08;
+        if (catnipArrivalTimedOut && cat.state !== "distracted") {
+          clearNavRoute("catnip-timeout");
           cat.manualPatrolActive = false;
           clearCatJumpTargets();
-          clearCatNavPath(false);
-          cat.state = "catnipRecover";
-          cat.phaseT = 0;
-          cat.stateT = 0;
-          cat.nav.catnipRecoverUntil = clockTime + getCatnipRecoverDuration();
-          cat.status = "Finishing catnip";
+          clearCatNavPath(true);
+          cat.nav.catnipPathCheckAt = 0;
+          cat.nav.catnipUseExactTarget = false;
+          cat.status = "Catnip faded";
+          resumePatrolAfterCatnip();
           return;
         }
-        if (onElevatedNow) {
-          markCatSurfaceId(
-            getCurrentCatSurfaceId() || cat.nav?.route?.surfaceId || cat.nav?.surfaceState?.lastStableSurfaceId || "desk",
-            "jump-down-plan",
-            0.4
-          );
-        } else {
-          markCatSurfaceId(FLOOR_SURFACE_ID, "catnip-expired-floor", 0.2);
+        if (cat.state === "toCatnip" || cat.state === "distracted") {
+          if (cat.state === "distracted") {
+            clearNavRoute("catnip-expired-recover");
+            cat.manualPatrolActive = false;
+            clearCatJumpTargets();
+            clearCatNavPath(false);
+            cat.state = "catnipRecover";
+            cat.phaseT = 0;
+            cat.stateT = 0;
+            cat.nav.catnipRecoverUntil = clockTime + getCatnipRecoverDuration();
+            cat.status = "Finishing catnip";
+            return;
+          }
+          if (onElevatedNow) {
+            markCatSurfaceId(
+              getCurrentCatSurfaceId() || cat.nav?.route?.surfaceId || cat.nav?.surfaceState?.lastStableSurfaceId || "desk",
+              "jump-down-plan",
+              0.4
+            );
+          } else {
+            markCatSurfaceId(FLOOR_SURFACE_ID, "catnip-expired-floor", 0.2);
+          }
+          resumePatrolAfterCatnip();
+          return;
         }
-        resumePatrolAfterCatnip();
-        return;
       }
     }
     if (!game.catnip) {
@@ -2609,6 +2835,14 @@ export function updateCatStateMachineRuntime(ctx, dt) {
       !!windowSill &&
       windowSill?.specialFlags?.catGoesToSillOnButtonClick !== false &&
       clockTime < (game.windowOpenUntil || 0);
+    if (windowActive && (game.placeCatnipMode || game.catnip)) {
+      removeCatnipMarkerOnly("window-wipe-catnip");
+      if (cat.state === "toCatnip" || cat.state === "distracted" || cat.state === "catnipRecover" || cat.state === "catnipIdleBlend") {
+        cat.state = "patrol";
+        cat.phaseT = 0;
+        cat.stateT = 0;
+      }
+    }
     const canInterruptFloorJumpForWindow =
       windowActive &&
       !!cat.jump &&
@@ -2687,7 +2921,7 @@ export function updateCatStateMachineRuntime(ctx, dt) {
               "jump-down-plan",
               0.4
             );
-            if (!setNextPatrolTarget(true)) {
+            if (!setNextPatrolTargetFromSurfaceExit(currentSurfaceId)) {
               enterNoPathSit(0.7);
               return;
             }

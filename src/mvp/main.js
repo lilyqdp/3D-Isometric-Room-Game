@@ -199,7 +199,7 @@ const game = {
   laundrySpawnBudget: 0,
   trashSpawnBudget: 0,
   pendingLoseAt: null,
-  catnip: null, // {mesh,pos,expiresAt}
+  catnip: null, // {mesh,pos,placedAt,timeoutAt,eatenAt,expiresAt}
   catnipCooldownUntil: 0,
   catnipNoRouteUntil: 0,
   placeCatnipMode: false,
@@ -380,6 +380,11 @@ const { windowSillRuntime } = buildRoomSceneFromLayout({
 
 catnipBtn.addEventListener("click", () => {
   if (game.state !== "playing") return;
+  if (clockTime < (game.windowOpenUntil || 0)) {
+    game.placeCatnipMode = false;
+    return;
+  }
+  if (game.catnip) return;
   if (clockTime < game.catnipCooldownUntil) return;
   game.placeCatnipMode = true;
 });
@@ -389,6 +394,7 @@ if (windowBtn) {
     if (windowSill?.specialFlags?.windowOpensOnButtonClick === false) return;
     if (clockTime < game.windowOpenUntil) return;
     game.placeCatnipMode = false;
+    catnipRuntime.clearCatnip();
     game.windowOpenUntil = clockTime + windowSill.openDuration;
   });
 }
@@ -1589,7 +1595,14 @@ function animate() {
   requestAnimationFrame(animate);
 }
 window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && game.placeCatnipMode) {
+    game.placeCatnipMode = false;
+    game.invalidCatnipUntil = 0;
+    e.preventDefault();
+    e.stopPropagation();
+    return;
+  }
   if (e.key === "m") {
     game.mess += 10;
   }
-});
+}, { capture: true });

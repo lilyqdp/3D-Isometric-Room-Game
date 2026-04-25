@@ -26,9 +26,14 @@ export function createUIRuntime(ctx) {
     else cupStatEl.textContent = "On desk";
 
     if (game.placeCatnipMode) {
-      catnipStatEl.textContent = clockTime < game.invalidCatnipUntil ? "Invalid spot" : "Click floor to place";
+      catnipStatEl.textContent =
+        clockTime < game.invalidCatnipUntil
+          ? "Invalid spot | Press Esc to stop catnip placement"
+          : "Press Esc to stop catnip placement";
     } else if (game.catnip) {
-      catnipStatEl.textContent = `Active (${Math.max(0, Math.ceil(game.catnip.expiresAt - clockTime))}s)`;
+      catnipStatEl.textContent = Number.isFinite(game.catnip.expiresAt)
+        ? `Active (${Math.max(0, Math.ceil(game.catnip.expiresAt - clockTime))}s)`
+        : `Placed (${Math.max(0, Math.ceil((Number(game.catnip.timeoutAt) || game.catnip.placedAt + 30) - clockTime))}s)`;
     } else if (clockTime < (game.catnipNoRouteUntil || 0)) {
       catnipStatEl.textContent = "No route to catnip";
     } else if (clockTime < game.catnipCooldownUntil) {

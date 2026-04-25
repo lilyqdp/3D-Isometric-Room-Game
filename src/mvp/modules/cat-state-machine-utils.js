@@ -78,13 +78,18 @@ export function createCatStateMachineUtilsRuntime(ctx) {
   function getRouteAuthoritativeSurfaceId(y) {
     const route = cat.nav?.route;
     const segment = getActiveRouteSegment();
-    if (!route?.active && !segment) return "";
+    if (!route?.active || !segment) return "";
 
     const candidates = [];
-    if (segment?.supportSurfaceId != null) candidates.push(normalizeSurfaceId(segment.supportSurfaceId));
-    if (route?.surfaceId != null) candidates.push(normalizeSurfaceId(route.surfaceId));
-    if (route?.approachSurfaceId != null) candidates.push(normalizeSurfaceId(route.approachSurfaceId));
-    if (route?.finalSurfaceId != null) candidates.push(normalizeSurfaceId(route.finalSurfaceId));
+    const segmentKind = String(segment.kind || "");
+    if (segment.supportSurfaceId != null) candidates.push(normalizeSurfaceId(segment.supportSurfaceId));
+    if (segmentKind === "walk-surface" && route?.surfaceId != null) {
+      candidates.push(normalizeSurfaceId(route.surfaceId));
+    } else if (segmentKind === "jump-up-approach" && route?.approachSurfaceId != null) {
+      candidates.push(normalizeSurfaceId(route.approachSurfaceId));
+    } else if (segmentKind !== "jump-down-approach" && route?.approachSurfaceId != null) {
+      candidates.push(normalizeSurfaceId(route.approachSurfaceId));
+    }
 
     for (const candidate of candidates) {
       if (!candidate) continue;
@@ -92,7 +97,7 @@ export function createCatStateMachineUtilsRuntime(ctx) {
         return candidate;
       }
     }
-    return candidates.find(Boolean) || "";
+    return "";
   }
 
   function getNonFloorSurfaceById(surfaceId) {

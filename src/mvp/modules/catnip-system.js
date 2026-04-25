@@ -533,9 +533,18 @@ export function createCatnipRuntime(ctx) {
     let result = "noop";
     let placementSurface = "none";
     try {
+      if (clockTime < (game.windowOpenUntil || 0) || cat.nav?.windowHoldActive) {
+        game.placeCatnipMode = false;
+        result = "blocked-window";
+        return;
+      }
       // Block new catnip placement while cat is mid-air / mid-jump.
       if (cat.jump || (!catHasNonFloorSurface(cat) && cat.group.position.y > 0.08)) {
         result = "blocked-midair";
+        return;
+      }
+      if (game.catnip) {
+        result = "already-active";
         return;
       }
       if (clockTime < game.catnipCooldownUntil) {
@@ -567,9 +576,11 @@ export function createCatnipRuntime(ctx) {
         mesh: marker,
         pos: new THREE.Vector3(placement.x, Number.isFinite(placement.surfaceY) ? placement.surfaceY : 0, placement.z),
         surface: placement.surface,
-        expiresAt: clockTime + 7,
+        placedAt: clockTime,
+        timeoutAt: clockTime + 30,
+        expiresAt: null,
+        eatenAt: null,
       };
-      game.catnipCooldownUntil = game.catnip.expiresAt;
       game.placeCatnipMode = false;
       game.invalidCatnipUntil = 0;
       result = "placed";

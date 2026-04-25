@@ -194,6 +194,13 @@ export function createCatSteeringRuntime(ctx) {
     return merged;
   }
 
+  function runtimeOptionsIgnorePathObstacles(runtimeOptions = null) {
+    if (!runtimeOptions || typeof runtimeOptions !== "object") return false;
+    if (runtimeOptions.freePushables) return true;
+    if (String(runtimeOptions.ignorePushableSurfaceId || "")) return true;
+    return Array.isArray(runtimeOptions.ignoreObstacleIds) && runtimeOptions.ignoreObstacleIds.length > 0;
+  }
+
   function activateCurrentSegmentBypass(segmentBlock, queryY = 0, supportSurfaceId = "") {
     const active = getActiveRouteSegmentForBypass();
     if (!active) return false;
@@ -2265,9 +2272,11 @@ export function createCatSteeringRuntime(ctx) {
         !cat.nav?.dynamicBypassActive &&
         (cat.nav?.path?.length || 0) <= 2 &&
         hasRuntimeClearTravelLine(cat.pos, tempTo, groundCollisionObstacles, staticClearance, 0, groundRuntimeOptions);
+      const crowdBypassActive = runtimeOptionsIgnorePathObstacles(groundRuntimeOptions);
       if (
         CAT_NAV.useDetourCrowd &&
         typeof stepDetourCrowdToward === "function" &&
+        !crowdBypassActive &&
         !crowdSoftPressure &&
         !straightFloorRoute
       ) {
@@ -2739,9 +2748,11 @@ export function createCatSteeringRuntime(ctx) {
       const straightSurfaceRoute =
         (cat.nav?.path?.length || 0) <= 2 &&
         hasRuntimeClearTravelLine(cat.pos, tempTo, collisionObstacles, staticClearance, queryY, elevatedMovementRuntimeOptions);
+      const crowdBypassActive = runtimeOptionsIgnorePathObstacles(elevatedMovementRuntimeOptions);
       if (
         CAT_NAV.useDetourCrowd &&
         typeof stepDetourCrowdToward === "function" &&
+        !crowdBypassActive &&
         !crowdSoftPressure &&
         !straightSurfaceRoute
       ) {

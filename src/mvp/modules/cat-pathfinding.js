@@ -47,6 +47,8 @@ export function createCatPathfindingRuntime(ctx) {
     static: null,
     dynamic: null,
     active: null,
+    entries: new Map(),
+    useCounter: 0,
   };
   const crowdState = {
     crowd: null,
@@ -881,6 +883,47 @@ export function createCatPathfindingRuntime(ctx) {
     crowdState.signature = "";
     crowdState.lastTarget.set(NaN, 0, NaN);
     crowdState.lastRequestAt = -1e9;
+  }
+
+  function destroyRecastNavEntry(entry) {
+    if (!entry) return;
+    if (crowdState.entry === entry) destroyCrowdState();
+    try { if (entry.tileCache) entry.tileCache.destroy(); } catch {}
+    try { entry.navQuery?.destroy(); } catch {}
+    try { entry.navMesh?.destroy(); } catch {}
+  }
+
+  function rememberRecastNavEntry(modeKey, signature, entry) {
+    if (!entry) return;
+    const cacheKey = `${modeKey}|${signature}`;
+    entry.cacheKey = cacheKey;
+    entry.cacheMode = modeKey;
+    entry.lastUsed = ++navMeshCache.useCounter;
+    navMeshCache.entries.set(cacheKey, entry);
+    navMeshCache[modeKey] = entry;
+    navMeshCache.active = entry;
+
+    const limit = Math.max(
+      2,
+      Number.isFinite(CAT_NAV.recastEntryCacheLimit) ? CAT_NAV.recastEntryCacheLimit : 8
+    );
+    while (navMeshCache.entries.size > limit) {
+      let evictKey = "";
+      let evictEntry = null;
+      for (const [key, candidate] of navMeshCache.entries) {
+        if (!candidate || candidate === entry || candidate === crowdState.entry) continue;
+        if (!evictEntry || (candidate.lastUsed || 0) < (evictEntry.lastUsed || 0)) {
+          evictKey = key;
+          evictEntry = candidate;
+        }
+      }
+      if (!evictKey || !evictEntry) break;
+      navMeshCache.entries.delete(evictKey);
+      if (navMeshCache.static === evictEntry) navMeshCache.static = null;
+      if (navMeshCache.dynamic === evictEntry) navMeshCache.dynamic = null;
+      if (navMeshCache.active === evictEntry) navMeshCache.active = null;
+      destroyRecastNavEntry(evictEntry);
+    }
   }
 
   function normalizeJumpIgnoreSurfaceIds(value) {
@@ -2210,8 +2253,13 @@ export function createCatPathfindingRuntime(ctx) {
       const modeKey = includePickups ? "dynamic" : "static";
       const sourceObstacles = buildRecastSourceObstacleSet(obstacles);
       const signature = `${getObstacleSignatureCached(sourceObstacles, clearance)}|${getPathOptionsCacheKey(pathOptions)}`;
-      const cached = navMeshCache[modeKey];
+      const cacheKey = `${modeKey}|${signature}`;
+      const cached =
+        navMeshCache.entries.get(cacheKey) ||
+        (navMeshCache[modeKey]?.signature === signature ? navMeshCache[modeKey] : null);
       if (cached && cached.signature === signature) {
+        cached.lastUsed = ++navMeshCache.useCounter;
+        if (!navMeshCache.entries.has(cacheKey)) navMeshCache.entries.set(cacheKey, cached);
         profileMeta.cache = "hit";
         bumpPathProfilerCounter("recastEntryCacheHits");
         const dynamicSpecs = buildTileCacheDynamicSpecs(obstacles, includePickups, clearance);
@@ -2235,6 +2283,7 @@ export function createCatPathfindingRuntime(ctx) {
           cached.debugDirty = false;
         }
         cached.runtimeSignature = `${cached.signature}|dyn:${cached.dynamicSignature || "none"}`;
+        navMeshCache[modeKey] = cached;
         navMeshCache.active = cached;
         profileMeta.ok = true;
         return cached;
@@ -2300,14 +2349,7 @@ export function createCatPathfindingRuntime(ctx) {
         entry.runtimeSignature = `${signature}|dyn:${entry.dynamicSignature}`;
       }
 
-      if (cached) {
-        if (crowdState.entry === cached) destroyCrowdState();
-        if (cached.tileCache) cached.tileCache.destroy();
-        cached.navQuery.destroy();
-        cached.navMesh.destroy();
-      }
-      navMeshCache[modeKey] = entry;
-      navMeshCache.active = entry;
+      rememberRecastNavEntry(modeKey, signature, entry);
       profileMeta.ok = true;
       return entry;
     } catch (error) {
@@ -3751,19 +3793,17 @@ export function createCatPathfindingRuntime(ctx) {
   function invalidateNavCaches() {
     destroyCrowdState();
 
-    if (navMeshCache.static) {
-      try { if (navMeshCache.static.tileCache) navMeshCache.static.tileCache.destroy(); } catch {}
-      try { navMeshCache.static.navQuery?.destroy(); } catch {}
-      try { navMeshCache.static.navMesh?.destroy(); } catch {}
+    const entries = new Set(navMeshCache.entries.values());
+    if (navMeshCache.static) entries.add(navMeshCache.static);
+    if (navMeshCache.dynamic) entries.add(navMeshCache.dynamic);
+    for (const entry of entries) {
+      destroyRecastNavEntry(entry);
     }
-    if (navMeshCache.dynamic && navMeshCache.dynamic !== navMeshCache.static) {
-      try { if (navMeshCache.dynamic.tileCache) navMeshCache.dynamic.tileCache.destroy(); } catch {}
-      try { navMeshCache.dynamic.navQuery?.destroy(); } catch {}
-      try { navMeshCache.dynamic.navMesh?.destroy(); } catch {}
-    }
+    navMeshCache.entries.clear();
     navMeshCache.static = null;
     navMeshCache.dynamic = null;
     navMeshCache.active = null;
+    navMeshCache.useCounter = 0;
 
     obstacleBuildCache.clear();
     triangleNavMeshCache.clear();

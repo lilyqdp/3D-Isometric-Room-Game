@@ -61,26 +61,26 @@
       "id": "desk",
       "type": "desk",
       "pos": {
-        "x": -0.515,
+        "x": -0.513,
         "y": 0,
         "z": -4.225
       },
       "sizeX": 1.95,
       "sizeZ": 1.55,
-      "topY": 0.95,
+      "topY": 1.05,
       "rotQuarterTurns": 0,
       "approach": {
-        "x": 1.085,
+        "x": 1.087,
         "y": 0,
         "z": -3.425
       },
       "perch": {
-        "x": -0.015,
+        "x": -0.013,
         "y": 0,
         "z": -3.925
       },
       "cup": {
-        "x": -1.35,
+        "x": -1.348,
         "y": 0,
         "z": -3.853
       },
@@ -349,7 +349,7 @@
       },
       "width": 0.95,
       "depth": 0.72,
-      "surfaceY": 1.85,
+      "surfaceY": 1.95,
       "thickness": 0.08,
       "rotQuarterTurns": 2,
       "editorLocked": false,
@@ -397,9 +397,9 @@
       "id": "upperPlatform",
       "type": "platform",
       "pos": {
-        "x": -3.419,
+        "x": -3.332,
         "y": 0,
-        "z": -4.55
+        "z": -4.422
       },
       "width": 1.15,
       "depth": 0.9,
@@ -425,11 +425,11 @@
         "supportOffsets": [],
         "blockerOffsets": [],
         "shape": "rect",
-        "width": 1.3,
+        "width": 1.2,
         "depth": 1.1,
         "radius": null,
-        "offsetX": 0.15,
-        "offsetZ": 0.1,
+        "offsetX": 0,
+        "offsetZ": 0,
         "supports": [],
         "blockers": []
       },
@@ -448,11 +448,11 @@
       "id": "windowSill",
       "type": "windowSill",
       "pos": {
-        "x": 2.247,
+        "x": 2.153,
         "y": 0,
-        "z": -4.698
+        "z": -4.588
       },
-      "width": 2.1,
+      "width": 2.2,
       "depth": 0.7,
       "thickness": 0.06,
       "surfaceY": 1.3,
@@ -462,9 +462,9 @@
       "openingCenterY": 2,
       "openDuration": 20,
       "sitPoint": {
-        "x": 2.247,
+        "x": 2.153,
         "y": 0,
-        "z": -4.698
+        "z": -4.588
       },
       "outsideYaw": 3.141592653589793,
       "rotQuarterTurns": 0,
@@ -491,8 +491,8 @@
         "supportOffsets": [],
         "blockerOffsets": [],
         "shape": "rect",
-        "width": null,
-        "depth": null,
+        "width": 1.95,
+        "depth": 0.65,
         "radius": null,
         "offsetX": 0,
         "offsetZ": 0,
@@ -679,9 +679,9 @@
       "id": "bed",
       "type": "bed",
       "pos": {
-        "x": 2.079,
+        "x": 2.239,
         "y": 0,
-        "z": -3.3
+        "z": -2.633
       },
       "visible": true,
       "specialFlags": {},
@@ -771,7 +771,7 @@
       "height": 0.63,
       "surfaceY": 0.63,
       "obstacle": {
-        "enabled": true,
+        "enabled": false,
         "mode": "soft",
         "navPad": 0.02,
         "steerPad": 0.02,
