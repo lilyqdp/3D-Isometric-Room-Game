@@ -50,6 +50,11 @@
         color: #2b2105;
       }
 
+      #optionsMenuBtn {
+        background: #8f9cb4;
+        color: #101726;
+      }
+
       #editRoomBtn {
         background: #c6a4f2;
         color: #20122f;
@@ -77,6 +82,7 @@
 
       #hud b.title {
         display: block;
+        padding-right: 28px;
         margin-bottom: 6px;
         font-size: 14px;
       }
@@ -127,6 +133,11 @@
         flex-wrap: wrap;
       }
 
+      .hudActionWrap {
+        position: relative;
+        display: inline-flex;
+      }
+
       button {
         border: 0;
         border-radius: 8px;
@@ -145,26 +156,54 @@
         color: #251010;
       }
 
-      #debugBtn {
-        background: #f0b861;
-        color: #2a1a07;
+      #rulesHudBtn {
+        position: absolute;
+        top: 8px;
+        right: 8px;
+        min-width: 22px;
+        height: 22px;
+        padding: 0;
+        border-radius: 999px;
+        background: #f5f7fa;
+        color: #172033;
+        font-size: 11px;
+        font-weight: 900;
+        line-height: 22px;
+        text-align: center;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.22);
       }
 
-      #rulesHudBtn {
-        width: 32px;
-        padding: 7px 0;
-        background: #d8e2ef;
+      #menuHudBtn {
+        background: #a88ad8;
+        color: #1e1230;
+      }
+
+      .timerBubble {
+        position: absolute;
+        right: -7px;
+        top: -8px;
+        display: none;
+        min-width: 22px;
+        padding: 2px 5px;
+        border-radius: 999px;
+        background: #f5f7fa;
         color: #172033;
+        font-size: 10px;
+        font-weight: 900;
+        line-height: 1.1;
+        text-align: center;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.28);
+        pointer-events: none;
+      }
+
+      .timerBubble.active {
+        display: block;
       }
 
       #pauseBtn {
-        background: #8f9cb4;
-        color: #101726;
-      }
-
-      #modeBtn {
-        background: #a88ad8;
-        color: #1e1230;
+        background: #d28888;
+        color: #251010;
+        min-width: 92px;
       }
 
       #windowBtn {
@@ -201,6 +240,145 @@
           linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(240, 246, 252, 0.98));
         color: #172033;
         box-shadow: 0 18px 48px rgba(0, 0, 0, 0.34);
+      }
+
+      #optionsDialog {
+        width: min(420px, calc(100vw - 32px));
+        padding: 20px;
+        border-radius: 10px;
+        background: rgba(245, 247, 250, 0.98);
+        color: #172033;
+        box-shadow: 0 18px 48px rgba(0, 0, 0, 0.34);
+      }
+
+      #optionsDialog h2 {
+        margin: 0 0 14px;
+      }
+
+      .optionGroup {
+        display: grid;
+        gap: 8px;
+        margin: 12px 0;
+      }
+
+      .optionLabel {
+        font-size: 13px;
+        font-weight: 800;
+        color: #334155;
+      }
+
+      #debugOptionsToggleBtn {
+        display: none;
+        width: 100%;
+        height: 18px;
+        padding: 0;
+        border-radius: 6px;
+        background: #f0b861;
+        color: #2a1a07;
+        line-height: 18px;
+      }
+
+      #debugOptionsToggleBtn:disabled {
+        opacity: 0.45;
+      }
+
+      #debugHudRow {
+        margin-top: 6px;
+      }
+
+      #debugOptionsPanel {
+        display: none;
+        margin-top: 8px;
+        padding: 8px;
+        border-radius: 8px;
+        background: rgba(23, 32, 51, 0.92);
+        color: #f5f7fa;
+        max-height: min(52vh, 430px);
+        overflow: auto;
+      }
+
+      #debugOptionsPanel.open {
+        display: block;
+      }
+
+      .segmentedControl {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 6px;
+        padding: 4px;
+        border-radius: 8px;
+        background: #d8e2ef;
+      }
+
+      .segmentedControl button {
+        background: transparent;
+        color: #172033;
+      }
+
+      .segmentedControl button.selected {
+        background: #24364f;
+        color: #f5f7fa;
+      }
+
+      #optionsButtons {
+        display: flex;
+        justify-content: flex-end;
+        gap: 10px;
+        margin-top: 16px;
+      }
+
+      #optionsResetBtn {
+        background: #d28888;
+        color: #251010;
+      }
+
+      #optionsCloseBtn {
+        background: #8f9cb4;
+        color: #101726;
+      }
+
+      #gameMenuDialog {
+        width: min(340px, calc(100vw - 32px));
+        padding: 20px;
+        border-radius: 10px;
+        background: rgba(245, 247, 250, 0.98);
+        color: #172033;
+        box-shadow: 0 18px 48px rgba(0, 0, 0, 0.34);
+        text-align: center;
+      }
+
+      #gameMenuDialog h2 {
+        margin: 0 0 14px;
+      }
+
+      #gameMenuButtons {
+        display: grid;
+        gap: 10px;
+      }
+
+      #menuResumeBtn {
+        background: #78d17f;
+        color: #102312;
+      }
+
+      #menuOptionsBtn {
+        background: #8f9cb4;
+        color: #101726;
+      }
+
+      #menuHowToPlayBtn {
+        background: #f0d36d;
+        color: #2b2105;
+      }
+
+      #menuRestartBtn {
+        background: #d28888;
+        color: #251010;
+      }
+
+      #menuMainMenuBtn {
+        background: #a88ad8;
+        color: #1e1230;
       }
 
       #rulesDialog h2 {
@@ -262,6 +440,10 @@
         text-align: center;
       }
 
+      #quitConfirmOverlay {
+        z-index: 40;
+      }
+
       #quitConfirmDialog h2 {
         margin: 0 0 8px;
       }
@@ -278,6 +460,16 @@
       }
 
       #quitToMenuBtn {
+        background: #d28888;
+        color: #251010;
+      }
+
+      #quitToMenuBtn.mainMenuConfirm {
+        background: #a88ad8;
+        color: #1e1230;
+      }
+
+      #quitToMenuBtn.restartConfirm {
         background: #d28888;
         color: #251010;
       }
@@ -301,6 +493,7 @@
       <button id="playBtn" type="button">Play</button>
       <button id="startModeBtn" type="button">Mode: Casual</button>
       <button id="rulesMenuBtn" type="button">Rules</button>
+      <button id="optionsMenuBtn" type="button">Options</button>
       <button id="editRoomBtn" type="button">Room Editor</button>
       <button id="quitBtn" type="button">Quit</button>
     </div>
@@ -322,6 +515,48 @@
         <div id="quitConfirmButtons">
           <button id="quitToMenuBtn" type="button">Quit</button>
           <button id="quitCancelBtn" type="button">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- OPTIONS -->
+
+    <div id="gameMenuOverlay" class="overlay hidden" role="dialog" aria-modal="true" aria-labelledby="gameMenuTitle">
+      <div id="gameMenuDialog">
+        <h2 id="gameMenuTitle">Menu</h2>
+        <div id="gameMenuButtons">
+          <button id="menuResumeBtn" type="button">Resume</button>
+          <button id="menuHowToPlayBtn" type="button">How To Play</button>
+          <button id="menuOptionsBtn" type="button">Options</button>
+          <button id="menuRestartBtn" type="button">Restart</button>
+          <button id="menuMainMenuBtn" type="button">Main Menu</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="optionsOverlay" class="overlay hidden" role="dialog" aria-modal="true" aria-labelledby="optionsTitle">
+      <div id="optionsDialog">
+        <h2 id="optionsTitle">Options</h2>
+
+        <div class="optionGroup">
+          <div class="optionLabel">HUD detail</div>
+          <div class="segmentedControl" role="group" aria-label="HUD detail">
+            <button id="simpleHudBtn" type="button">Simple</button>
+            <button id="advancedHudBtn" type="button">Advanced</button>
+          </div>
+        </div>
+
+        <div class="optionGroup">
+          <div class="optionLabel">Debug mode</div>
+          <div class="segmentedControl" role="group" aria-label="Debug mode">
+            <button id="debugOffOptionBtn" type="button">Off</button>
+            <button id="debugOnOptionBtn" type="button">On</button>
+          </div>
+        </div>
+
+        <div id="optionsButtons">
+          <button id="optionsResetBtn" type="button">Reset Options</button>
+          <button id="optionsCloseBtn" type="button">Close</button>
         </div>
       </div>
     </div>
@@ -372,34 +607,35 @@
     <div id="pauseBadge">Paused</div>
 
     <div id="hud">
-      <b class="title">MVP Room Slice</b>
+      <button id="rulesHudBtn" type="button" aria-label="Rules" title="Rules">?</button>
+      <b class="title">3D Isometric Room Cleaning Beta</b>
 
       <div class="row">
         <span class="label">Items sorted</span>
         <span class="value" id="sortedStat">0 / 0</span>
       </div>
 
-      <div class="row">
+      <div class="row advancedHudRow">
         <span class="label">Cat state</span>
         <span class="value" id="catStateStat">Patrolling</span>
       </div>
 
-      <div class="row">
+      <div class="row advancedHudRow">
         <span class="label">Cup status</span>
         <span class="value" id="cupStat">On desk</span>
       </div>
 
-      <div class="row">
+      <div class="row hidden">
         <span class="label">Catnip</span>
         <span class="value" id="catnipStat">Ready</span>
       </div>
 
-      <div class="row">
+      <div class="row hidden">
         <span class="label">Window</span>
         <span class="value" id="windowStat">Closed</span>
       </div>
 
-      <div class="row">
+      <div class="row advancedHudRow">
         <span class="label">Mode</span>
         <span class="value" id="modeStat">Casual</span>
       </div>
@@ -420,14 +656,23 @@
       <!-- BUTTONS -->
 
       <div id="hudButtons">
-        <button id="catnipBtn" type="button">Place Catnip</button>
-        <button id="windowBtn" type="button">Open Window</button>
+        <span class="hudActionWrap">
+          <button id="catnipBtn" type="button">Place Catnip</button>
+          <span id="catnipTimerBubble" class="timerBubble"></span>
+        </span>
+        <span class="hudActionWrap">
+          <button id="windowBtn" type="button">Open Window</button>
+          <span id="windowTimerBubble" class="timerBubble"></span>
+        </span>
         <button id="pauseBtn" type="button">Pause</button>
-        <button id="restartBtn" type="button">Restart</button>
-        <button id="modeBtn" type="button">Switch To Casual</button>
-        <button id="rulesHudBtn" type="button" aria-label="Rules" title="Rules">?</button>
-        <button id="debugBtn" type="button">Debug: Off (B)</button>
+        <button id="menuHudBtn" type="button">Menu</button>
       </div>
+
+      <div id="debugHudRow">
+        <button id="debugOptionsToggleBtn" type="button" aria-label="Show debug options" aria-expanded="false">v</button>
+      </div>
+
+      <div id="debugOptionsPanel"></div>
 
       <div id="result"></div>
     </div>

@@ -36,6 +36,23 @@ const replayBtn = document.getElementById("replayBtn");
 const startModeBtn = document.getElementById("startModeBtn");
 const rulesMenuBtn = document.getElementById("rulesMenuBtn");
 const rulesHudBtn = document.getElementById("rulesHudBtn");
+const optionsMenuBtn = document.getElementById("optionsMenuBtn");
+const menuHudBtn = document.getElementById("menuHudBtn");
+const gameMenuOverlay = document.getElementById("gameMenuOverlay");
+const menuResumeBtn = document.getElementById("menuResumeBtn");
+const menuHowToPlayBtn = document.getElementById("menuHowToPlayBtn");
+const menuOptionsBtn = document.getElementById("menuOptionsBtn");
+const menuRestartBtn = document.getElementById("menuRestartBtn");
+const menuMainMenuBtn = document.getElementById("menuMainMenuBtn");
+const optionsOverlay = document.getElementById("optionsOverlay");
+const optionsCloseBtn = document.getElementById("optionsCloseBtn");
+const optionsResetBtn = document.getElementById("optionsResetBtn");
+const simpleHudBtn = document.getElementById("simpleHudBtn");
+const advancedHudBtn = document.getElementById("advancedHudBtn");
+const debugOffOptionBtn = document.getElementById("debugOffOptionBtn");
+const debugOnOptionBtn = document.getElementById("debugOnOptionBtn");
+const debugOptionsToggleBtn = document.getElementById("debugOptionsToggleBtn");
+const debugOptionsPanelEl = document.getElementById("debugOptionsPanel");
 const rulesOverlay = document.getElementById("rulesOverlay");
 const rulesCloseBtn = document.getElementById("rulesCloseBtn");
 const quitConfirmOverlay = document.getElementById("quitConfirmOverlay");
@@ -50,8 +67,66 @@ const hud = document.getElementById("hud");
 // Hide HUD until game starts
 hud.style.display = "none";
 let rulesPausedGame = false;
+let menuPausedGame = false;
+let optionsPausedGame = false;
 let quitConfirmPausedGame = false;
 let confirmAction = "quit";
+const OPTIONS_STORAGE_KEY = "catCleanupOptions";
+const DEFAULT_OPTIONS = Object.freeze({
+  hudMode: "simple",
+  debugEnabled: false,
+});
+let playerOptions = loadPlayerOptions();
+let debugRuntime = null;
+
+function loadPlayerOptions() {
+  try {
+    const raw = window.localStorage?.getItem(OPTIONS_STORAGE_KEY);
+    if (!raw) return { ...DEFAULT_OPTIONS };
+    const parsed = JSON.parse(raw);
+    return {
+      ...DEFAULT_OPTIONS,
+      ...(parsed && typeof parsed === "object" ? parsed : {}),
+    };
+  } catch {
+    return { ...DEFAULT_OPTIONS };
+  }
+}
+
+function savePlayerOptions() {
+  try {
+    window.localStorage?.setItem(OPTIONS_STORAGE_KEY, JSON.stringify(playerOptions));
+  } catch {
+    // Options are convenience-only; ignore browsers that block localStorage.
+  }
+}
+
+function setHudMode(mode) {
+  playerOptions.hudMode = mode === "simple" ? "simple" : "advanced";
+  savePlayerOptions();
+  applyPlayerOptions();
+}
+
+function setDebugEnabled(enabled) {
+  playerOptions.debugEnabled = !!enabled;
+  savePlayerOptions();
+  if (playerOptions.debugEnabled) {
+    debugRuntime?.setDebugViewVisible?.(true, clockTime);
+  } else {
+    debugRuntime?.setAdvancedPanelVisible?.(false);
+    debugRuntime?.setDebugViewVisible?.(false, clockTime);
+  }
+  applyPlayerOptions();
+}
+
+function toggleDebugOptionsPanel() {
+  if (!playerOptions.debugEnabled) {
+    setDebugEnabled(true);
+  }
+  const nextOpen = !debugOptionsPanelEl?.classList.contains("open");
+  debugRuntime?.setAdvancedPanelVisible?.(nextOpen);
+  applyPlayerOptions();
+}
 
 function setPaused(paused) {
   game.paused = !!paused;
@@ -70,6 +145,10 @@ function togglePaused() {
 }
 
 function launchGameSession() {
+  gameMenuOverlay?.classList.add("hidden");
+  optionsOverlay?.classList.add("hidden");
+  menuPausedGame = false;
+  optionsPausedGame = false;
   resetGame();
   game.state = "playing";
   startMenu.classList.add("hidden");
@@ -80,6 +159,10 @@ function launchGameSession() {
 function showStartMenu() {
   game.state = "menu";
   setPaused(false);
+  gameMenuOverlay?.classList.add("hidden");
+  optionsOverlay?.classList.add("hidden");
+  menuPausedGame = false;
+  optionsPausedGame = false;
   endMenu.classList.add("hidden");
   startMenu.classList.remove("hidden");
   hud.style.display = "none";
@@ -97,6 +180,36 @@ function hideRules() {
   rulesPausedGame = false;
 }
 
+function isGameMenuOpen() {
+  return !!gameMenuOverlay && !gameMenuOverlay.classList.contains("hidden");
+}
+
+function showGameMenu() {
+  if (game.state !== "playing") return;
+  menuPausedGame = !game.paused;
+  if (menuPausedGame) setPaused(true);
+  gameMenuOverlay?.classList.remove("hidden");
+}
+
+function hideGameMenu(resume = true) {
+  gameMenuOverlay?.classList.add("hidden");
+  if (resume && menuPausedGame) setPaused(false);
+  menuPausedGame = false;
+}
+
+function showOptions() {
+  optionsPausedGame = !isGameMenuOpen() && game.state === "playing" && !game.paused;
+  if (optionsPausedGame) setPaused(true);
+  optionsOverlay?.classList.remove("hidden");
+  applyPlayerOptions();
+}
+
+function hideOptions() {
+  optionsOverlay?.classList.add("hidden");
+  if (optionsPausedGame) setPaused(false);
+  optionsPausedGame = false;
+}
+
 function showRunEndConfirm(action = "quit") {
   if (game.state !== "playing") return;
   confirmAction = action === "restart" ? "restart" : "quit";
@@ -110,7 +223,9 @@ function showRunEndConfirm(action = "quit") {
         : "Your current run will be ended.";
   }
   if (quitToMenuBtn) {
-    quitToMenuBtn.textContent = confirmAction === "restart" ? "Restart" : "Quit";
+    quitToMenuBtn.textContent = confirmAction === "restart" ? "Restart" : "Main Menu";
+    quitToMenuBtn.classList.toggle("restartConfirm", confirmAction === "restart");
+    quitToMenuBtn.classList.toggle("mainMenuConfirm", confirmAction !== "restart");
   }
   quitConfirmPausedGame = !game.paused;
   if (quitConfirmPausedGame) setPaused(true);
@@ -124,14 +239,22 @@ function hideQuitConfirm() {
 }
 
 function restartRun() {
+  gameMenuOverlay?.classList.add("hidden");
+  optionsOverlay?.classList.add("hidden");
   quitConfirmOverlay?.classList.add("hidden");
+  menuPausedGame = false;
+  optionsPausedGame = false;
   quitConfirmPausedGame = false;
   resetGame();
   game.state = "playing";
 }
 
 function confirmRunEndAction() {
+  gameMenuOverlay?.classList.add("hidden");
+  optionsOverlay?.classList.add("hidden");
   quitConfirmOverlay?.classList.add("hidden");
+  menuPausedGame = false;
+  optionsPausedGame = false;
   quitConfirmPausedGame = false;
   if (confirmAction === "restart") {
     restartRun();
@@ -187,6 +310,47 @@ if (rulesOverlay) {
     if (event.target === rulesOverlay) hideRules();
   });
 }
+if (optionsMenuBtn) optionsMenuBtn.addEventListener("click", () => showOptions());
+if (menuHudBtn) menuHudBtn.addEventListener("click", () => showGameMenu());
+if (menuResumeBtn) menuResumeBtn.addEventListener("click", () => hideGameMenu(true));
+if (menuHowToPlayBtn) menuHowToPlayBtn.addEventListener("click", () => showRules());
+if (menuOptionsBtn) menuOptionsBtn.addEventListener("click", () => showOptions());
+if (menuRestartBtn) {
+  menuRestartBtn.addEventListener("click", () => {
+    showRunEndConfirm("restart");
+  });
+}
+if (menuMainMenuBtn) {
+  menuMainMenuBtn.addEventListener("click", () => {
+    showRunEndConfirm("quit");
+  });
+}
+if (gameMenuOverlay) {
+  gameMenuOverlay.addEventListener("click", (event) => {
+    if (event.target === gameMenuOverlay) hideGameMenu(true);
+  });
+}
+if (optionsCloseBtn) optionsCloseBtn.addEventListener("click", () => hideOptions());
+if (optionsOverlay) {
+  optionsOverlay.addEventListener("click", (event) => {
+    if (event.target === optionsOverlay) hideOptions();
+  });
+}
+if (simpleHudBtn) simpleHudBtn.addEventListener("click", () => setHudMode("simple"));
+if (advancedHudBtn) advancedHudBtn.addEventListener("click", () => setHudMode("advanced"));
+if (debugOffOptionBtn) debugOffOptionBtn.addEventListener("click", () => setDebugEnabled(false));
+if (debugOnOptionBtn) debugOnOptionBtn.addEventListener("click", () => setDebugEnabled(true));
+if (debugOptionsToggleBtn) debugOptionsToggleBtn.addEventListener("click", () => toggleDebugOptionsPanel());
+if (optionsResetBtn) {
+  optionsResetBtn.addEventListener("click", () => {
+    playerOptions = { ...DEFAULT_OPTIONS };
+    savePlayerOptions();
+    if (!playerOptions.debugEnabled && debugRuntime?.isDebugVisible?.()) {
+      debugRuntime.setDebugViewVisible?.(false, clockTime);
+    }
+    applyPlayerOptions();
+  });
+}
 if (quitToMenuBtn) quitToMenuBtn.addEventListener("click", () => confirmRunEndAction());
 if (quitCancelBtn) quitCancelBtn.addEventListener("click", () => hideQuitConfirm());
 if (quitConfirmOverlay) {
@@ -205,14 +369,35 @@ const windowStatEl = document.getElementById("windowStat");
 const resultEl = document.getElementById("result");
 const catnipBtn = document.getElementById("catnipBtn");
 const windowBtn = document.getElementById("windowBtn");
+const catnipTimerBubbleEl = document.getElementById("catnipTimerBubble");
+const windowTimerBubbleEl = document.getElementById("windowTimerBubble");
 const pauseBtn = document.getElementById("pauseBtn");
 const restartBtn = document.getElementById("restartBtn");
-const modeBtnEl = document.getElementById("modeBtn");
-const debugBtnEl = document.getElementById("debugBtn");
 const messFillEl = document.getElementById("messFill");
 const messValueEl = document.getElementById("messValue");
 const messMeterWrapEl = document.getElementById("messMeterWrap");
 const modeStatEl = document.getElementById("modeStat");
+const advancedHudRows = Array.from(document.querySelectorAll(".advancedHudRow"));
+
+function applyPlayerOptions() {
+  const simpleHud = playerOptions.hudMode === "simple";
+  const debugEnabled = !!playerOptions.debugEnabled;
+  for (const row of advancedHudRows) {
+    row.style.display = simpleHud ? "none" : "";
+  }
+  simpleHudBtn?.classList.toggle("selected", simpleHud);
+  advancedHudBtn?.classList.toggle("selected", !simpleHud);
+  debugOffOptionBtn?.classList.toggle("selected", !debugEnabled);
+  debugOnOptionBtn?.classList.toggle("selected", debugEnabled);
+  const debugPanelOpen = !!debugRuntime?.isAdvancedPanelVisible?.();
+  if (debugOptionsToggleBtn) debugOptionsToggleBtn.style.display = debugEnabled ? "block" : "none";
+  debugOptionsToggleBtn?.toggleAttribute("disabled", !debugEnabled);
+  debugOptionsToggleBtn?.setAttribute("aria-expanded", debugPanelOpen ? "true" : "false");
+  if (debugOptionsToggleBtn) debugOptionsToggleBtn.textContent = debugPanelOpen ? "^" : "v";
+  debugOptionsPanelEl?.classList.toggle("open", debugEnabled && debugPanelOpen);
+}
+
+applyPlayerOptions();
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setSize(window.innerWidth, window.innerHeight);
@@ -517,24 +702,8 @@ if (windowBtn) {
   });
 }
 
-restartBtn.addEventListener("click", () => {
-  showRunEndConfirm("restart");
-});
+if (restartBtn) restartBtn.addEventListener("click", () => showRunEndConfirm("restart"));
 if (pauseBtn) pauseBtn.addEventListener("click", () => togglePaused());
-if (modeBtnEl) {
-  modeBtnEl.addEventListener("click", () => {
-    game.state = "menu";
-    game.endlessMode = !game.endlessMode;
-    requestAnimationFrame(() => {
-      resetGame();
-      game.state = "playing";
-    });
-  });
-}
-if (debugBtnEl) {
-  debugBtnEl.addEventListener("click", () => toggleDebugView());
-}
-
 renderer.domElement.addEventListener("pointerdown", onPointerDown);
 renderer.domElement.addEventListener("contextmenu", onCanvasContextMenu);
 window.addEventListener("pointermove", onPointerMove);
@@ -596,8 +765,6 @@ const pickupsRuntime = createPickupsRuntime({
   getClockTime: () => clockTime,
   onAllSorted: win,
 });
-
-let debugRuntime = null;
 
 function shouldRecordFunctionTrace() {
   return !!debugRuntime?.shouldRecordFunctionTrace?.();
@@ -720,7 +887,7 @@ debugRuntime = createDebugOverlayRuntime({
   CAT_NAV,
   CAT_COLLISION,
   CUP_COLLISION,
-  debugBtnEl,
+  debugOptionsMountEl: debugOptionsPanelEl,
   buildCatObstacles: navRuntime.buildCatObstacles,
   isCatPointBlocked: navRuntime.isCatPointBlocked,
   getCatPathClearance: navRuntime.getCatPathClearance,
@@ -796,8 +963,11 @@ const debugCameraRuntime = createMainDebugCameraRuntime({
   debugControlsRuntime,
   game,
   getClockTime: () => clockTime,
+  isDebugEnabled: () => !!playerOptions.debugEnabled,
   isKeyboardCameraEnabled: () =>
     (!rulesOverlay || rulesOverlay.classList.contains("hidden")) &&
+    (!gameMenuOverlay || gameMenuOverlay.classList.contains("hidden")) &&
+    (!optionsOverlay || optionsOverlay.classList.contains("hidden")) &&
     (!quitConfirmOverlay || quitConfirmOverlay.classList.contains("hidden")),
 });
 
@@ -839,6 +1009,8 @@ setupPhysicsWorld({
 await navRuntime.initPathfinding();
 resetGame();
 debugRuntime.initDebugView(clockTime);
+if (playerOptions.debugEnabled) debugRuntime.setDebugViewVisible?.(true, clockTime);
+applyPlayerOptions();
 
 const clock = new THREE.Clock();
 animate();
@@ -855,9 +1027,6 @@ function updateDebugView() {
   debugRuntime.updateDebugView(clockTime);
 }
 
-function toggleDebugView() {
-  debugRuntime.toggleDebugView(clockTime);
-}
 function addMess(amount) {
   game.mess = Math.max(0, game.mess + amount);
 }
@@ -1373,7 +1542,7 @@ function onPointerDown(event) {
     }
     setMouseFromEvent(event);
 
-    if (event.button === 2 && debugRuntime.isDebugVisible()) {
+    if (event.button === 2 && playerOptions.debugEnabled && debugRuntime.isDebugVisible()) {
       event.preventDefault();
       debugControlsRuntime.moveCatToDebugClickTarget();
       phase = "debug-click";
@@ -1403,7 +1572,7 @@ function onPointerDown(event) {
 }
 
 function onCanvasContextMenu(event) {
-  if (!debugRuntime.isDebugVisible()) return;
+  if (!playerOptions.debugEnabled || !debugRuntime.isDebugVisible()) return;
   event.preventDefault();
 }
 
@@ -1533,46 +1702,64 @@ function win() {
 
 function updateUI() {
   uiRuntime.updateUI();
+  const setTimerBubble = (el, text) => {
+    if (!el) return;
+    const show = !!text;
+    el.textContent = show ? text : "";
+    el.classList.toggle("active", show);
+  };
   if (modeStatEl) {
     const modeText = game.endlessMode ? "Endless" : "Casual";
     modeStatEl.textContent = game.paused && game.state === "playing" ? `${modeText} (Paused)` : modeText;
   }
-  if (modeBtnEl) {
-    modeBtnEl.textContent = game.endlessMode ? "Switch To Casual" : "Switch To Endless";
-    modeBtnEl.style.display = "";
-  }
   if (catnipBtn) {
     const windowActive = clockTime < (game.windowOpenUntil || 0);
     const cooldown = Math.max(0, Math.ceil((game.catnipCooldownUntil || 0) - clockTime));
+    const catnipPlacedRemaining = game.catnip
+      ? Math.max(
+          0,
+          Math.ceil(
+            Number.isFinite(game.catnip.expiresAt)
+              ? game.catnip.expiresAt - clockTime
+              : (Number(game.catnip.timeoutAt) || game.catnip.placedAt + 30) - clockTime
+          )
+        )
+      : 0;
     catnipBtn.style.display = "";
     catnipBtn.disabled = game.paused || windowActive || !!game.catnip || cooldown > 0;
     if (game.paused) catnipBtn.textContent = "Catnip (C)";
     else if (windowActive) catnipBtn.textContent = "Window Active";
     else if (game.placeCatnipMode) catnipBtn.textContent = "Placing...";
-    else if (game.catnip) catnipBtn.textContent = "Catnip Placed";
-    else if (cooldown > 0) catnipBtn.textContent = `Catnip ${cooldown}s`;
+    else if (game.catnip) catnipBtn.textContent = Number.isFinite(game.catnip.expiresAt) ? "Catnip Active" : "Catnip Placed";
+    else if (clockTime < (game.catnipNoRouteUntil || 0)) catnipBtn.textContent = "No Route";
+    else if (cooldown > 0) catnipBtn.textContent = "Catnip";
     else catnipBtn.textContent = "Catnip (C)";
     if (windowActive || cooldown > 0) catnipBtn.style.background = "#4f6f55";
     else if (game.catnip || game.placeCatnipMode) catnipBtn.style.background = "#a8e3ae";
     else catnipBtn.style.background = "";
+    setTimerBubble(catnipTimerBubbleEl, game.catnip ? `${catnipPlacedRemaining}s` : cooldown > 0 ? `${cooldown}s` : "");
   }
   if (windowBtn) {
     const windowActive = clockTime < (game.windowOpenUntil || 0);
     const windowCooldown = Math.max(0, Math.ceil((game.windowCooldownUntil || 0) - clockTime));
     const coolingDown = !windowActive && windowCooldown > 0;
     const windowEnabled = windowSill?.specialFlags?.windowOpensOnButtonClick !== false;
+    const windowActiveRemaining = Math.max(0, Math.ceil((game.windowOpenUntil || 0) - clockTime));
     windowBtn.style.display = "";
     windowBtn.disabled = game.paused || windowActive || coolingDown || !windowEnabled;
     if (!windowEnabled) windowBtn.textContent = "Window Disabled";
     else if (windowActive) windowBtn.textContent = "Window Open";
-    else if (coolingDown) windowBtn.textContent = `Window ${windowCooldown}s`;
+    else if (coolingDown) windowBtn.textContent = "Window";
     else windowBtn.textContent = "Window (Space)";
     if (windowActive) windowBtn.style.background = "#bdeeff";
     else if (coolingDown) windowBtn.style.background = "#617386";
     else windowBtn.style.background = "";
+    setTimerBubble(windowTimerBubbleEl, windowActive ? `${windowActiveRemaining}s` : coolingDown ? `${windowCooldown}s` : "");
   }
   if (pauseBtn) {
     pauseBtn.textContent = game.paused ? "Resume (P)" : "Pause (P)";
+    pauseBtn.style.background = game.paused ? "#78d17f" : "";
+    pauseBtn.style.color = game.paused ? "#102312" : "";
     pauseBtn.style.display = "";
   }
   if (messMeterWrapEl) messMeterWrapEl.style.display = "";
@@ -1765,9 +1952,23 @@ window.addEventListener("keydown", (e) => {
   const tagName = typeof target?.tagName === "string" ? target.tagName.toLowerCase() : "";
   const shortcutBlocked = tagName === "input" || tagName === "textarea" || tagName === "select" || target?.isContentEditable;
   const rulesOpen = !!rulesOverlay && !rulesOverlay.classList.contains("hidden");
+  const menuOpen = isGameMenuOpen();
+  const optionsOpen = !!optionsOverlay && !optionsOverlay.classList.contains("hidden");
   const quitConfirmOpen = !!quitConfirmOverlay && !quitConfirmOverlay.classList.contains("hidden");
   if (e.key === "Escape" && rulesOpen) {
     hideRules();
+    e.preventDefault();
+    e.stopPropagation();
+    return;
+  }
+  if (e.key === "Escape" && optionsOpen) {
+    hideOptions();
+    e.preventDefault();
+    e.stopPropagation();
+    return;
+  }
+  if (e.key === "Escape" && menuOpen) {
+    hideGameMenu(true);
     e.preventDefault();
     e.stopPropagation();
     return;
@@ -1778,9 +1979,15 @@ window.addEventListener("keydown", (e) => {
     e.stopPropagation();
     return;
   }
-  if (rulesOpen || quitConfirmOpen) return;
+  if (rulesOpen || menuOpen || optionsOpen || quitConfirmOpen) return;
+  if (!shortcutBlocked && game.state === "playing" && (e.key || "").toLowerCase() === "b") {
+    setDebugEnabled(!playerOptions.debugEnabled);
+    e.preventDefault();
+    e.stopPropagation();
+    return;
+  }
   if (e.key === "Escape" && game.state === "playing") {
-    showRunEndConfirm("quit");
+    showGameMenu();
     e.preventDefault();
     e.stopPropagation();
     return;

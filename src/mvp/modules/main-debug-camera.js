@@ -7,6 +7,7 @@ export function createMainDebugCameraRuntime(ctx) {
     debugControlsRuntime,
     game,
     getClockTime,
+    isDebugEnabled = () => true,
     isKeyboardCameraEnabled = () => true,
   } = ctx;
 
@@ -56,7 +57,6 @@ export function createMainDebugCameraRuntime(ctx) {
   }
 
   function onKeyDown(event) {
-    debugRuntime.onKeyDown(event, getClockTime());
     const code = event.code || "";
     if (
       !event.repeat &&
@@ -68,6 +68,7 @@ export function createMainDebugCameraRuntime(ctx) {
     }
     if (event.repeat) return;
     if (game.state !== "playing") return;
+    if (!isDebugEnabled()) return;
     if (!debugRuntime.isDebugVisible()) return;
     if ((event.key || "").toLowerCase() !== "t") return;
     event.preventDefault();

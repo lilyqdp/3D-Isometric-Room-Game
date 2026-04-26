@@ -28,6 +28,7 @@ export function createDebugOverlayRuntime(ctx) {
     CAT_COLLISION,
     CUP_COLLISION,
     debugBtnEl,
+    debugOptionsMountEl,
     getTimeScale,
     setTimeScale,
   } = ctx;
@@ -536,9 +537,9 @@ export function createDebugOverlayRuntime(ctx) {
   }
 
   function initTimeScaleControl() {
-    if (!debugBtnEl || debugTimeScaleWrap) return;
-    const buttonsRow = debugBtnEl.parentElement;
-    if (!buttonsRow || !buttonsRow.parentElement) return;
+    if (debugTimeScaleWrap) return;
+    const buttonsRow = debugOptionsMountEl || debugBtnEl?.parentElement;
+    if (!buttonsRow) return;
 
     debugTimeScaleWrap = document.createElement("div");
     debugTimeScaleWrap.style.display = "none";
@@ -571,7 +572,8 @@ export function createDebugOverlayRuntime(ctx) {
     });
 
     debugTimeScaleWrap.append(label, debugTimeScaleInput, debugTimeScaleValue);
-    buttonsRow.insertAdjacentElement("afterend", debugTimeScaleWrap);
+    if (debugOptionsMountEl) buttonsRow.appendChild(debugTimeScaleWrap);
+    else buttonsRow.insertAdjacentElement("afterend", debugTimeScaleWrap);
     syncTimeScaleControlsFromState();
   }
 
@@ -628,9 +630,9 @@ export function createDebugOverlayRuntime(ctx) {
   }
 
   function initAdvancedControl() {
-    if (!debugBtnEl || debugAdvancedWrap) return;
-    const buttonsRow = debugBtnEl.parentElement;
-    if (!buttonsRow || !buttonsRow.parentElement) return;
+    if (debugAdvancedWrap) return;
+    const buttonsRow = debugOptionsMountEl || debugBtnEl?.parentElement;
+    if (!buttonsRow) return;
 
     debugAdvancedWrap = document.createElement("div");
     debugAdvancedWrap.style.display = "none";
@@ -687,8 +689,11 @@ export function createDebugOverlayRuntime(ctx) {
       debugAdvancedWrap.appendChild(row);
     }
 
-    const insertAfter = debugTimeScaleWrap || buttonsRow;
-    insertAfter.insertAdjacentElement("afterend", debugAdvancedWrap);
+    if (debugOptionsMountEl) buttonsRow.appendChild(debugAdvancedWrap);
+    else {
+      const insertAfter = debugTimeScaleWrap || buttonsRow;
+      insertAfter.insertAdjacentElement("afterend", debugAdvancedWrap);
+    }
 
     debugTelemetryWrap = document.createElement("div");
     debugTelemetryWrap.style.display = "none";
@@ -743,7 +748,8 @@ export function createDebugOverlayRuntime(ctx) {
       debugPathProfilerSection
     );
 
-    debugAdvancedWrap.insertAdjacentElement("afterend", debugTelemetryWrap);
+    if (debugOptionsMountEl) buttonsRow.appendChild(debugTelemetryWrap);
+    else debugAdvancedWrap.insertAdjacentElement("afterend", debugTelemetryWrap);
     syncAdvancedControlsFromState();
     setAdvancedControlVisible();
   }
@@ -3109,6 +3115,15 @@ export function createDebugOverlayRuntime(ctx) {
     setDebugViewVisible(!debugView.visible, clockTime);
   }
 
+  function setAdvancedPanelVisible(visible) {
+    debugView.advancedPanelVisible = !!visible;
+    setAdvancedControlVisible();
+  }
+
+  function isAdvancedPanelVisible() {
+    return !!debugView.advancedPanelVisible;
+  }
+
   function onKeyDown(event, clockTime) {
     if (event.repeat) return;
     const key = (event.key || "").toLowerCase();
@@ -3148,7 +3163,10 @@ export function createDebugOverlayRuntime(ctx) {
     root: debugView.root,
     initDebugView,
     updateDebugView,
+    setDebugViewVisible,
     toggleDebugView,
+    setAdvancedPanelVisible,
+    isAdvancedPanelVisible,
     onKeyDown,
     isDebugVisible,
     shouldRecordFunctionTrace,
