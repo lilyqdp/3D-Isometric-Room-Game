@@ -94,13 +94,17 @@ export function createMainDebugCameraRuntime(ctx) {
     const pitchStep = DEBUG_CAMERA.rotateSpeed * dt;
 
     debugCameraForward.subVectors(controls.target, camera.position);
-    debugCameraForward.y = 0;
     if (debugCameraForward.lengthSq() < 1e-6) {
       debugCameraForward.set(0, 0, -1);
     } else {
       debugCameraForward.normalize();
     }
-    debugCameraRight.crossVectors(debugCameraForward, WORLD_UP).normalize();
+    debugCameraRight.crossVectors(debugCameraForward, WORLD_UP);
+    if (debugCameraRight.lengthSq() < 1e-6) {
+      debugCameraRight.set(1, 0, 0);
+    } else {
+      debugCameraRight.normalize();
+    }
 
     debugCameraMove.set(0, 0, 0);
     if (debugCameraInput.KeyW) debugCameraMove.add(debugCameraForward);
@@ -116,7 +120,7 @@ export function createMainDebugCameraRuntime(ctx) {
     const yawDir = (debugCameraInput.ArrowLeft ? 1 : 0) - (debugCameraInput.ArrowRight ? 1 : 0);
     const pitchDir = (debugCameraInput.ArrowUp ? 1 : 0) - (debugCameraInput.ArrowDown ? 1 : 0);
     if (yawDir !== 0 || pitchDir !== 0) {
-      debugCameraOffset.subVectors(camera.position, controls.target);
+      debugCameraOffset.subVectors(controls.target, camera.position);
       if (debugCameraOffset.lengthSq() < 1e-6) return;
       debugCameraSpherical.setFromVector3(debugCameraOffset);
       debugCameraSpherical.theta += yawDir * yawStep;
@@ -127,7 +131,7 @@ export function createMainDebugCameraRuntime(ctx) {
         DEBUG_CAMERA.maxPitch
       );
       debugCameraOffset.setFromSpherical(debugCameraSpherical);
-      camera.position.copy(controls.target).add(debugCameraOffset);
+      controls.target.copy(camera.position).add(debugCameraOffset);
     }
   }
 

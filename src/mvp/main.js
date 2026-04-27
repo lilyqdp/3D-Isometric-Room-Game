@@ -489,7 +489,6 @@ async function loadGameRoomLayout() {
 
 const roomLayout = await loadGameRoomLayout();
 const ROOM = roomLayout.roomBounds;
-const TARGET_BOUNDS = roomLayout.targetBounds;
 const {
   floor,
   desk,
@@ -1952,12 +1951,6 @@ function animate() {
   let stageStartAt = performance.now();
   debugCameraRuntime.updateDebugCameraControls(frameDt);
   perfSample.debugCameraMs += performance.now() - stageStartAt;
-
-  if (!debugRuntime.isDebugVisible()) {
-    controls.target.x = THREE.MathUtils.clamp(controls.target.x, TARGET_BOUNDS.minX, TARGET_BOUNDS.maxX);
-    controls.target.z = THREE.MathUtils.clamp(controls.target.z, TARGET_BOUNDS.minZ, TARGET_BOUNDS.maxZ);
-    controls.target.y = THREE.MathUtils.clamp(controls.target.y, TARGET_BOUNDS.minY, TARGET_BOUNDS.maxY);
-  }
 
   stageStartAt = performance.now();
   updateDebugView();
