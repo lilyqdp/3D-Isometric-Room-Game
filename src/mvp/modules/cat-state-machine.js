@@ -3858,13 +3858,14 @@ export function updateCatStateMachineRuntime(ctx, dt) {
       const baseLandDuration = Math.max(0.22, Number.isFinite(cat.landStopDuration) ? cat.landStopDuration : 0.22);
       let requiredLandDuration = baseLandDuration;
       let clipFinished = false;
-      const landClipAction = cat.stateClipActions?.landStop?.action;
+      const landStopClipKey = cat.landStopClipKey === "landStopUp" ? "landStopUp" : "landStop";
+      const landClipAction = cat.stateClipActions?.[landStopClipKey]?.action;
       const landClip = landClipAction?.getClip?.();
       const rawClipDuration = landClip?.duration;
       if (Number.isFinite(rawClipDuration) && rawClipDuration > 1e-5) {
-        const overrideSpeed = cat.clipSpecialSpeedOverrides?.landStop;
-        const defaultSpeed = Number.isFinite(cat.stateClipActions?.landStop?.speed)
-          ? cat.stateClipActions.landStop.speed
+        const overrideSpeed = cat.clipSpecialSpeedOverrides?.[landStopClipKey];
+        const defaultSpeed = Number.isFinite(cat.stateClipActions?.[landStopClipKey]?.speed)
+          ? cat.stateClipActions[landStopClipKey].speed
           : 1;
         const clipSpeed = Math.max(0.05, Number.isFinite(overrideSpeed) ? overrideSpeed : defaultSpeed);
         const safeClipEndTime = Math.max(0, rawClipDuration - Math.min(1 / 20, rawClipDuration * 0.12));
@@ -3884,6 +3885,7 @@ export function updateCatStateMachineRuntime(ctx, dt) {
         cat.landStopNextState = "patrol";
         cat.landStopDuration = 0.22;
         cat.landStopClipSpeed = NaN;
+        cat.landStopClipKey = "landStop";
       }
       return;
     }

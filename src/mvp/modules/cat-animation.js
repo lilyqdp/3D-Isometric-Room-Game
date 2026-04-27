@@ -195,20 +195,20 @@ function animateCatPose(dt, moving) {
         const launchDelay = Number(cat.jump.launchDelay || 0);
         const launchDelayT = Number(cat.jump.launchDelayT || 0);
         if (prepDur > 1e-5 && prepT < prepDur - 1e-5) return "jumpDownPrepare";
-        if (launchDelay > 1e-5 && launchDelayT < launchDelay - 1e-5) return "jumpDownPrepare";
+        if (launchDelay > 1e-5 && launchDelayT < launchDelay - 1e-5) return "jumpDownLaunch";
         return "jumpDown";
       };
 
       cat.clipSpecialSpeedOverrides = null;
       if (cat.state === "landStop" && Number.isFinite(cat.landStopClipSpeed)) {
-        cat.clipSpecialSpeedOverrides = { landStop: cat.landStopClipSpeed };
+        const landStopClipKey = cat.landStopClipKey === "landStopUp" ? "landStopUp" : "landStop";
+        cat.clipSpecialSpeedOverrides = { [landStopClipKey]: cat.landStopClipSpeed };
       }
       if (cat.jump) {
         const speedOverrides = {};
         const prepDur = Math.max(0, Number(cat.jump.preDur || 0));
         const airDur = Math.max(1e-5, Number(cat.jump.dur || 0));
         const launchDelay = Math.max(0, Number(cat.jump.launchDelay || 0));
-        const clipMotionDur = Math.max(1e-5, airDur + launchDelay);
         const isDownJumpClip = cat.jump.toY <= cat.jump.fromY + 0.03;
         if (isDownJumpClip) {
           const prepActive = prepDur > 1e-5 && Number(cat.jump.preT || 0) < prepDur - 1e-5;
@@ -217,17 +217,19 @@ function animateCatPose(dt, moving) {
             launchDelay > 1e-5 &&
             Number(cat.jump.launchDelayT || 0) < launchDelay - 1e-5;
           const prepAction = cat.stateClipActions?.jumpDownPrepare?.action;
+          const launchAction = cat.stateClipActions?.jumpDownLaunch?.action;
           const downAction = cat.stateClipActions?.jumpDown?.action;
           const prepClipDur = prepAction?.getClip?.()?.duration;
+          const launchClipDur = launchAction?.getClip?.()?.duration;
           const downClipDur = downAction?.getClip?.()?.duration;
           if (Number.isFinite(prepClipDur) && prepClipDur > 1e-5 && prepDur > 1e-5) {
             speedOverrides.jumpDownPrepare = THREE.MathUtils.clamp(prepClipDur / prepDur, 0.2, 2.5);
           }
-          if (launchHoldActive) {
-            speedOverrides.jumpDownPrepare = 0;
+          if (launchHoldActive && Number.isFinite(launchClipDur) && launchClipDur > 1e-5 && launchDelay > 1e-5) {
+            speedOverrides.jumpDownLaunch = THREE.MathUtils.clamp(launchClipDur / launchDelay, 0.2, 4.5);
           }
           if (Number.isFinite(downClipDur) && downClipDur > 1e-5 && airDur > 1e-5) {
-            speedOverrides.jumpDown = THREE.MathUtils.clamp(downClipDur / clipMotionDur, 0.2, 2.5);
+            speedOverrides.jumpDown = THREE.MathUtils.clamp(downClipDur / airDur, 0.2, 2.5);
           }
         } else {
           const takeoffLead = Math.min(UP_JUMP_TAKEOFF_LEAD, launchDelay);
@@ -261,7 +263,7 @@ function animateCatPose(dt, moving) {
       else if (cat.state === "distracted") clipSpecialState = "eat";
       else if (cat.state === "catnipRecover") clipSpecialState = "eatRecover";
       else if (cat.state === "jumpDown" && cat.jump) clipSpecialState = pickJumpDownClipState();
-      else if (cat.state === "landStop") clipSpecialState = "landStop";
+      else if (cat.state === "landStop") clipSpecialState = cat.landStopClipKey === "landStopUp" ? "landStopUp" : "landStop";
       else if (cat.state === "jumpSettle") clipSpecialState = "jumpSettle";
       else if (isPrepareJump || isLaunchUp || isForepawHook || isPullUp) clipSpecialState = pickJumpUpClipState();
       else if (cat.jump) {

@@ -177,6 +177,7 @@ export function createCatJumpRuntime(ctx) {
       launchDelay = THREE.MathUtils.clamp(0.16 + horizontalDist * 0.05, 0.16, 0.28);
       cat.landStopDuration = scaledLandDur;
       cat.landStopClipSpeed = NaN;
+      cat.landStopClipKey = "landStop";
       if (cat.clipSpecialAction) {
         cat.clipSpecialAction.stop();
         cat.clipSpecialAction = null;
@@ -198,6 +199,7 @@ export function createCatJumpRuntime(ctx) {
         const upVerticalDist = Math.max(0, toY - fromY);
         cat.landStopDuration = THREE.MathUtils.clamp(0.12 + horizontalDist * 0.04 + upVerticalDist * 0.08, 0.14, 0.24);
         cat.landStopClipSpeed = 3.6;
+        cat.landStopClipKey = "landStopUp";
       }
     }
     const explicitLaunchDelay = Number(opts?.launchDelay);
@@ -277,13 +279,9 @@ export function createCatJumpRuntime(ctx) {
     cat.pos.lerpVectors(cat.jump.from, cat.jump.to, uPos);
     let lift = Math.sin(Math.PI * u) * cat.jump.arc;
     if (isDownJump) {
-      const apexU = 0.28;
-      if (u <= apexU) {
-        lift = cat.jump.arc * (u / Math.max(1e-5, apexU));
-      } else {
-        const downU = (u - apexU) / Math.max(1e-5, 1 - apexU);
-        lift = cat.jump.arc * Math.pow(Math.max(0, 1 - downU), 1.8);
-      }
+      const dropArc = Math.min(cat.jump.arc * 0.22, Math.max(0.025, (cat.jump.fromY - cat.jump.toY) * 0.08));
+      const arcU = THREE.MathUtils.smoothstep(u, 0.08, 0.45) * Math.max(0, 1 - THREE.MathUtils.smoothstep(u, 0.48, 1));
+      lift = dropArc * arcU;
     }
     let y = THREE.MathUtils.lerp(cat.jump.fromY, cat.jump.toY, uY) + lift;
     if (cat.jump.allowClamp) {

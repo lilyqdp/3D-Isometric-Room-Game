@@ -144,6 +144,7 @@ export function createCatModelRuntime(ctx) {
       jump: null, // {from,to,fromY,toY,dur,t,arc,next}
       landStopNextState: "patrol",
       landStopDuration: 0.22,
+      landStopClipKey: "landStop",
       jumpAnchor: null,
       jumpTargets: null, // {hook, top}
       jumpApproachLock: false,
@@ -889,12 +890,15 @@ export function createCatModelRuntime(ctx) {
       );
     })();
     const jumpDownSourceClip = pickAnimationClip(inPlaceClips, [/^edge_from$/i]);
+    const jumpDownLaunchClip =
+      makeFrameRangeClip(jumpDownSourceClip, "Edge_From__jumpDownLaunch", 1, 20, 30) ||
+      jumpDownSourceClip;
     const jumpDownClip =
-      makeClipTailClip(jumpDownSourceClip, "Edge_From__jumpDownTrimmed", 4, 30) ||
+      makeFrameRangeClip(jumpDownSourceClip, "Edge_From__jumpDownAir", 20, 27, 30) ||
       jumpDownSourceClip;
     const landStopSourceClip = pickAnimationClip(inPlaceClips, [/^land_stop$/i]);
-    const landStopClip =
-      makeFrameRangeClip(landStopSourceClip, "Land_Stop__landStopTrimmed", 9, 19, 30) ||
+    const landStopUpClip =
+      makeFrameRangeClip(landStopSourceClip, "Land_Stop__upJumpTrimmed", 9, 19, 30) ||
       landStopSourceClip;
     const rearUpPrepClip = pickAnimationClip(inPlaceClips, [
       /^edge_to$/i,
@@ -922,6 +926,12 @@ export function createCatModelRuntime(ctx) {
       catnipLoopClip ||
       makeFrameRangeClip(lookDownClip, "LookDown__eatLoop", 29, 32, 30) ||
       pickAnimationClip(inPlaceClips, [/sit_idle/i, /look/i]);
+    const sitToSourceClip = pickAnimationClip(inPlaceClips, [/^sit_to$/i, /sit_to/i]);
+    const sitIntroClip =
+      makeFrameRangeClip(sitToSourceClip, "Sit_To__sitIntro", 1, 32, 30) ||
+      sitToSourceClip;
+    const sitIdleClip = pickAnimationClip(inPlaceClips, [/^sit_idle$/i, /sit_idle/i, /^sit$/i, /pet_sit/i]);
+    const sitIntroDuration = Math.max(1e-5, sitIntroClip?.duration || 0.4);
     const catnipHoldTime = 34 / 30;
     catObject.catnipLookDownPose = {
       neckBase: sampleClipNodePose(lookDownClip, catObject.rig?.neckBase?.name, catnipHoldTime),
@@ -959,13 +969,23 @@ export function createCatModelRuntime(ctx) {
         loop: false,
         speed: 1.0,
       },
+      jumpDownLaunch: {
+        clip: jumpDownLaunchClip,
+        loop: false,
+        speed: 1.0,
+      },
       jumpDown: {
         clip: jumpDownClip,
         loop: false,
         speed: 1.08,
       },
       landStop: {
-        clip: landStopClip,
+        clip: landStopSourceClip,
+        loop: false,
+        speed: 1.0,
+      },
+      landStopUp: {
+        clip: landStopUpClip,
         loop: false,
         speed: 1.0,
       },
@@ -981,9 +1001,10 @@ export function createCatModelRuntime(ctx) {
         speed: 1.0,
       },
       sit: {
-        clip: pickAnimationClip(inPlaceClips, [/sit_idle/i, /sit/i, /pet_sit/i]),
-        loop: true,
-        speed: 1.0,
+        introClip: sitIntroClip,
+        loopClip: sitIdleClip || sitIntroClip,
+        introSpeed: sitIntroDuration / 0.4,
+        loopSpeed: 1.0,
       },
       eat: {
         introClip: eatIntroClip,
@@ -1089,6 +1110,7 @@ export function createCatModelRuntime(ctx) {
     const resolveSpecialCrossFade = (fromState, toState) => {
       if (!fromState || !toState) return quickSpecialCrossFade;
       if (fromState === toState) return quickSpecialCrossFade;
+      if (toState === "sit") return 0.2;
       if (toState === "eat") return 0.24;
       return quickSpecialCrossFade;
     };
@@ -1274,7 +1296,7 @@ export function createCatModelRuntime(ctx) {
         ? specialAction.getEffectiveWeight()
         : 1;
       blendingOutOfCatnipRecover = catObject.clipSpecialState === "eatRecover";
-      blendingOutOfLandStop = catObject.clipSpecialState === "landStop";
+      blendingOutOfLandStop = catObject.clipSpecialState === "landStop" || catObject.clipSpecialState === "landStopUp";
       const specialFadeRate = blendingOutOfCatnipRecover ? 12 : (blendingOutOfLandStop ? 60 : 18);
       const fadedWeight = THREE.MathUtils.damp(specialWeight, 0, specialFadeRate, Math.max(dt, 0));
       specialAction.setEffectiveWeight(fadedWeight);
