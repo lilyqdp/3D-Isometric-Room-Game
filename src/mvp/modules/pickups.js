@@ -23,6 +23,7 @@ export function createPickupsRuntime(ctx) {
     binVisuals,
     getSurfaceDefs,
     getClockTime,
+    getSortedMessDelta,
     onAllSorted,
     addMess,
   } = ctx;
@@ -746,7 +747,7 @@ export function createPickupsRuntime(ctx) {
     const idx = pickups.indexOf(pickup);
     if (idx !== -1) pickups.splice(idx, 1);
     game.sorted++;
-    addMess(-10);
+    addMess(typeof getSortedMessDelta === "function" ? getSortedMessDelta(pickup) : -10);
     if (!game.endlessMode && game.sorted >= game.total) onAllSorted();
   }
 

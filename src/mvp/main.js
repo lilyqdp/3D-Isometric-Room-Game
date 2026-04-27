@@ -49,6 +49,9 @@ const optionsCloseBtn = document.getElementById("optionsCloseBtn");
 const optionsResetBtn = document.getElementById("optionsResetBtn");
 const simpleHudBtn = document.getElementById("simpleHudBtn");
 const advancedHudBtn = document.getElementById("advancedHudBtn");
+const smallHudSizeBtn = document.getElementById("smallHudSizeBtn");
+const normalHudSizeBtn = document.getElementById("normalHudSizeBtn");
+const largeHudSizeBtn = document.getElementById("largeHudSizeBtn");
 const debugOffOptionBtn = document.getElementById("debugOffOptionBtn");
 const debugOnOptionBtn = document.getElementById("debugOnOptionBtn");
 const debugOptionsToggleBtn = document.getElementById("debugOptionsToggleBtn");
@@ -61,6 +64,7 @@ const quitConfirmMessage = document.getElementById("quitConfirmMessage");
 const quitToMenuBtn = document.getElementById("quitToMenuBtn");
 const quitCancelBtn = document.getElementById("quitCancelBtn");
 const pauseBadge = document.getElementById("pauseBadge");
+const catnipToastEl = document.getElementById("catnipToast");
 
 const hud = document.getElementById("hud");
 
@@ -74,7 +78,13 @@ let confirmAction = "quit";
 const OPTIONS_STORAGE_KEY = "catCleanupOptions";
 const DEFAULT_OPTIONS = Object.freeze({
   hudMode: "simple",
+  hudSize: "normal",
   debugEnabled: false,
+});
+const HUD_SIZE_SCALE = Object.freeze({
+  small: 0.8,
+  normal: 1,
+  large: 1.25,
 });
 let playerOptions = loadPlayerOptions();
 let debugRuntime = null;
@@ -107,6 +117,12 @@ function setHudMode(mode) {
   applyPlayerOptions();
 }
 
+function setHudSize(size) {
+  playerOptions.hudSize = Object.prototype.hasOwnProperty.call(HUD_SIZE_SCALE, size) ? size : DEFAULT_OPTIONS.hudSize;
+  savePlayerOptions();
+  applyPlayerOptions();
+}
+
 function setDebugEnabled(enabled) {
   playerOptions.debugEnabled = !!enabled;
   savePlayerOptions();
@@ -132,6 +148,7 @@ function setPaused(paused) {
   game.paused = !!paused;
   if (game.paused) {
     game.placeCatnipMode = false;
+    catnipRuntime?.hideCatnipPreview?.();
     pickupsRuntime?.resetInteraction?.();
   }
   if (pauseBadge) {
@@ -338,6 +355,9 @@ if (optionsOverlay) {
 }
 if (simpleHudBtn) simpleHudBtn.addEventListener("click", () => setHudMode("simple"));
 if (advancedHudBtn) advancedHudBtn.addEventListener("click", () => setHudMode("advanced"));
+if (smallHudSizeBtn) smallHudSizeBtn.addEventListener("click", () => setHudSize("small"));
+if (normalHudSizeBtn) normalHudSizeBtn.addEventListener("click", () => setHudSize("normal"));
+if (largeHudSizeBtn) largeHudSizeBtn.addEventListener("click", () => setHudSize("large"));
 if (debugOffOptionBtn) debugOffOptionBtn.addEventListener("click", () => setDebugEnabled(false));
 if (debugOnOptionBtn) debugOnOptionBtn.addEventListener("click", () => setDebugEnabled(true));
 if (debugOptionsToggleBtn) debugOptionsToggleBtn.addEventListener("click", () => toggleDebugOptionsPanel());
@@ -381,12 +401,20 @@ const advancedHudRows = Array.from(document.querySelectorAll(".advancedHudRow"))
 
 function applyPlayerOptions() {
   const simpleHud = playerOptions.hudMode === "simple";
+  const hudSize = Object.prototype.hasOwnProperty.call(HUD_SIZE_SCALE, playerOptions.hudSize)
+    ? playerOptions.hudSize
+    : DEFAULT_OPTIONS.hudSize;
   const debugEnabled = !!playerOptions.debugEnabled;
+  if (playerOptions.hudSize !== hudSize) playerOptions.hudSize = hudSize;
   for (const row of advancedHudRows) {
     row.style.display = simpleHud ? "none" : "";
   }
+  hud?.style.setProperty("--hud-scale", String(HUD_SIZE_SCALE[hudSize]));
   simpleHudBtn?.classList.toggle("selected", simpleHud);
   advancedHudBtn?.classList.toggle("selected", !simpleHud);
+  smallHudSizeBtn?.classList.toggle("selected", hudSize === "small");
+  normalHudSizeBtn?.classList.toggle("selected", hudSize === "normal");
+  largeHudSizeBtn?.classList.toggle("selected", hudSize === "large");
   debugOffOptionBtn?.classList.toggle("selected", !debugEnabled);
   debugOnOptionBtn?.classList.toggle("selected", debugEnabled);
   const debugPanelOpen = !!debugRuntime?.isAdvancedPanelVisible?.();
@@ -613,6 +641,11 @@ const SPAWN_COUNTS = {
   trash: 2,
 };
 
+const CASUAL_MESS = {
+  start: 100,
+  sortedItemValue: 25,
+};
+
 const ENDLESS_SPAWN = {
   laundryRateStart: 1 / 20, // once every 20s
   trashRateStart: 1 / 12, // once every 12s
@@ -673,11 +706,13 @@ function enterCatnipPlacementMode() {
   if (game.paused) return;
   if (clockTime < (game.windowOpenUntil || 0)) {
     game.placeCatnipMode = false;
+    catnipRuntime?.hideCatnipPreview?.();
     return;
   }
   if (game.catnip) return;
   if (clockTime < game.catnipCooldownUntil) return;
   game.placeCatnipMode = true;
+  catnipRuntime?.updateCatnipPreview?.();
 }
 
 function openWindowSill() {
@@ -687,6 +722,7 @@ function openWindowSill() {
   if (clockTime < game.windowOpenUntil) return;
   if (clockTime < (game.windowCooldownUntil || 0)) return;
   game.placeCatnipMode = false;
+  catnipRuntime?.hideCatnipPreview?.();
   catnipRuntime.clearCatnip();
   const openUntil = clockTime + windowSill.openDuration;
   game.windowOpenUntil = openUntil;
@@ -763,6 +799,7 @@ const pickupsRuntime = createPickupsRuntime({
   binVisuals,
   getSurfaceDefs,
   getClockTime: () => clockTime,
+  getSortedMessDelta: () => (game.endlessMode ? -ENDLESS_SPAWN.messPerItem : -CASUAL_MESS.sortedItemValue),
   onAllSorted: win,
 });
 
@@ -1287,7 +1324,7 @@ function resetGame() {
   navRuntime.invalidateNavCaches();
   navRuntime.getActiveNavMeshDebugData();
   game.total = pickups.length;
-  game.mess = pickups.length * ENDLESS_SPAWN.messPerItem;
+  game.mess = game.endlessMode ? pickups.length * ENDLESS_SPAWN.messPerItem : CASUAL_MESS.start;
 
   cat.pos.copy(catSpawn);
   cat.group.position.set(cat.pos.x, 0, cat.pos.z);
@@ -1579,6 +1616,11 @@ function onCanvasContextMenu(event) {
 function onPointerMove(event) {
   setMouseFromEvent(event);
   if (game.paused) return;
+  if (game.placeCatnipMode) {
+    catnipRuntime.updateCatnipPreview?.();
+    return;
+  }
+  catnipRuntime.hideCatnipPreview?.();
   pickupsRuntime.onPointerMove(event);
 }
 
@@ -1712,6 +1754,11 @@ function updateUI() {
     const modeText = game.endlessMode ? "Endless" : "Casual";
     modeStatEl.textContent = game.paused && game.state === "playing" ? `${modeText} (Paused)` : modeText;
   }
+  if (!game.placeCatnipMode) catnipRuntime?.hideCatnipPreview?.();
+  catnipToastEl?.classList.toggle(
+    "active",
+    game.state === "playing" && clockTime < (game.invalidCatnipUntil || 0)
+  );
   if (catnipBtn) {
     const windowActive = clockTime < (game.windowOpenUntil || 0);
     const cooldown = Math.max(0, Math.ceil((game.catnipCooldownUntil || 0) - clockTime));
@@ -1998,6 +2045,18 @@ window.addEventListener("keydown", (e) => {
     e.stopPropagation();
     return;
   }
+  if (!shortcutBlocked && game.state === "playing" && (e.key || "").toLowerCase() === "r") {
+    showRunEndConfirm("restart");
+    e.preventDefault();
+    e.stopPropagation();
+    return;
+  }
+  if (!shortcutBlocked && game.state === "playing" && (e.key || "").toLowerCase() === "m") {
+    showRunEndConfirm("quit");
+    e.preventDefault();
+    e.stopPropagation();
+    return;
+  }
   if (!shortcutBlocked && game.state === "playing" && !game.paused && (e.key || "").toLowerCase() === "c") {
     enterCatnipPlacementMode();
     e.preventDefault();
@@ -2009,8 +2068,5 @@ window.addEventListener("keydown", (e) => {
     e.preventDefault();
     e.stopPropagation();
     return;
-  }
-  if (e.key === "m") {
-    game.mess += 10;
   }
 }, { capture: true });

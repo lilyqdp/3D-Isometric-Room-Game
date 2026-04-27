@@ -78,6 +78,8 @@
         color: #f5f7fa;
         font-size: 13px;
         line-height: 1.4;
+        transform: scale(var(--hud-scale, 1));
+        transform-origin: top left;
       }
 
       #hud b.title {
@@ -230,6 +232,29 @@
         font-weight: 800;
       }
 
+      #catnipToast {
+        position: fixed;
+        left: 50%;
+        top: 86px;
+        z-index: 12;
+        padding: 10px 14px;
+        border-radius: 999px;
+        background: rgba(217, 83, 79, 0.94);
+        color: #fff7f7;
+        font-weight: 900;
+        opacity: 0;
+        transform: translate(-50%, -8px);
+        transition:
+          opacity 0.14s ease,
+          transform 0.14s ease;
+        pointer-events: none;
+      }
+
+      #catnipToast.active {
+        opacity: 1;
+        transform: translate(-50%, 0);
+      }
+
       #rulesDialog {
         width: min(520px, calc(100vw - 32px));
         max-height: calc(100vh - 48px);
@@ -318,6 +343,10 @@
       .segmentedControl button.selected {
         background: #24364f;
         color: #f5f7fa;
+      }
+
+      .segmentedControl.threeWay {
+        grid-template-columns: repeat(3, 1fr);
       }
 
       #optionsButtons {
@@ -547,6 +576,15 @@
         </div>
 
         <div class="optionGroup">
+          <div class="optionLabel">HUD size</div>
+          <div class="segmentedControl threeWay" role="group" aria-label="HUD size">
+            <button id="smallHudSizeBtn" type="button">Small</button>
+            <button id="normalHudSizeBtn" type="button">Normal</button>
+            <button id="largeHudSizeBtn" type="button">Large</button>
+          </div>
+        </div>
+
+        <div class="optionGroup">
           <div class="optionLabel">Debug mode</div>
           <div class="segmentedControl" role="group" aria-label="Debug mode">
             <button id="debugOffOptionBtn" type="button">Off</button>
@@ -595,7 +633,9 @@
           <li>Press C to start placing catnip.</li>
           <li>Press Space to open the window.</li>
           <li>Press P to pause or resume the game.</li>
-          <li>Press Esc to close this panel or quit to the main menu.</li>
+          <li>Press R to restart with a warning.</li>
+          <li>Press M to return to the main menu with a warning.</li>
+          <li>Press Esc to close panels or open the pause menu.</li>
         </ul>
 
         <button id="rulesCloseBtn" type="button">Close</button>
@@ -605,6 +645,7 @@
     <!-- HUD -->
 
     <div id="pauseBadge">Paused</div>
+    <div id="catnipToast">Invalid catnip spot</div>
 
     <div id="hud">
       <button id="rulesHudBtn" type="button" aria-label="Rules" title="Rules">?</button>

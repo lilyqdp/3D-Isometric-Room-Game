@@ -38,6 +38,20 @@ export function createCatnipRuntime(ctx) {
   const CATNIP_MOUTH_OFFSET = 0.34;
   const PATH_PROFILER_SAMPLE_LIMIT = 180;
   const PATH_PROFILER_EVENT_LIMIT = 24;
+  const previewMarker = new THREE.Mesh(
+    new THREE.CylinderGeometry(CATNIP_RADIUS, CATNIP_RADIUS, CATNIP_HEIGHT, 18),
+    new THREE.MeshStandardMaterial({
+      color: 0xa8e3ae,
+      emissive: 0x244a25,
+      roughness: 0.75,
+      transparent: true,
+      opacity: 0.62,
+      depthWrite: false,
+    })
+  );
+  previewMarker.visible = false;
+  previewMarker.userData.ignoreCatnipPlacement = true;
+  scene.add(previewMarker);
 
   function isPathProfilerEnabled() {
     return !!shouldRecordPathProfiler();
@@ -460,8 +474,9 @@ export function createCatnipRuntime(ctx) {
     }
   }
 
-  function getPlacementFromMouse() {
-    const startedAt = performance.now();
+  function getPlacementFromMouse(options = null) {
+    const recordProfile = !options || options.recordProfile !== false;
+    const startedAt = recordProfile ? performance.now() : 0;
     let placement = null;
     try {
       raycaster.setFromCamera(mouse, camera);
@@ -514,17 +529,47 @@ export function createCatnipRuntime(ctx) {
       };
       return placement;
     } finally {
-      finishPathProfilerMetric(
-        "getPlacementFromMouse",
-        startedAt,
-        {
-          phase: "catnip-raycast",
-          surface: placement?.surface ? String(placement.surface) : "none",
-          result: placement ? "hit" : "miss",
-        },
-        1.5
-      );
+      if (recordProfile) {
+        finishPathProfilerMetric(
+          "getPlacementFromMouse",
+          startedAt,
+          {
+            phase: "catnip-raycast",
+            surface: placement?.surface ? String(placement.surface) : "none",
+            result: placement ? "hit" : "miss",
+          },
+          1.5
+        );
+      }
     }
+  }
+
+  function hideCatnipPreview() {
+    previewMarker.visible = false;
+  }
+
+  function updateCatnipPreview() {
+    if (
+      game.state !== "playing" ||
+      game.paused ||
+      !game.placeCatnipMode ||
+      game.catnip ||
+      getClockTime() < (game.windowOpenUntil || 0) ||
+      cat.nav?.windowHoldActive
+    ) {
+      hideCatnipPreview();
+      return null;
+    }
+
+    const placement = getPlacementFromMouse({ recordProfile: false });
+    if (!placement) {
+      hideCatnipPreview();
+      return null;
+    }
+
+    previewMarker.position.set(placement.x, placement.y, placement.z);
+    previewMarker.visible = true;
+    return placement;
   }
 
   function placeCatnipFromMouse() {
@@ -535,6 +580,7 @@ export function createCatnipRuntime(ctx) {
     try {
       if (clockTime < (game.windowOpenUntil || 0) || cat.nav?.windowHoldActive) {
         game.placeCatnipMode = false;
+        hideCatnipPreview();
         result = "blocked-window";
         return;
       }
@@ -544,15 +590,18 @@ export function createCatnipRuntime(ctx) {
         return;
       }
       if (game.catnip) {
+        hideCatnipPreview();
         result = "already-active";
         return;
       }
       if (clockTime < game.catnipCooldownUntil) {
+        hideCatnipPreview();
         result = "cooldown";
         return;
       }
       const placement = getPlacementFromMouse();
       if (!placement) {
+        hideCatnipPreview();
         result = "no-placement";
         return;
       }
@@ -583,6 +632,7 @@ export function createCatnipRuntime(ctx) {
       };
       game.placeCatnipMode = false;
       game.invalidCatnipUntil = 0;
+      hideCatnipPreview();
       result = "placed";
     } finally {
       finishPathProfilerMetric(
@@ -599,6 +649,7 @@ export function createCatnipRuntime(ctx) {
   }
 
   function clearCatnip() {
+    hideCatnipPreview();
     if (!game.catnip) return;
     scene.remove(game.catnip.mesh);
     game.catnip = null;
@@ -617,5 +668,7 @@ export function createCatnipRuntime(ctx) {
     setMouseFromEvent,
     placeCatnipFromMouse,
     clearCatnip,
+    hideCatnipPreview,
+    updateCatnipPreview,
   };
 }
