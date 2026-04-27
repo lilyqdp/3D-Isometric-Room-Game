@@ -1082,7 +1082,7 @@ export function createCatModelRuntime(ctx) {
       if (!fromState || !toState) return 0.1;
       if (fromState === toState) return 0.08;
       if (toState === "eat") return 0.24;
-      if (fromState === "jumpPrepare" && toState === "jumpUp") return 0.14;
+      if (fromState === "jumpPrepare" && (toState === "jumpLaunch" || toState === "jumpUp")) return 0.06;
       if (fromState === "jumpDownPrepare" && toState === "jumpDown") return 0.18;
       if (fromState === "jumpDown" && toState === "landStop") return 0.12;
       if (fromState === "jumpDownPrepare" && toState === "landStop") return 0.12;

@@ -9,6 +9,7 @@ export function animateCatPoseRuntime(ctx, dt, moving) {
     updateCatClipLocomotion,
     setBonePose,
   } = ctx;
+  const UP_JUMP_TAKEOFF_LEAD = 0.16;
 
 function animateCatPose(dt, moving) {
   const setAnimDebug = (specialState, specialClip) => {
@@ -142,15 +143,16 @@ function animateCatPose(dt, moving) {
     if (cat.useClipLocomotion && cat.clipMixer) {
       const pickJumpUpClipState = () => {
         if (isPrepareJump) return "jumpPrepare";
-        if (!cat.jump) return "jumpUp";
+        if (!cat.jump) return "jumpLaunch";
         const prepDur = Number(cat.jump.preDur || 0);
         const prepT = Number(cat.jump.preT || 0);
         const launchDelay = Number(cat.jump.launchDelay || 0);
         const launchDelayT = Number(cat.jump.launchDelayT || 0);
         if (prepDur > 1e-5 && prepT < prepDur - 1e-5) return "jumpPrepare";
-        if (launchDelay > 1e-5 && launchDelayT < launchDelay - 1e-5) return "jumpPrepare";
-        // Keep airborne up-jumps to a single clip after prep.
-        return "jumpUp";
+        const takeoffLead = Math.min(UP_JUMP_TAKEOFF_LEAD, launchDelay);
+        if (launchDelay > 1e-5 && launchDelayT < launchDelay - takeoffLead - 1e-5) return "jumpPrepare";
+        // Keep airborne up-jumps to a single launch clip after prep.
+        return "jumpLaunch";
       };
       const pickJumpDownClipState = () => {
         if (!cat.jump) return "";
@@ -191,12 +193,14 @@ function animateCatPose(dt, moving) {
             speedOverrides.jumpDown = THREE.MathUtils.clamp(downClipDur / clipMotionDur, 0.2, 2.5);
           }
         } else {
+          const takeoffLead = Math.min(UP_JUMP_TAKEOFF_LEAD, launchDelay);
+          const upClipMotionDur = Math.max(1e-5, airDur + takeoffLead);
           const prepSeq = cat.stateClipActions?.jumpPrepare?.sequenceActions;
           const prepAction =
             (Array.isArray(prepSeq) && prepSeq.length ? prepSeq[0] : null) ||
             cat.stateClipActions?.jumpPrepare?.introAction ||
             cat.stateClipActions?.jumpPrepare?.loopAction;
-          const upAction = cat.stateClipActions?.jumpUp?.action;
+          const upAction = cat.stateClipActions?.jumpLaunch?.action || cat.stateClipActions?.jumpUp?.action;
           const prepClipDur = Array.isArray(prepSeq) && prepSeq.length
             ? prepSeq.reduce((sum, action) => sum + Math.max(action?.getClip?.()?.duration || 0, 0), 0)
             : prepAction?.getClip?.()?.duration;
@@ -205,7 +209,8 @@ function animateCatPose(dt, moving) {
             speedOverrides.jumpPrepare = THREE.MathUtils.clamp(prepClipDur / prepDur, 0.2, 2.5);
           }
           if (Number.isFinite(upClipDur) && upClipDur > 1e-5 && airDur > 1e-5) {
-            speedOverrides.jumpUp = THREE.MathUtils.clamp(upClipDur / clipMotionDur, 0.2, 2.5);
+            speedOverrides.jumpLaunch = THREE.MathUtils.clamp(upClipDur / upClipMotionDur, 0.35, 4.25);
+            speedOverrides.jumpUp = speedOverrides.jumpLaunch;
           }
         }
         if (Object.keys(speedOverrides).length > 0) {
@@ -253,11 +258,32 @@ function animateCatPose(dt, moving) {
             setBonePose(rig, rig.head, -0.18, 0, 0, eatHeadAlpha);
           }
         }
-        cat.modelAnchor.position.y = THREE.MathUtils.damp(cat.modelAnchor.position.y, 0, 10, dt);
+        const isAirborneUpJump =
+          (clipSpecialState === "jumpLaunch" || clipSpecialState === "jumpUp") &&
+          !!cat.jump &&
+          cat.jump.toY > cat.jump.fromY + 0.03;
+        const upJumpU = isAirborneUpJump
+          ? THREE.MathUtils.clamp((Number(cat.jump.t) || 0) / Math.max(1e-5, Number(cat.jump.dur) || 1), 0, 1)
+          : 0;
+        const upJumpArc = isAirborneUpJump ? Math.sin(Math.PI * upJumpU) : 0;
+        const launchDelay = isAirborneUpJump ? Math.max(0, Number(cat.jump.launchDelay || 0)) : 0;
+        const launchDelayT = isAirborneUpJump ? Math.max(0, Number(cat.jump.launchDelayT || 0)) : 0;
+        const takeoffLead = Math.min(UP_JUMP_TAKEOFF_LEAD, launchDelay);
+        const takeoffLeadStart = Math.max(0, launchDelay - takeoffLead);
+        const takeoffLeadU =
+          isAirborneUpJump && takeoffLead > 1e-5 && launchDelayT < launchDelay - 1e-5
+            ? THREE.MathUtils.smootherstep(
+                THREE.MathUtils.clamp((launchDelayT - takeoffLeadStart) / takeoffLead, 0, 1),
+                0,
+                1
+              )
+            : 0;
+        const takeoffLift = takeoffLeadU * 0.025;
+        cat.modelAnchor.position.y = THREE.MathUtils.damp(cat.modelAnchor.position.y, takeoffLift, 14, dt);
         cat.modelAnchor.rotation.x = THREE.MathUtils.damp(
           cat.modelAnchor.rotation.x,
-          0,
-          10,
+          isAirborneUpJump ? -0.1 * takeoffLeadU - 0.16 * upJumpArc : 0,
+          12,
           dt
         );
         cat.modelAnchor.rotation.z = THREE.MathUtils.damp(cat.modelAnchor.rotation.z, 0, 10, dt);
