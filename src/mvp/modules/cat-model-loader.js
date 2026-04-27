@@ -892,6 +892,10 @@ export function createCatModelRuntime(ctx) {
     const jumpDownClip =
       makeClipTailClip(jumpDownSourceClip, "Edge_From__jumpDownTrimmed", 4, 30) ||
       jumpDownSourceClip;
+    const landStopSourceClip = pickAnimationClip(inPlaceClips, [/^land_stop$/i]);
+    const landStopClip =
+      makeFrameRangeClip(landStopSourceClip, "Land_Stop__landStopTrimmed", 9, 19, 30) ||
+      landStopSourceClip;
     const rearUpPrepClip = pickAnimationClip(inPlaceClips, [
       /^edge_to$/i,
       /^edge_idle$/i,
@@ -961,7 +965,7 @@ export function createCatModelRuntime(ctx) {
         speed: 1.08,
       },
       landStop: {
-        clip: pickAnimationClip(inPlaceClips, [/^land_stop$/i]),
+        clip: landStopClip,
         loop: false,
         speed: 1.0,
       },
@@ -1042,7 +1046,11 @@ export function createCatModelRuntime(ctx) {
       return fallbackSpeed;
     };
 
-    const startAction = (action, loop, speed, crossFade = 0.1) => {
+    const quickSpecialCrossFade = 0.05;
+    const skippedEndFrames = 1 / 20;
+    const safeClipEndTime = (duration) => Math.max(0, duration - Math.min(skippedEndFrames, duration * 0.12));
+
+    const startAction = (action, loop, speed, crossFade = quickSpecialCrossFade) => {
       const resolvedSpeed = resolveSpecialSpeed(specialState, speed ?? 1);
       action.enabled = true;
       action.paused = false;
@@ -1060,14 +1068,14 @@ export function createCatModelRuntime(ctx) {
           const fadeFromClipDur = Math.max(fadeFromAction.getClip()?.duration || 0, 0.001);
           fadeFromAction.enabled = true;
           fadeFromAction.play();
-          fadeFromAction.time = Math.max(0, fadeFromClipDur - 1 / 60);
+          fadeFromAction.time = safeClipEndTime(fadeFromClipDur);
           fadeFromAction.paused = true;
           fadeFromAction.setEffectiveWeight(1);
         }
         action.reset().play();
         action.setEffectiveWeight(1);
         if (crossFade && fadeFromAction && fadeFromAction !== action) {
-          const fadeDur = typeof crossFade === "number" ? Math.max(0.01, crossFade) : 0.1;
+          const fadeDur = typeof crossFade === "number" ? Math.max(0.01, crossFade) : quickSpecialCrossFade;
           fadeFromAction.crossFadeTo(action, fadeDur, false);
         }
         catObject.clipSpecialAction = action;
@@ -1079,14 +1087,10 @@ export function createCatModelRuntime(ctx) {
     };
 
     const resolveSpecialCrossFade = (fromState, toState) => {
-      if (!fromState || !toState) return 0.1;
-      if (fromState === toState) return 0.08;
+      if (!fromState || !toState) return quickSpecialCrossFade;
+      if (fromState === toState) return quickSpecialCrossFade;
       if (toState === "eat") return 0.24;
-      if (fromState === "jumpPrepare" && (toState === "jumpLaunch" || toState === "jumpUp")) return 0.06;
-      if (fromState === "jumpDownPrepare" && toState === "jumpDown") return 0.18;
-      if (fromState === "jumpDown" && toState === "landStop") return 0.12;
-      if (fromState === "jumpDownPrepare" && toState === "landStop") return 0.12;
-      return 0.12;
+      return quickSpecialCrossFade;
     };
     const stateCrossFade = resolveSpecialCrossFade(catObject.clipSpecialState, specialState);
 
@@ -1142,7 +1146,8 @@ export function createCatModelRuntime(ctx) {
         startAction(seqAction, false, seqSpeed, false);
       }
       const seqDur = Math.max(seqAction.getClip().duration, 0.001);
-      if (seqAction.time >= seqDur - 1 / 60) {
+      const seqHoldTime = safeClipEndTime(seqDur);
+      if (seqAction.time >= seqHoldTime) {
         if (seqIdx < seqCount - 1) {
           const nextIdx = seqIdx + 1;
           const nextAction = def.sequenceActions[nextIdx];
@@ -1150,8 +1155,8 @@ export function createCatModelRuntime(ctx) {
           startAction(nextAction, false, nextSpeed, true);
           catObject.clipSpecialSeqIndex = nextIdx;
         } else {
-          // Hold on last frame of the sequence until state changes.
-          seqAction.time = seqDur;
+          // Hold just before the final sample. Some imported clips duplicate or wrap to the start pose at exact end.
+          seqAction.time = seqHoldTime;
           seqAction.paused = true;
           seqAction.setEffectiveWeight(1);
         }
@@ -1163,7 +1168,7 @@ export function createCatModelRuntime(ctx) {
           startAction(introAction, false, def.introSpeed, false);
         }
         const introDur = Math.max(introAction.getClip().duration, 0.001);
-        if (introAction.time >= introDur - 1 / 60) {
+        if (introAction.time >= safeClipEndTime(introDur)) {
           startAction(def.loopAction, true, def.loopSpeed, true);
           catObject.clipSpecialPhase = "loop";
         }
@@ -1181,7 +1186,34 @@ export function createCatModelRuntime(ctx) {
     }
 
     catObject.activeClipAction = catObject.clipSpecialAction;
-    mixer.update(dt);
+    let mixerDt = dt;
+    let holdAction = null;
+    let holdTime = 0;
+    if (!hasSequence && !hasSequenceList && !def.loop && catObject.clipSpecialAction) {
+      const action = catObject.clipSpecialAction;
+      const clipDuration = action.getClip()?.duration;
+      if (Number.isFinite(clipDuration) && clipDuration > 1e-5) {
+        holdTime = safeClipEndTime(clipDuration);
+        const actionSpeed = Math.max(0, Math.abs(action.getEffectiveTimeScale?.() ?? 1));
+        if (action.time >= holdTime) {
+          mixerDt = 0;
+          holdAction = action;
+        } else if (actionSpeed > 1e-5) {
+          const timeUntilHold = (holdTime - action.time) / actionSpeed;
+          if (Number.isFinite(timeUntilHold) && timeUntilHold < mixerDt) {
+            mixerDt = Math.max(0, timeUntilHold);
+            holdAction = action;
+          }
+        }
+      }
+    }
+    mixer.update(mixerDt);
+    if (holdAction) {
+      holdAction.time = holdTime;
+      holdAction.paused = true;
+      holdAction.setEffectiveTimeScale(0);
+      holdAction.setEffectiveWeight(1);
+    }
     return true;
   }
 
@@ -1233,6 +1265,7 @@ export function createCatModelRuntime(ctx) {
     if (!catObject.useClipLocomotion || !catObject.clipMixer || !catObject.walkAction || !catObject.idleAction) return;
     let lingeringSpecialAction = null;
     let blendingOutOfCatnipRecover = false;
+    let blendingOutOfLandStop = false;
     if (catObject.clipSpecialAction) {
       const specialAction = catObject.clipSpecialAction;
       specialAction.enabled = true;
@@ -1241,7 +1274,8 @@ export function createCatModelRuntime(ctx) {
         ? specialAction.getEffectiveWeight()
         : 1;
       blendingOutOfCatnipRecover = catObject.clipSpecialState === "eatRecover";
-      const specialFadeRate = blendingOutOfCatnipRecover ? 12 : 18;
+      blendingOutOfLandStop = catObject.clipSpecialState === "landStop";
+      const specialFadeRate = blendingOutOfCatnipRecover ? 12 : (blendingOutOfLandStop ? 60 : 18);
       const fadedWeight = THREE.MathUtils.damp(specialWeight, 0, specialFadeRate, Math.max(dt, 0));
       specialAction.setEffectiveWeight(fadedWeight);
       if (fadedWeight <= 0.01) {
@@ -1386,6 +1420,11 @@ export function createCatModelRuntime(ctx) {
           weightRate = targetWeight > currentWeight ? 8 : 12;
         } else {
           weightRate = targetWeight > currentWeight ? 12 : 18;
+        }
+      }
+      if (blendingOutOfLandStop) {
+        if (action === target || action === lingeringSpecialAction) {
+          weightRate = Math.max(weightRate, 60);
         }
       }
       if (isTurnKey(targetKey)) {

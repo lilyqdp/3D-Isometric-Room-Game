@@ -3867,9 +3867,10 @@ export function updateCatStateMachineRuntime(ctx, dt) {
           ? cat.stateClipActions.landStop.speed
           : 1;
         const clipSpeed = Math.max(0.05, Number.isFinite(overrideSpeed) ? overrideSpeed : defaultSpeed);
-        requiredLandDuration = Math.max(requiredLandDuration, rawClipDuration / clipSpeed);
-        // Respect full clip completion when clip locomotion is active.
-        clipFinished = landClipAction.time >= rawClipDuration - 1 / 60;
+        const safeClipEndTime = Math.max(0, rawClipDuration - Math.min(1 / 20, rawClipDuration * 0.12));
+        requiredLandDuration = Math.min(requiredLandDuration, safeClipEndTime / clipSpeed);
+        // The clip mixer holds just before exact duration to avoid sampling an imported end frame that wraps to start pose.
+        clipFinished = landClipAction.time >= safeClipEndTime;
       }
 
       const readyByTime = cat.phaseT >= requiredLandDuration;
