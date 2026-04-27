@@ -99,6 +99,40 @@ function animateCatPose(dt, moving) {
   const isJumpDown = cat.state === "jumpDown";
   const isCatnipIdleBlend = cat.state === "catnipIdleBlend";
   const isJumpState = isPrepareJump || isLaunchUp || isForepawHook || isPullUp || isJumpSettle || isJumpDown || !!cat.jump;
+  const computeUpJumpAim = () => {
+    if (!isPrepareJump && !cat.jump) return 0;
+    const from = cat.jump?.from || cat.pos;
+    const to = cat.jump?.to || cat.jumpTargets?.top;
+    if (!from || !to) return 0;
+    const fromY = Number.isFinite(cat.jump?.fromY)
+      ? cat.jump.fromY
+      : Number.isFinite(cat.group?.position?.y)
+        ? cat.group.position.y
+        : 0;
+    const toY = Number.isFinite(cat.jump?.toY)
+      ? cat.jump.toY
+      : Number.isFinite(to.y)
+        ? to.y
+        : 0;
+    const vertical = toY - fromY;
+    if (vertical <= 0.02) return 0;
+    const horizontal = Math.max(0.05, Math.hypot(to.x - from.x, to.z - from.z));
+    const launchAngle = Math.atan2(vertical, horizontal);
+    return THREE.MathUtils.clamp((launchAngle - 0.12) / 0.82, 0, 1);
+  };
+  const upJumpAim = computeUpJumpAim();
+  const computeUpJumpPrepareProgress = () => {
+    if (cat.jump) {
+      const prepDur = Math.max(0, Number(cat.jump.preDur || 0));
+      const prepT = Math.max(0, Number(cat.jump.preT || 0));
+      const launchDelay = Math.max(0, Number(cat.jump.launchDelay || 0));
+      const launchDelayT = Math.max(0, Number(cat.jump.launchDelayT || 0));
+      const total = prepDur + launchDelay;
+      if (total <= 1e-5) return 1;
+      return THREE.MathUtils.clamp((prepT + launchDelayT) / total, 0, 1);
+    }
+    return THREE.MathUtils.clamp(cat.phaseT / JUMP_UP_TIMING.prepare, 0, 1);
+  };
   const forceStill =
     cat.state === "swipe" ||
     cat.state === "sit" ||
@@ -166,6 +200,9 @@ function animateCatPose(dt, moving) {
       };
 
       cat.clipSpecialSpeedOverrides = null;
+      if (cat.state === "landStop" && Number.isFinite(cat.landStopClipSpeed)) {
+        cat.clipSpecialSpeedOverrides = { landStop: cat.landStopClipSpeed };
+      }
       if (cat.jump) {
         const speedOverrides = {};
         const prepDur = Math.max(0, Number(cat.jump.preDur || 0));
@@ -239,6 +276,15 @@ function animateCatPose(dt, moving) {
         "none";
       setAnimDebug(clipSpecialState || "none", activeClipName);
       if (handledByClip) {
+        if (clipSpecialState === "jumpPrepare" && rig && upJumpAim > 0.001) {
+          const aim = upJumpAim * THREE.MathUtils.smoothstep(computeUpJumpPrepareProgress(), 0, 1);
+          const aimAlpha = THREE.MathUtils.clamp(dt * 18, 0.18, 0.78);
+          setBonePose(rig, rig.spine2, 0.04 * aim, 0, 0, aimAlpha);
+          setBonePose(rig, rig.spine3, 0.05 * aim, 0, 0, aimAlpha);
+          setBonePose(rig, rig.neckBase, -0.09 * aim, 0, 0, aimAlpha);
+          setBonePose(rig, rig.neck1, -0.12 * aim, 0, 0, aimAlpha);
+          setBonePose(rig, rig.head, -0.1 * aim, 0, 0, aimAlpha);
+        }
         if (isEatingCatnip && rig) {
           const eatHeadAlpha = THREE.MathUtils.clamp(dt * 22, 0.24, 1.0);
           const lookDownPose = cat.catnipLookDownPose || {};
@@ -405,13 +451,14 @@ function animateCatPose(dt, moving) {
 
     if (isPrepareJump) {
       const u = THREE.MathUtils.clamp(cat.phaseT / JUMP_UP_TIMING.prepare, 0, 1);
+      const aim = upJumpAim * THREE.MathUtils.smoothstep(u, 0, 1);
       // Rear-up prep: front body lifts while hind legs stay planted to load jump force.
-      setBonePose(rig, rig.spine1, 0.16 * u, 0, 0, baseAlpha);
-      setBonePose(rig, rig.spine2, 0.2 * u, 0, 0, baseAlpha);
-      setBonePose(rig, rig.spine3, 0.16 * u, 0, 0, baseAlpha);
-      setBonePose(rig, rig.neckBase, -0.22 * u, 0, 0, baseAlpha);
-      setBonePose(rig, rig.neck1, -0.18 * u, 0, 0, baseAlpha);
-      setBonePose(rig, rig.head, -0.08 * u, 0, 0, baseAlpha);
+      setBonePose(rig, rig.spine1, 0.16 * u + 0.04 * aim, 0, 0, baseAlpha);
+      setBonePose(rig, rig.spine2, 0.2 * u + 0.06 * aim, 0, 0, baseAlpha);
+      setBonePose(rig, rig.spine3, 0.16 * u + 0.05 * aim, 0, 0, baseAlpha);
+      setBonePose(rig, rig.neckBase, -0.22 * u - 0.1 * aim, 0, 0, baseAlpha);
+      setBonePose(rig, rig.neck1, -0.18 * u - 0.13 * aim, 0, 0, baseAlpha);
+      setBonePose(rig, rig.head, -0.08 * u - 0.11 * aim, 0, 0, baseAlpha);
 
       setBonePose(rig, rig.frontL.shoulder, -0.64 * u, 0, 0, baseAlpha);
       setBonePose(rig, rig.frontR.shoulder, -0.64 * u, 0, 0, baseAlpha);
@@ -428,8 +475,8 @@ function animateCatPose(dt, moving) {
       setBonePose(rig, rig.backR.ankle, 0.12 * u, 0, 0, baseAlpha);
 
       // Make the rear-up clearly visible from gameplay camera.
-      cat.modelAnchor.position.y += 0.13 * u;
-      cat.modelAnchor.rotation.x = THREE.MathUtils.damp(cat.modelAnchor.rotation.x, 0.34 * u, 12, dt);
+      cat.modelAnchor.position.y += 0.13 * u + 0.025 * aim;
+      cat.modelAnchor.rotation.x = THREE.MathUtils.damp(cat.modelAnchor.rotation.x, 0.34 * u + 0.08 * aim, 12, dt);
     }
 
     if (isLaunchUp) {

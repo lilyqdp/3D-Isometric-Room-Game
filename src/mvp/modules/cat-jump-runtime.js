@@ -156,14 +156,15 @@ export function createCatJumpRuntime(ctx) {
     const fromY = cat.group.position.y;
     const dropOrLevelJump = toY < fromY - 0.03;
     const requestedNextState = nextState || "patrol";
-    const resolvedNextState = dropOrLevelJump ? "landStop" : requestedNextState;
+    const landStopAfterUp = !!(opts && opts.landStopAfterUp);
+    const resolvedNextState = dropOrLevelJump || landStopAfterUp ? "landStop" : requestedNextState;
     let resolvedDur = dur;
     let preJumpDur = 0;
     let launchDelay = 0;
     const horizontalDist = Math.hypot(to.x - cat.pos.x, to.z - cat.pos.z);
     const downVerticalDist = Math.max(0, fromY - toY);
     const allowClamp = !!(opts && opts.allowClamp);
-    if (dropOrLevelJump && requestedNextState !== "landStop") {
+    if ((dropOrLevelJump || landStopAfterUp) && requestedNextState !== "landStop") {
       cat.landStopNextState = requestedNextState;
     }
     if (dropOrLevelJump) {
@@ -175,6 +176,7 @@ export function createCatJumpRuntime(ctx) {
       preJumpDur = scaledPrepDur;
       launchDelay = THREE.MathUtils.clamp(0.16 + horizontalDist * 0.05, 0.16, 0.28);
       cat.landStopDuration = scaledLandDur;
+      cat.landStopClipSpeed = NaN;
       if (cat.clipSpecialAction) {
         cat.clipSpecialAction.stop();
         cat.clipSpecialAction = null;
@@ -192,6 +194,11 @@ export function createCatJumpRuntime(ctx) {
         }
       }
       launchDelay = THREE.MathUtils.clamp(0.14 + horizontalDist * 0.045, 0.14, 0.24);
+      if (landStopAfterUp) {
+        const upVerticalDist = Math.max(0, toY - fromY);
+        cat.landStopDuration = THREE.MathUtils.clamp(0.12 + horizontalDist * 0.04 + upVerticalDist * 0.08, 0.14, 0.24);
+        cat.landStopClipSpeed = 3.6;
+      }
     }
     const explicitLaunchDelay = Number(opts?.launchDelay);
     if (Number.isFinite(explicitLaunchDelay)) launchDelay = Math.max(0, explicitLaunchDelay);

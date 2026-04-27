@@ -2695,6 +2695,7 @@ export function updateCatStateMachineRuntime(ctx, dt) {
           startJump(route[segment.landingKey] || route.landing, targetY, 0.64, 0.46, "patrol", {
             easePos: true,
             easeY: true,
+            landStopAfterUp: true,
             preventSurfaceClip: usingElevatedApproach,
             fromSurfaceId: approachSurfaceId,
             toSurfaceId: normalizeSurfaceId(route.surfaceId || route.finalSurfaceId || FLOOR_SURFACE_ID),
@@ -3881,6 +3882,7 @@ export function updateCatStateMachineRuntime(ctx, dt) {
         cat.phaseT = 0;
         cat.landStopNextState = "patrol";
         cat.landStopDuration = 0.22;
+        cat.landStopClipSpeed = NaN;
       }
       return;
     }

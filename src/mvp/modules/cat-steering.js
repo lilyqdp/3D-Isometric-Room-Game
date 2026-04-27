@@ -3619,7 +3619,10 @@ export function createCatSteeringRuntime(ctx) {
     nudgeSurfacePushablesIfNeeded();
     const moved = cat.pos.distanceTo(tempFrom);
     const nowElevated = getClockTime();
-    const progressThreshold = getSharedProgressThreshold(step);
+    const progressThreshold = Math.min(
+      getSharedProgressThreshold(step),
+      Math.max(0.00012, step * 0.35)
+    );
     const meaningfulProgress = noteActiveRouteSegmentProgress(tempFrom, moved, step, chase, target);
     if (moved > progressThreshold || meaningfulProgress) {
       cat.nav.noSteerFrames = 0;

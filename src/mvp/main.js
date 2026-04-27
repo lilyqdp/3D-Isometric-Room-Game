@@ -532,8 +532,12 @@ const SIMULATION_HZ = 120;
 const SIMULATION_DT = 1 / SIMULATION_HZ;
 const MAX_FRAME_DT = 0.1;
 const MAX_SIM_STEPS_PER_FRAME = 12;
+const SECRET_SPEED_STEP = 0.1;
+const SECRET_SPEED_MIN = 0.1;
+const SECRET_SPEED_MAX = 2;
 let simAccumulator = 0;
 let lastAnimationFrameAt = 0;
+const pressedKeys = new Set();
 
 const binVisuals = {
   hamper: { shells: [], ring: null },
@@ -1994,7 +1998,21 @@ function animate() {
   }
   requestAnimationFrame(animate);
 }
+
+function normalizeShortcutKey(event) {
+  const key = String(event?.key || "").toLowerCase();
+  return key === " " ? "space" : key;
+}
+
+function adjustSecretGameSpeed(direction) {
+  const current = Number.isFinite(game.timeScale) ? game.timeScale : 1;
+  const stepped = Math.round((current + direction * SECRET_SPEED_STEP) * 10) / 10;
+  game.timeScale = THREE.MathUtils.clamp(stepped, SECRET_SPEED_MIN, SECRET_SPEED_MAX);
+}
+
 window.addEventListener("keydown", (e) => {
+  const normalizedKey = normalizeShortcutKey(e);
+  if (normalizedKey) pressedKeys.add(normalizedKey);
   const target = e.target;
   const tagName = typeof target?.tagName === "string" ? target.tagName.toLowerCase() : "";
   const shortcutBlocked = tagName === "input" || tagName === "textarea" || tagName === "select" || target?.isContentEditable;
@@ -2027,6 +2045,17 @@ window.addEventListener("keydown", (e) => {
     return;
   }
   if (rulesOpen || menuOpen || optionsOpen || quitConfirmOpen) return;
+  if (
+    !shortcutBlocked &&
+    game.state === "playing" &&
+    (e.key === "ArrowLeft" || e.key === "ArrowRight") &&
+    pressedKeys.has("l")
+  ) {
+    adjustSecretGameSpeed(e.key === "ArrowLeft" ? -1 : 1);
+    e.preventDefault();
+    e.stopPropagation();
+    return;
+  }
   if (!shortcutBlocked && game.state === "playing" && (e.key || "").toLowerCase() === "b") {
     setDebugEnabled(!playerOptions.debugEnabled);
     e.preventDefault();
@@ -2070,3 +2099,8 @@ window.addEventListener("keydown", (e) => {
     return;
   }
 }, { capture: true });
+
+window.addEventListener("keyup", (e) => {
+  const normalizedKey = normalizeShortcutKey(e);
+  if (normalizedKey) pressedKeys.delete(normalizedKey);
+});
