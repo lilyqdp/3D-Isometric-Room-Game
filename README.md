@@ -76,4 +76,16 @@ npm install
 npm run dev
 ```
 
-Open the local Vite URL shown in the terminal, usually:
+Open the local Vite URL shown in the terminal, usually: http://localhost:5173/
+
+---
+
+## Room Editor
+
+The project includes a built-in room editor accessible from the main menu. It allows furniture to be moved, rotated, and repositioned within the room. It was used primarily during development for layout tuning.
+
+---
+
+## AI Tool Usage
+
+AI tools (specifically ChatGPT Codex and ChatGPT) were used for a significant portion of code generation throughout the project, with small targeted changes at a time. We found that AI works reliably for isolated logic and small edits, but struggled with large refactors — often breaking unrelated parts of the codebase in the process. We also found that AI is particularly good at generating debugging tools quickly, which was extremely valuable during development. Usage was limited by Codex rate limits, which became more restrictive as the project grew larger.
